@@ -1,0 +1,53 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Handle Authorization Header
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Handle X-XSRF-Token Header
+    RewriteCond %{HTTP:x-xsrf-token} .
+    RewriteRule .* - [E=HTTP_X_XSRF_TOKEN:%{HTTP:X-XSRF-Token}]
+
+    # Redirect Trailing Slashes If Not A Folder...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} (.+)/$
+    RewriteRule ^ %1 [L,R=301]
+
+    # Send Requests To Front Controller...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [L]
+</IfModule>
+
+# ── Application environment ───────────────────────────────────────────────────
+SetEnv APP_ENV "production"
+SetEnv APP_KEY "{{IICP_APP_KEY}}"
+SetEnv APP_DEBUG "false"
+SetEnv APP_URL "https://iicp.network"
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+SetEnv LOG_CHANNEL "single"
+SetEnv LOG_LEVEL "warning"
+
+# ── Database (MariaDB on shared hosting) ──────────────────────────────────────
+SetEnv DB_CONNECTION "mysql"
+SetEnv DB_HOST "{{IICP_DB_HOST}}"
+SetEnv DB_PORT "{{IICP_DB_PORT}}"
+SetEnv DB_DATABASE "{{IICP_DB_NAME}}"
+SetEnv DB_USERNAME "{{IICP_DB_USER}}"
+SetEnv DB_PASSWORD "{{IICP_DB_PASS}}"
+
+# ── Laravel runtime ───────────────────────────────────────────────────────────
+SetEnv QUEUE_CONNECTION "sync"
+SetEnv SESSION_DRIVER "database"
+SetEnv CACHE_STORE "database"
+
+# ── IICP feature flags ────────────────────────────────────────────────────────
+SetEnv IICP_SCHEDULER_ENABLED "true"
+SetEnv IICP_SKIP_LIVENESS_CHECK "true"
+
+# ── Deploy-time HMAC secret (DeployMigrateController) ─────────────────────────
+# Shared with deploy/.credentials/deploy_secret.sh on the operator side.
+# Empty value → /_deploy/migrate returns 503 (fail-closed).
+SetEnv IICP_DEPLOY_SECRET "{{IICP_DEPLOY_SECRET}}"

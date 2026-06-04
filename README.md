@@ -28,7 +28,7 @@ The directory is **discovery-only** — no task traffic routes through it. Nodes
 
 | Feature | Status |
 |---------|--------|
-| Node registration + JWT issuance | ✅ Production (v1.7.8) |
+| Node registration + JWT issuance | ✅ Production (v1.10.17) |
 | Liveness heartbeat + 90s expiry | ✅ Production |
 | Intent-based discovery + scoring | ✅ Production |
 | Reputation tracking (proxy-observed) | ✅ Production |
@@ -65,7 +65,7 @@ Full error codes: `IICP-E001` through `IICP-E032`. See [error reference](https:/
 
 ## Tech Stack
 
-- **PHP 8.2** + **Laravel 11**
+- **PHP 8.3** + **Laravel 13**
 - **MySQL 8.0** — node registry, reputation records, credits ledger, peer table
 - **JWT HS256** — node authentication (issued on registration)
 - **bcrypt** — node_token storage (plaintext never stored)

@@ -1,0 +1,18 @@
+# Build artifacts that MUST be regenerated inside the image, never copied from
+# the local dev tree. Without this, `COPY . .` brings the local bootstrap/cache
+# (which lists dev-only providers such as laravel/pail, discovered when dev deps
+# were installed locally), and the `composer install --no-dev --no-scripts`
+# build then fails at `php artisan key:generate` with
+# "Class Laravel\Pail\PailServiceProvider not found". Docker COPY ignores
+# .gitignore, so these must be listed here explicitly.
+/vendor
+/node_modules
+/bootstrap/cache/*.php
+/.env
+/storage/logs/*
+/storage/framework/cache/data/*
+/storage/framework/sessions/*
+/storage/framework/views/*
+/.git
+/.phpunit.result.cache
+/.phpunit.cache

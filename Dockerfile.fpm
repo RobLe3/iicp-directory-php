@@ -1,0 +1,19 @@
+FROM php:8.3-fpm-alpine
+
+RUN apk add --no-cache nginx curl && \
+    docker-php-ext-install pdo pdo_mysql opcache
+
+WORKDIR /app
+
+COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+COPY . .
+
+RUN cp .env.example .env && \
+    composer install --no-dev --optimize-autoloader --no-interaction --quiet --ignore-platform-reqs && \
+    php artisan key:generate --force && \
+    chmod -R 775 storage bootstrap/cache && \
+    chmod +x start-fpm.sh
+
+EXPOSE 8080
+
+CMD ["./start-fpm.sh"]

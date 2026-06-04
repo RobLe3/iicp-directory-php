@@ -1,0 +1,354 @@
+openapi: "3.1.0"
+info:
+  title: IICP Directory Service
+  version: "1.5.0"
+  description: >
+    IICP directory service — node registration, heartbeat, discovery, and
+    node detail. Traffic NEVER routes through the directory; it is
+    bootstrap and discovery only. See spec/iicp-dir.md for the normative
+    sub-protocol specification.
+  contact:
+    url: https://iicp.network
+  license:
+    name: MIT
+
+servers:
+  - url: https://iicp.network/v1
+    description: Production
+
+tags:
+  - name: registration
+    description: Node self-registration and liveness
+  - name: discovery
+    description: Client node discovery
+
+paths:
+  /register:
+    post:
+      operationId: registerNode
+      tags: [registration]
+      summary: Register a new node
+      description: >
+        Called by a provider node at startup. Returns a node_token that
+        MUST be used on all subsequent heartbeat calls. Rate-limited to
+        10 requests per minute per IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NodeRegistration"
+            example:
+              endpoint: "https://node.example.com"
+              region: "eu-central"
+              capabilities:
+                - intent: "urn:iicp:intent:llm:chat:v1"
+                  models: ["llama3"]
+                  max_tokens: 8192
+              limits:
+                max_concurrent: 4
+                tokens_per_min: 20000
+      responses:
+        "200":
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistrationResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /heartbeat:
+    post:
+      operationId: nodeHeartbeat
+      tags: [registration]
+      summary: Update node liveness
+      description: >
+        Called by a registered node every 30 seconds. Nodes not seen
+        within 90 seconds are marked unavailable and excluded from
+        discovery results. Rate-limited to 60 requests per minute per node.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HeartbeatRequest"
+            example:
+              load: 0.3
+              active_jobs: 1
+      responses:
+        "200":
+          description: Heartbeat accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /discover:
+    get:
+      operationId: discoverNodes
+      tags: [discovery]
+      summary: Discover eligible nodes for an intent
+      description: >
+        Returns nodes pre-scored and pre-sorted by the directory using
+        the ADR-008 composite formula. Nodes are filtered by availability
+        window and last_seen within 90 seconds. Score < 0.1 nodes are
+        excluded. Clients MUST NOT re-score results.
+      parameters:
+        - name: intent
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: "^urn:iicp:intent:[a-z0-9_-]+:[a-z0-9_-]+:v[0-9]+$"
+          example: "urn:iicp:intent:llm:chat:v1"
+        - name: qos
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [interactive, batch, best-effort]
+            default: interactive
+        - name: region
+          in: query
+          required: false
+          schema:
+            type: string
+          example: "eu-central"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+      responses:
+        "200":
+          description: Scored node list
+          content:
+            application/json:
+              schema:
+                $ref: "../spec/schemas/nodelist.json"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /node/{id}:
+    get:
+      operationId: getNode
+      tags: [discovery]
+      summary: Get full node detail
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Node detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodeDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: node_token issued at registration (Phase 1). JWT in Phase 2+.
+
+  schemas:
+    NodeRegistration:
+      type: object
+      required: [endpoint, region, capabilities, limits]
+      additionalProperties: false
+      properties:
+        endpoint:
+          type: string
+          format: uri
+          description: HTTPS base URL where this node accepts tasks.
+        region:
+          type: string
+          description: Geographic region hint (e.g. eu-central, us-east). Required for Phase 1 discovery routing.
+        public_key:
+          type: string
+          description: Base64-encoded public key (Phase 2+ signing).
+        capabilities:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/Capability"
+        limits:
+          $ref: "#/components/schemas/NodeLimits"
+        availability:
+          type: array
+          items:
+            $ref: "#/components/schemas/AvailabilityWindow"
+
+    Capability:
+      type: object
+      required: [intent, models, max_tokens]
+      properties:
+        intent:
+          type: string
+          pattern: "^urn:iicp:intent:[a-z0-9_-]+:[a-z0-9_-]+:v[0-9]+$"
+        models:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        max_tokens:
+          type: integer
+          minimum: 1
+
+    NodeLimits:
+      type: object
+      additionalProperties: false
+      properties:
+        max_concurrent:
+          type: integer
+          minimum: 1
+        tokens_per_min:
+          type: integer
+          minimum: 1
+
+    AvailabilityWindow:
+      type: object
+      required: [start, end, share]
+      additionalProperties: false
+      properties:
+        start:
+          type: string
+          pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+        end:
+          type: string
+          pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+        share:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+
+    RegistrationResponse:
+      type: object
+      required: [node_id, node_token]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        node_token:
+          type: string
+          minLength: 32
+          description: Bearer token for heartbeat authentication. Store securely.
+
+    HeartbeatRequest:
+      type: object
+      required: [load, active_jobs]
+      additionalProperties: false
+      properties:
+        load:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          description: Current load as fraction of max_concurrent.
+        active_jobs:
+          type: integer
+          minimum: 0
+
+    NodeDetail:
+      type: object
+      required: [node_id, endpoint, score, available]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        endpoint:
+          type: string
+          format: uri
+        score:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+        available:
+          type: boolean
+        region:
+          type: string
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Capability"
+        last_seen:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing or invalid node_token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Node not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ValidationError:
+      description: Semantic validation failure
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
