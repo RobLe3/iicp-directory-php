@@ -15,7 +15,7 @@ use Illuminate\Support\Str;
 /**
  * Directory active per-node reachability probing — #373, Phase B.
  *
- * Probes each registered node's HTTP endpoint and records the result in
+ * Probes each registered node's canonical /iicp/health endpoint and records the result in
  * iicp_telemetry_probes so NodeHealthService::reachabilityScore() can use an
  * independently observed signal instead of the node's self-attested
  * `public_reachable` flag.
@@ -64,46 +64,66 @@ class ProbeNodesCommand extends Command
             ->whereNotNull('last_seen')
             ->orderByDesc('last_seen')
             ->limit($batch)
-            ->get(['id', 'endpoint', 'public_reachable']);
+            ->get(['id', 'endpoint', 'public_reachable', 'endpoint_verified_dead_at']);
 
         $probed = 0;
         $passed = 0;
 
         foreach ($nodes as $node) {
+            // No-IPv6-egress guard: a shared-hosting origin without IPv6 egress can
+            // never reach an IPv6-literal endpoint, so probing it only produces
+            // false negatives (655/655 failures observed 2026-06-11). Skip entirely —
+            // the node stays self-attested, same as the relay-only guard below.
+            if ($this->isIpv6Literal($node->endpoint) && ! config('app.iicp_probe_ipv6_egress')) {
+                continue;
+            }
+
             [$reachable, $latency] = $this->probe($node->endpoint);
             $probed++;
             if ($reachable) {
                 $passed++;
             }
 
-            TelemetryProbe::create([
-                'probe_token_id' => null, // directory-internal probe
-                'node_id' => $node->id,
-                'run_id' => $runId,
-                'probe_id' => self::PROBE_ID,
-                'probe_type' => self::PROBE_TYPE,
-                'test_id' => self::TEST_ID,
-                'level' => 'MUST',
-                'passed' => $reachable,
-                'latency_ms' => $latency,
-                'detail' => $reachable ? 'endpoint reachable' : 'endpoint unreachable',
-                'metadata' => ['node_id' => $node->id, 'source' => 'directory_active_probe'],
-                'probed_at' => $probedAt,
-            ]);
+            // Only record a failed probe for a node that self-attests as public_reachable:
+            // a relay-only node (public_reachable=false) cannot be reached from a non-IPv6
+            // origin, so a failure is a false negative — don't let it drive reachabilityScore
+            // to 0.  Successes are always recorded (they upgrade public_reachable when needed).
+            if ($reachable || $node->public_reachable) {
+                TelemetryProbe::create([
+                    'probe_token_id' => null,
+                    'node_id' => $node->id,
+                    'run_id' => $runId,
+                    'probe_id' => self::PROBE_ID,
+                    'probe_type' => self::PROBE_TYPE,
+                    'test_id' => self::TEST_ID,
+                    'level' => 'MUST',
+                    'passed' => $reachable,
+                    'latency_ms' => $latency,
+                    'detail' => $reachable ? 'health endpoint reachable' : 'health endpoint unreachable',
+                    'metadata' => ['node_id' => $node->id, 'source' => 'directory_active_probe', 'path' => '/iicp/health'],
+                    'probed_at' => $probedAt,
+                ]);
+            }
 
             // Update self-attested column only when probe succeeds (never downgrade on
             // a single failure — transient network blips should not penalise the node).
-            if ($reachable && ! $node->public_reachable) {
-                $node->update(['public_reachable' => true]);
+            if ($reachable && (! $node->public_reachable || $node->endpoint_verified_dead_at !== null)) {
+                $wasPublicReachable = (bool) $node->public_reachable;
+                $hadDeadEndpointFlag = $node->endpoint_verified_dead_at !== null;
+                $node->update([
+                    'public_reachable' => true,
+                    'endpoint_verified_dead_at' => null,
+                ]);
                 // #413 — record the false→true transition in the signed event log so
                 // discover (re)appearance is auditable, symmetric with REACHABILITY_DEMOTE.
                 $eventLogger->log('REACHABILITY_RESTORE', (string) $node->id, [
-                    'from' => false,
+                    'from' => $wasPublicReachable,
                     'to' => true,
                     'reason' => 'probe_success',
                     'endpoint' => (string) $node->endpoint,
                     'probe_source' => 'directory_active_probe',
                     'latency_ms' => $latency,
+                    'endpoint_verified_dead_at_cleared' => $hadDeadEndpointFlag,
                 ]);
             }
         }
@@ -118,14 +138,15 @@ class ProbeNodesCommand extends Command
     }
 
     /**
-     * Send an HTTP HEAD (falling back to GET on 405) to the node's endpoint.
+     * Send an HTTP GET to the node's canonical /iicp/health endpoint.
      * Returns [bool $reachable, int|null $latency_ms].
      *
      * Skips endpoints whose host resolves to a private/loopback range (SSRF guard).
      */
     private function probe(string $endpoint): array
     {
-        $host = parse_url($endpoint, PHP_URL_HOST) ?? '';
+        $healthUrl = $this->healthUrl($endpoint);
+        $host = parse_url($healthUrl, PHP_URL_HOST) ?? '';
         if ($this->isPrivateHost($host)) {
             return [false, null];
         }
@@ -133,18 +154,51 @@ class ProbeNodesCommand extends Command
         $start = microtime(true);
         try {
             $resp = Http::timeout(self::TIMEOUT_SECONDS)
-                ->head($endpoint);
-            // Fall back to GET if the server doesn't support HEAD
-            if ($resp->status() === 405) {
-                $resp = Http::timeout(self::TIMEOUT_SECONDS)
-                    ->get($endpoint);
-            }
+                ->acceptJson()
+                ->get($healthUrl);
             $latency = (int) ((microtime(true) - $start) * 1000);
 
-            return [$resp->successful() || $resp->status() < 500, $latency];
+            return [$this->healthResponsePasses($resp), $latency];
         } catch (\Throwable) {
             return [false, null];
         }
+    }
+
+    private function healthUrl(string $endpoint): string
+    {
+        return rtrim($endpoint, '/').'/iicp/health';
+    }
+
+    private function healthResponsePasses($resp): bool
+    {
+        if (! $resp->successful()) {
+            return false;
+        }
+
+        $body = trim((string) $resp->body());
+        if ($body === '' || strtolower($body) === 'ok') {
+            return true;
+        }
+
+        $json = json_decode($body, true);
+        if (! is_array($json)) {
+            return false;
+        }
+
+        $status = strtolower((string) ($json['status'] ?? 'ok'));
+        if (! in_array($status, ['ok', 'available', 'healthy'], true)) {
+            return false;
+        }
+
+        return ! array_key_exists('available', $json) || is_bool($json['available']);
+    }
+
+    /** True when the endpoint host is a bracketed IPv6 literal (e.g. http://[2a0a:…]:9484). */
+    private function isIpv6Literal(string $endpoint): bool
+    {
+        $host = parse_url($endpoint, PHP_URL_HOST) ?? '';
+
+        return str_starts_with($host, '[') || substr_count($host, ':') >= 2;
     }
 
     private function isPrivateHost(string $host): bool

@@ -70,8 +70,12 @@ class OperatorDelegationVerifier
 
         $pubRaw = base64_decode($opPub, true);
         $sigRaw = base64_decode($sig, true);
-        if ($pubRaw === false || strlen($pubRaw) !== SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES
-            || $sigRaw === false || strlen($sigRaw) !== SODIUM_CRYPTO_SIGN_BYTES) {
+        // ed25519 sizes are protocol-fixed: pubkey 32 B, signature 64 B. Hardcoded rather than the
+        // SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES / SODIUM_CRYPTO_SIGN_BYTES constants — those globals are
+        // not reliably defined on the prod PHP (sodium polyfill), and an unqualified reference inside
+        // this namespace 500'd EVERY operator-delegation register (so no operator ever bound).
+        if ($pubRaw === false || strlen($pubRaw) !== 32
+            || $sigRaw === false || strlen($sigRaw) !== 64) {
             return [false, 'malformed'];
         }
 

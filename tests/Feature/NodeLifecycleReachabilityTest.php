@@ -142,4 +142,146 @@ class NodeLifecycleReachabilityTest extends TestCase
         // Non-prod skip — would have been demoted in prod
         $this->assertTrue((bool) $node->fresh()->public_reachable);
     }
+
+    public function test_liveness_verified_node_skips_probe(): void
+    {
+        // #493 — ADR-047 Part A: a node that answered the HMAC challenge recently is
+        // cryptographically confirmed live; skip the TCP probe to avoid demoting nodes
+        // that the directory host can't reach outbound (DomainFactory egress limitation).
+        $node = $this->createActiveNode([
+            'endpoint' => 'https://liveness-verified.test',
+            'liveness_verified_at' => now()->subSeconds(30),
+        ]);
+        // Probe would fail — but the test asserts it is never sent.
+        Http::fake(['https://liveness-verified.test/iicp/health' => Http::response('', 503)]);
+
+        $this->artisan('iicp:node-lifecycle')->assertSuccessful();
+
+        // Still public — liveness challenge proof overrides the dial-back failure.
+        $this->assertTrue((bool) $node->fresh()->public_reachable);
+        $this->assertSame(0, NodeEvent::where('event_type', 'REACHABILITY_DEMOTE')
+            ->where('node_id', $node->id)->count(), 'liveness-verified node must not be demoted');
+    }
+
+    public function test_ipv6_literal_without_directory_ipv6_egress_is_not_demoted(): void
+    {
+        Config::set('app.iicp_probe_ipv6_egress', false);
+        $node = $this->createActiveNode([
+            'endpoint' => 'http://[2a0a:a543::1]:9484',
+            'transport_method' => 'direct',
+            'public_reachable' => true,
+            'liveness_verified_at' => now()->subSeconds(30),
+        ]);
+        Http::fake(['*' => Http::response('', 503)]);
+
+        $this->artisan('iicp:node-lifecycle')->assertSuccessful();
+
+        $fresh = $node->fresh();
+        $this->assertTrue((bool) $fresh->public_reachable);
+        $this->assertNull($fresh->endpoint_verified_dead_at);
+        Http::assertNothingSent();
+    }
+
+    public function test_liveness_verified_ipv6_clears_stale_dead_flag_without_probe(): void
+    {
+        Config::set('app.iicp_probe_ipv6_egress', false);
+        $node = $this->createActiveNode([
+            'endpoint' => 'http://[2a0a:a543::1]:9484',
+            'transport_method' => 'direct',
+            'public_reachable' => false,
+            'endpoint_verified_dead_at' => now()->subMinutes(10),
+            'liveness_verified_at' => now()->subSeconds(30),
+        ]);
+        Http::fake(['*' => Http::response('', 503)]);
+
+        $this->artisan('iicp:node-lifecycle')->assertSuccessful();
+
+        $fresh = $node->fresh();
+        $this->assertFalse((bool) $fresh->public_reachable);
+        $this->assertNull($fresh->endpoint_verified_dead_at);
+        Http::assertNothingSent();
+        $event = NodeEvent::where('event_type', 'REACHABILITY_RESTORE')
+            ->where('node_id', $node->id)
+            ->first();
+        $this->assertNotNull($event);
+        $this->assertSame('liveness_verified_ipv6_probe_unavailable', $event->payload['reason']);
+        $this->assertSame(true, $event->payload['endpoint_verified_dead_at_cleared']);
+    }
+
+    public function test_liveness_expired_node_is_probed(): void
+    {
+        // #493 — an old liveness_verified_at (outside the 300s window) does not confer
+        // protection. The probe runs, and on double failure the node is demoted.
+        $node = $this->createActiveNode([
+            'endpoint' => 'https://liveness-expired.test',
+            'liveness_verified_at' => now()->subSeconds(400),
+        ]);
+        Http::fake(['https://liveness-expired.test/iicp/health' => Http::response('', 503)]);
+
+        $this->artisan('iicp:node-lifecycle')->assertSuccessful();
+
+        $this->assertFalse((bool) $node->fresh()->public_reachable);
+        $this->assertSame(1, NodeEvent::where('event_type', 'REACHABILITY_DEMOTE')
+            ->where('node_id', $node->id)->count());
+    }
+
+    public function test_dead_external_tunnel_endpoint_is_flagged_and_hidden_from_relay_discover(): void
+    {
+        // #536 regression: a relay/tunnel exposure_mode used to bypass
+        // public_reachable=false in discover, so a dead Quick Tunnel URL could be
+        // served as relay-capable. Confirmed-dead listed endpoints must be hidden.
+        $node = $this->createActiveNode([
+            'endpoint' => 'https://dead-tunnel.example.test',
+            'transport_method' => 'external_tunnel',
+            'exposure_mode' => 'relay_required',
+            'public_reachable' => false,
+            'relay_capable' => true,
+        ]);
+        $node->capabilities()->create([
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['llama-3-8b'],
+            'max_tokens' => 4096,
+        ]);
+        Http::fake(['https://dead-tunnel.example.test/iicp/health' => Http::response('', 530)]);
+
+        $this->artisan('iicp:node-lifecycle')->assertSuccessful();
+
+        $fresh = $node->fresh();
+        $this->assertFalse((bool) $fresh->public_reachable);
+        $this->assertNotNull($fresh->endpoint_verified_dead_at);
+
+        $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&relay_capable=true')
+            ->assertStatus(200);
+        $this->assertSame(0, $resp->json('count'));
+        $this->assertNotContains($node->id, collect($resp->json('nodes'))->pluck('node_id')->all());
+    }
+
+    public function test_recovered_external_tunnel_endpoint_clears_dead_flag_and_returns_to_discover(): void
+    {
+        $node = $this->createActiveNode([
+            'endpoint' => 'https://recovered-tunnel.example.test',
+            'transport_method' => 'external_tunnel',
+            'exposure_mode' => 'relay_required',
+            'public_reachable' => false,
+            'endpoint_verified_dead_at' => now()->subMinutes(10),
+            'relay_capable' => true,
+        ]);
+        $node->capabilities()->create([
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['llama-3-8b'],
+            'max_tokens' => 4096,
+        ]);
+        Http::fake(['https://recovered-tunnel.example.test/iicp/health' => Http::response('ok', 200)]);
+
+        $this->artisan('iicp:node-lifecycle')->assertSuccessful();
+
+        $fresh = $node->fresh();
+        $this->assertTrue((bool) $fresh->public_reachable);
+        $this->assertNull($fresh->endpoint_verified_dead_at);
+
+        $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&relay_capable=true')
+            ->assertStatus(200)
+            ->assertJsonPath('count', 1);
+        $this->assertSame($node->id, $resp->json('nodes.0.node_id'));
+    }
 }

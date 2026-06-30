@@ -14,4 +14,5 @@ Route::post('/_deploy/migrate', DeployMigrateController::class)
     ->middleware('throttle:6,1');
 
 require __DIR__.'/api_protocol.php';
+require __DIR__.'/api_consumer_token.php';
 require __DIR__.'/api_public.php';

@@ -7,6 +7,7 @@ namespace App\Http\Controllers;
 use App\Models\Node;
 use App\Models\ProbeToken;
 use App\Models\TelemetryProbe;
+use App\Services\FederatedMeshHealthResolver;
 use App\Services\NodeHealthService;
 use App\Services\NodeScorer;
 use Illuminate\Http\JsonResponse;
@@ -15,7 +16,10 @@ use Illuminate\Support\Facades\DB;
 
 class StatsController extends Controller
 {
-    public function __construct(private NodeHealthService $health) {}
+    public function __construct(
+        private NodeHealthService $health,
+        private FederatedMeshHealthResolver $federatedHealth,
+    ) {}
 
     /** Credit schedule constants — derived from research/credit-rate-calibration/01-rate-calibration-findings.md. */
     private const CREDIT_SCHEDULE = [
@@ -38,23 +42,90 @@ class StatsController extends Controller
 
     public function index(): JsonResponse
     {
-        $stats = Cache::remember('stats.public', 60, function () {
-            $probes = $this->probeStats();
-
-            return [
-                'server' => $this->serverStats(),
-                'probes' => $probes,
-                'credit_schedule' => self::CREDIT_SCHEDULE,
-                // ADR-044 (#372): mesh_health is the median per-node health over
-                // active provider nodes (the mesh's serving set), with the full
-                // distribution exposed. Directory-infrastructure signals (discover
-                // latency, conformance, REACH reachability) moved to directory_health.
-                'mesh_health' => $this->health->meshHealth($this->health->activeProviderNodes()),
-                'directory_health' => $this->directoryHealth($probes),
-            ];
-        });
+        $stats = Cache::remember('stats.public', 60, fn () => $this->build());
 
         return response()->json($stats);
+    }
+
+    /**
+     * Build the public stats document. Called by the 60s response cache above
+     * and by the iicp:warm-stats-cache scheduler (#508) so no user request
+     * ever pays the ~1.2s aggregate rebuild on cache expiry.
+     */
+    public function build(): array
+    {
+        $probes = $this->probeStats();
+
+        return [
+            'server' => $this->serverStats(),
+            'probes' => $probes,
+            'credit_schedule' => self::CREDIT_SCHEDULE,
+            // ADR-044 (#372): mesh_health is the median per-node health over
+            // active provider nodes (the mesh's serving set), with the full
+            // distribution exposed. Directory-infrastructure signals (discover
+            // latency, conformance, REACH reachability) moved to directory_health.
+            'mesh_health' => $this->health->meshHealth($this->health->activeProviderNodes()),
+            // ADR-048 (#374): federation-aware mesh_health — resolves each node by
+            // majority-vote across evaluators over the union of replicated HEALTH
+            // snapshots, so any replica reports the same fleet aggregate. Present only
+            // once HEALTH events have been applied (federation active); null otherwise
+            // so the single-directory mesh_health above stays the unconditional figure.
+            'mesh_health_federated' => $this->federatedMeshHealthOrNull(),
+            'directory_health' => $this->directoryHealth($probes),
+            // DIR-MIG-01 / #531 — adoption telemetry: the sdk_version + sdk_language
+            // distribution of active nodes. Read-only; this is the objective signal
+            // the capability-migration framework (iicp-dir §6.1) uses to decide when
+            // an adoption-gated hard-enforcement stage is safe to start.
+            'sdk_adoption' => $this->sdkAdoption(),
+        ];
+    }
+
+    /**
+     * #531 — distribution of `sdk_version` (and `sdk_language`) over active
+     * nodes, plus the per-language newest version seen. Advisory provenance
+     * (sdk_version is self-reported), but sufficient to gate migration phases.
+     */
+    private function sdkAdoption(): array
+    {
+        $active = Node::where('available', true)
+            ->where('status', 'active')
+            ->where('last_seen', '>=', now()->subSeconds(90))
+            ->get(['sdk_language', 'sdk_version']);
+
+        $total = $active->count();
+        // Return plain arrays (not Collections) so the value survives the stats
+        // response cache serialize/deserialize cycle — a cached Collection comes
+        // back as __PHP_Incomplete_Class and breaks the JSON shape.
+        $byLanguage = $active->groupBy(fn ($n) => $n->sdk_language ?: 'unknown')
+            ->map(fn ($g) => $g->count())
+            ->toArray();
+        $byVersion = $active->groupBy(fn ($n) => $n->sdk_version ?: 'unknown')
+            ->map(fn ($g) => $g->count())
+            ->sortDesc()
+            ->toArray();
+
+        return [
+            'basis' => 'heartbeating_nodes',
+            'total_heartbeating' => $total,
+            // Backward-compatible alias retained for adoption dashboards that
+            // still read total_active.  It counts heartbeating nodes, not only
+            // public-routable nodes.
+            'total_active' => $total,
+            'by_language' => $byLanguage,
+            'by_version' => $byVersion,
+        ];
+    }
+
+    /**
+     * ADR-048 federation-aware aggregate — null until at least one HEALTH event has been
+     * applied, so a non-federated directory's /stats is unchanged (the single-directory
+     * mesh_health remains the authoritative figure while sample == 0).
+     */
+    private function federatedMeshHealthOrNull(): ?array
+    {
+        $federated = $this->federatedHealth->federatedMeshHealth();
+
+        return ($federated['sample'] ?? 0) > 0 ? $federated : null;
     }
 
     private function serverStats(): array
@@ -74,8 +145,21 @@ class StatsController extends Controller
             $w->where('public_reachable', true)
                 ->orWhereIn('exposure_mode', NodeScorer::RELAY_REACHABLE_EXPOSURE_MODES);
         };
-        $publicActive = (clone $base)->where($discoverable)->count();
-        $internalActive = (clone $base)->whereNot($discoverable)->count();
+        $totalActive = (clone $base)->count();
+        $publicActive = (clone $base)
+            // Must mirror NodeScorer::discover(): a confirmed-dead listed
+            // endpoint is hidden from normal discover until a probe clears it.
+            ->whereNull('endpoint_verified_dead_at')
+            ->where($discoverable)
+            ->count();
+        $internalActive = max(0, $totalActive - $publicActive);
+        $keyReady = (clone $base)
+            ->whereNotNull('cx_public_key')
+            ->count();
+        $downlevel = (clone $base)
+            ->get(['sdk_version'])
+            ->filter(fn (Node $n) => NodeScorer::sdkStatus($n->sdk_version) !== 'current')
+            ->count();
 
         // #335 — surface stale-active rows (active=true but last_seen >24h ago)
         // so the post-deploy integrity gate can alert when NodeLifecycleCommand
@@ -86,7 +170,15 @@ class StatsController extends Controller
 
         return [
             'version' => config('app.iicp_version', 'v1.5.0'),
+            // Backward-compatible alias: active_nodes historically existed on
+            // the wire.  Its current meaning is public/discoverable serving
+            // nodes; newer clients should use public_routable_nodes for clarity.
             'active_nodes' => $publicActive,
+            'public_routable_nodes' => $publicActive,
+            'heartbeating_nodes' => $totalActive,
+            'limited_reach_nodes' => $internalActive,
+            'key_ready_nodes' => $keyReady,
+            'downlevel_nodes' => $downlevel,
             'internal_nodes' => $internalActive,
             'stale_active_nodes' => $staleActiveNodes,
             'uptime_seconds' => $this->uptimeSeconds(),
@@ -141,6 +233,10 @@ class StatsController extends Controller
         return [
             'discover_p50_ms' => $rows->get('discover_p50_ms')?->value,
             'discover_p95_ms' => $rows->get('discover_p95_ms')?->value,
+            // #508 decomposition: app processing vs CDN edge vs CDN→origin pull.
+            'discover_query_p50_ms' => $rows->get('discover_query_p50_ms')?->value,
+            'discover_edge_p50_ms' => $rows->get('discover_edge_p50_ms')?->value,
+            'discover_origin_p50_ms' => $rows->get('discover_origin_p50_ms')?->value,
             'heartbeat_p50_ms' => $rows->get('heartbeat_p50_ms')?->value,
             'reachability_pct' => $rows->get('reachability_pct')?->value,
             'task_success_rate_pct' => $successRate,
@@ -222,6 +318,14 @@ class StatsController extends Controller
         $conf = $probes['conformance_24h'];
 
         $p50 = $agg['discover_p50_ms'] ?? null;
+        // #508: score the latency the directory CONTROLS — its own processing
+        // time (query_ms). The wall p50 conflates CDN transport: the 5-min probe
+        // cadence aliases against the edge TTL, so probes mostly sample the
+        // CDN→origin worst case that cached real-user traffic rarely hits. The
+        // wall/edge/origin figures stay exposed below; latency_basis says which
+        // one the score used (query when available, wall fallback).
+        $queryP50 = $agg['discover_query_p50_ms'] ?? null;
+        $scoreP50 = $queryP50 ?? $p50;
         $reachability = $agg['reachability_pct'] ?? null;
         $passed = $conf['passed'] ?? 0;
         $failed = $conf['failed'] ?? 0;
@@ -238,8 +342,8 @@ class StatsController extends Controller
         }
 
         // Discover latency: p50 ≤ 50ms → 1.0; ≥ 500ms → 0.0.
-        $latScore = $p50 !== null
-            ? max(0.0, min(1.0, 1.0 - ($p50 - 50.0) / 450.0))
+        $latScore = $scoreP50 !== null
+            ? max(0.0, min(1.0, 1.0 - ($scoreP50 - 50.0) / 450.0))
             : 0.5;
 
         // Conformance: pass fraction over the window.
@@ -263,6 +367,10 @@ class StatsController extends Controller
                 'conformance' => round($confScore, 3),
             ],
             'discover_p50_ms' => $p50,
+            'discover_query_p50_ms' => $queryP50,
+            'discover_edge_p50_ms' => $agg['discover_edge_p50_ms'] ?? null,
+            'discover_origin_p50_ms' => $agg['discover_origin_p50_ms'] ?? null,
+            'latency_basis' => $queryP50 !== null ? 'query' : 'wall',
             'probe_reachability_pct' => $reachability,
             'window' => '24h',
         ];

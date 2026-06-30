@@ -17,7 +17,24 @@ class ReplicaModeRedirectTest extends TestCase
     {
         putenv('IICP_REPLICA_MODE=false');
         putenv('IICP_SEED_URL');
+        putenv('IICP_DEV_ALLOW_HTTP_DID');
         parent::tearDown();
+    }
+
+    public function test_replica_mode_allows_http_seed_url_with_dev_flag(): void
+    {
+        // Testbed (docker-compose.federation.yml): seed↔replica over plain http inside the
+        // bridge network. IICP_DEV_ALLOW_HTTP_DID (non-production) permits http:// → 307,
+        // instead of the 503 a bare http URL gets in production.
+        putenv('IICP_REPLICA_MODE=true');
+        putenv('IICP_SEED_URL=http://seed-directory:8080');
+        putenv('IICP_DEV_ALLOW_HTTP_DID=true');
+
+        $resp = $this->postJson('/api/v1/register', ['endpoint' => 'https://x.test']);
+
+        $resp->assertStatus(307);
+        $this->assertSame('http://seed-directory:8080/api/v1/register', $resp->headers->get('Location'));
+        $this->assertSame('replica_mode', $resp->headers->get('X-IICP-Redirect-Reason'));
     }
 
     public function test_seed_mode_passes_writes_through(): void

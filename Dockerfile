@@ -12,7 +12,8 @@ RUN cp .env.example .env && \
     mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs && \
     composer install --no-dev --optimize-autoloader --no-interaction --no-scripts --ignore-platform-reqs && \
     php artisan key:generate --force && \
-    chmod -R 775 storage bootstrap/cache
+    chmod -R 775 storage bootstrap/cache && \
+    chmod +x docker-testbed-entrypoint.sh
 # --no-scripts skips the post-autoload-dump `artisan package:discover` (which exited 1 in
 # the build env and broke the image); Laravel rebuilds the package manifest lazily at
 # runtime. mkdir ensures the gitignored runtime dirs exist before any artisan boot.
@@ -20,4 +21,6 @@ RUN cp .env.example .env && \
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "sed -i \"s|^DB_HOST=.*|DB_HOST=${DB_HOST:-localhost}|\" .env && sed -i \"s|^DB_DATABASE=.*|DB_DATABASE=${DB_DATABASE:-iicp_directory}|\" .env && sed -i \"s|^DB_USERNAME=.*|DB_USERNAME=${DB_USERNAME:-iicp_dir_user}|\" .env && sed -i \"s|^DB_PASSWORD=.*|DB_PASSWORD=${DB_PASSWORD:-iicp_dir_pass}|\" .env && php artisan config:clear && php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=8080"]
+# Testbed entrypoint writes container env into .env (php artisan serve does not forward
+# it to the request context) then migrates + serves. Production uses deploy/ + php-fpm.
+CMD ["sh", "./docker-testbed-entrypoint.sh"]

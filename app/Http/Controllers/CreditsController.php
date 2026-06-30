@@ -84,6 +84,40 @@ class CreditsController extends Controller
     }
 
     /**
+     * GET /v1/credits/summary — lifetime income / spending / balance for the
+     * authenticated node, with a `reconciles` integrity flag (#456). This is the
+     * data behind `iicp-node credits`: earned, spent, left — at a glance.
+     */
+    public function summary(Request $request): JsonResponse
+    {
+        $span = OtelTracer::startSpan($request, 'iicp.directory.credits.summary');
+
+        /** @var Node $node */
+        $node = $request->get('_authenticated_node');
+        $s = $this->credits->summary($node->id);
+
+        $span->setAttribute('iicp.node_id', (string) $node->id)
+            ->setAttribute('iicp.credit_balance', (float) $s['balance'])
+            ->setAttribute('iicp.credits_reconcile', $s['reconciles']);
+        $span->end();
+
+        return response()->json([
+            'node_id' => $node->id,
+            'balance' => $s['balance'],
+            'total_earned' => $s['total_earned'],
+            'total_spent' => $s['total_spent'],
+            'tx_count' => $s['tx_count'],
+            'reconciles' => $s['reconciles'],
+            'unit' => 'credit',
+            'tokens_per_credit' => 1000,
+            // Operator wallet — credits roll up to the operator_id. When this node is
+            // delegation-bound (ADR-045), aggregate the operator's non-archived nodes so
+            // the operator sees one spendable wallet keyed by their identity.
+            'operator_wallet' => $this->credits->operatorWalletSummary((string) $node->id),
+        ]);
+    }
+
+    /**
      * Issue credits to a node (admin-only route — see auth middleware).
      *
      * `min:0.0001` guards against precision-laundering attempts (0-amount or
@@ -110,10 +144,14 @@ class CreditsController extends Controller
             'cip_session_key' => ['sometimes', 'nullable', 'string', 'max:255'],
             'amount' => ['required', 'numeric', 'min:0.0001'],
             'reason' => ['sometimes', 'string', 'max:255'],
+            // #488 — optional querying_node_id: when provided, enables self-query neutrality check.
+            // The serving node includes this so the directory can detect same-operator loops.
+            'querying_node_id' => ['sometimes', 'nullable', 'string', 'max:36'],
         ]);
 
         // IICP-E027: verify CIPWorkerReceipt HMAC-SHA256 before crediting
         $node = Node::find($validated['node_id']);
+
         if (! $node || ! $node->node_hmac_key) {
             $span->setAttribute('iicp.rejected', true)
                 ->setAttribute('iicp.rejection_reason', 'hmac_key_not_provisioned');
@@ -124,14 +162,21 @@ class CreditsController extends Controller
             ], 422);
         }
 
-        $canonical = implode(':', [
+        $canonicalParts = [
             $validated['task_id'],
             (string) $validated['tokens_used'],
             $validated['cip_parent_task_id'] ?? '',
             $validated['cip_session_key'] ?? '',
             $validated['nonce'],
             $validated['response_hash'],
-        ]);
+        ];
+        // #490 — include querying_node_id in canonical message when present so the serving
+        // node cannot fabricate it to drain a foreign operator's balance. SDKs ≥ 0.7.50 sign
+        // this field; older receipts omit querying_node_id and use the shorter canonical.
+        if (! empty($validated['querying_node_id'])) {
+            $canonicalParts[] = $validated['querying_node_id'];
+        }
+        $canonical = implode(':', $canonicalParts);
         $expected = hash_hmac('sha256', $canonical, $node->node_hmac_key);
 
         if (! hash_equals($expected, $validated['signature'])) {
@@ -171,6 +216,26 @@ class CreditsController extends Controller
             ], 422);
         }
 
+        // WQ-098 / G1: classify attribution after HMAC/ceiling validation but before
+        // nonce consumption. Known self-deal exits net-zero and legacy receipts remain
+        // credit-compatible while carrying zero trust weight for future reputation/routing.
+        $attributionDecision = $this->resolveAwardAttribution($node, $validated);
+        if ($attributionDecision['response'] !== null) {
+            if ($attributionDecision['rejection_reason'] !== null) {
+                $span->setAttribute('iicp.rejected', true)
+                    ->setAttribute('iicp.rejection_reason', $attributionDecision['rejection_reason']);
+            } else {
+                $span->setAttribute('iicp.self_query_excluded', true);
+            }
+            $span->end();
+
+            return $attributionDecision['response'];
+        }
+
+        $queryingNode = $attributionDecision['querying_node'];
+        $attribution = $attributionDecision['attribution'];
+        $trustWeight = $attributionDecision['trust_weight'];
+
         // TC-9b: credit laundering rate limit — max 1000 credits awarded per node_id per hour.
         // Colluding nodes earn unusually fast; this floor detects coordinated manipulation.
         // Checked before the nonce lock so laundering attempts don't consume valid nonces.
@@ -209,6 +274,43 @@ class CreditsController extends Controller
         // Increment hourly counter after successful award (expires at end of next hour).
         Cache::put($hourKey, $hourlyEarned + (float) $validated['amount'], 7200);
 
+        // #490 — spend: debit the querying node when querying_node_id is present and verified
+        // in the HMAC signature (canonical message includes it above). The award to the serving
+        // node is unconditional; the debit to the querying node is best-effort (logged if
+        // balance is insufficient — enforced more strictly once the credit economy matures).
+        $spent = 0.0;
+        $spendReason = null;
+        $spendScope = null;
+        $debitCount = 0;
+        if ($queryingNode) {
+            $spend = $this->credits->debitForConsumer(
+                consumerNodeId: (string) $queryingNode->id,
+                amount: (float) $validated['amount'],
+                taskId: (string) $validated['task_id'],
+                reason: 'task_spend',
+            );
+            $spendScope = $spend['scope'];
+            $debitCount = $spend['debit_count'];
+            if ($spend['debited']) {
+                $spent = $spend['spent'];
+                $this->eventLogger->log('CREDIT_SPEND', $validated['querying_node_id'], [
+                    'task_id' => $validated['task_id'],
+                    'amount' => $validated['amount'],
+                    'serving_node' => $validated['node_id'],
+                    'scope' => $spendScope,
+                    'debit_count' => $debitCount,
+                ]);
+            } else {
+                $spendReason = $spend['reason'] ?? 'insufficient_balance';
+                $this->eventLogger->log('CREDIT_SPEND_INSUFFICIENT', $validated['querying_node_id'], [
+                    'task_id' => $validated['task_id'],
+                    'amount' => $validated['amount'],
+                    'serving_node' => $validated['node_id'],
+                    'scope' => $spendScope,
+                ]);
+            }
+        }
+
         $this->eventLogger->log('CREDIT_AWARD', $validated['node_id'], [
             'task_id' => $validated['task_id'],
             'tokens_used' => $validated['tokens_used'],
@@ -217,19 +319,38 @@ class CreditsController extends Controller
             'response_hash' => $validated['response_hash'],
             'cip_parent_task_id' => $validated['cip_parent_task_id'] ?? null,
             'cip_session_key' => $validated['cip_session_key'] ?? null,
+            'querying_node_id' => $validated['querying_node_id'] ?? null,
+            'attribution' => $attribution,
+            'trust_weight' => $trustWeight,
+            'spent' => $spent,
         ]);
 
         $span->setAttribute('iicp.node_id', $validated['node_id'])
             ->setAttribute('iicp.credit_amount', (float) $validated['amount'])
             ->setAttribute('iicp.tokens_used', (int) $validated['tokens_used'])
-            ->setAttribute('iicp.new_balance', $newBalance);
+            ->setAttribute('iicp.new_balance', $newBalance)
+            ->setAttribute('iicp.credit_spent', $spent)
+            ->setAttribute('iicp.attribution', $attribution)
+            ->setAttribute('iicp.trust_weight', $trustWeight);
         $span->end();
 
-        return response()->json([
+        $response = [
             'node_id' => $validated['node_id'],
             'awarded' => $validated['amount'],
             'balance' => $newBalance,
-        ]);
+            'spent' => $spent,
+            'attribution' => $attribution,
+            'trust_weight' => $trustWeight,
+        ];
+        if ($spendScope !== null) {
+            $response['spend_scope'] = $spendScope;
+            $response['debit_count'] = $debitCount;
+        }
+        if ($spendReason !== null) {
+            $response['spend_reason'] = $spendReason;
+        }
+
+        return response()->json($response);
     }
 
     /**
@@ -255,6 +376,100 @@ class CreditsController extends Controller
             'node_id' => $node->id,
             'transactions' => $transactions,
         ]);
+    }
+
+    /**
+     * WQ-098/G1 attribution classification for credit awards.
+     *
+     * @param  array<string,mixed>  $validated
+     * @return array{querying_node:?Node, attribution:string, trust_weight:float, response:?JsonResponse, rejection_reason:?string}
+     */
+    private function resolveAwardAttribution(?Node $node, array $validated): array
+    {
+        $queryingNodeId = $validated['querying_node_id'] ?? null;
+        if (empty($queryingNodeId)) {
+            return $this->awardAttribution(null, 'legacy_unattributed', 0.0);
+        }
+
+        if ($queryingNodeId === $validated['node_id']) {
+            return $this->awardAttribution(
+                null,
+                'self_node',
+                0.0,
+                response()->json($this->excludedAwardPayload($validated['node_id'], 'self_node')),
+            );
+        }
+
+        $queryingNode = Node::where('id', $queryingNodeId)
+            ->select(['id', 'operator_pubkey'])
+            ->first();
+        if (! $queryingNode) {
+            return $this->awardAttribution(
+                null,
+                'unknown_querying_node',
+                0.0,
+                response()->json([
+                    'error' => ['code' => 'IICP-E027', 'message' => 'querying_node_id does not identify a registered node'],
+                ], 422),
+                'unknown_querying_node',
+            );
+        }
+
+        if ($this->sameVerifiedOperator($node, $queryingNode)) {
+            return $this->awardAttribution(
+                $queryingNode,
+                'self_operator',
+                0.0,
+                response()->json($this->excludedAwardPayload($validated['node_id'], 'self_operator')),
+            );
+        }
+
+        $hasVerifiedOperators = $node && ! empty($node->operator_pubkey) && ! empty($queryingNode->operator_pubkey);
+
+        return $this->awardAttribution(
+            $queryingNode,
+            $hasVerifiedOperators ? 'attributed_cross_operator' : 'attributed_cross_node_unverified_operator',
+            $hasVerifiedOperators ? 1.0 : 0.5,
+        );
+    }
+
+    /** @return array{querying_node:?Node, attribution:string, trust_weight:float, response:?JsonResponse, rejection_reason:?string} */
+    private function awardAttribution(
+        ?Node $queryingNode,
+        string $attribution,
+        float $trustWeight,
+        ?JsonResponse $response = null,
+        ?string $rejectionReason = null,
+    ): array {
+        return [
+            'querying_node' => $queryingNode,
+            'attribution' => $attribution,
+            'trust_weight' => $trustWeight,
+            'response' => $response,
+            'rejection_reason' => $rejectionReason,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function excludedAwardPayload(string $nodeId, string $attribution): array
+    {
+        return [
+            'node_id' => $nodeId,
+            'awarded' => 0,
+            'spent' => 0,
+            'excluded' => true,
+            'reason' => 'self_query_excluded',
+            'attribution' => $attribution,
+            'trust_weight' => 0.0,
+        ];
+    }
+
+    private function sameVerifiedOperator(?Node $servingNode, Node $queryingNode): bool
+    {
+        return $servingNode !== null
+            && ! empty($servingNode->operator_pubkey)
+            && ! empty($queryingNode->operator_pubkey)
+            && $queryingNode->operator_pubkey === $servingNode->operator_pubkey;
     }
 
     /**
@@ -342,14 +557,17 @@ class CreditsController extends Controller
 
         // S.12 §2.1: consumer pre-flight — balance check lets the proxy decide whether
         // to fall back to local execution before dispatching the CIP sub-task.
-        $consumerBalance = $this->credits->balance($consumer->id);
-        $balanceSufficient = $consumerBalance >= $estimatedCredits;
+        $effectiveBalance = $this->credits->effectiveBalanceForConsumer((string) $consumer->id);
+        $consumerBalance = $effectiveBalance['consumer_balance'];
+        $balanceSufficient = $effectiveBalance['effective_balance'] >= $estimatedCredits;
 
         $span->setAttribute('iicp.intent', (string) $intent)
             ->setAttribute('iicp.max_tokens', $maxTokens)
             ->setAttribute('iicp.nodes_quoted', $nodesQuoted)
             ->setAttribute('iicp.estimated_credits', $estimatedCredits)
             ->setAttribute('iicp.consumer_balance', (float) $consumerBalance)
+            ->setAttribute('iicp.effective_balance', (float) $effectiveBalance['effective_balance'])
+            ->setAttribute('iicp.balance_scope', (string) $effectiveBalance['balance_scope'])
             ->setAttribute('iicp.balance_sufficient', $balanceSufficient);
         $span->end();
 
@@ -364,6 +582,9 @@ class CreditsController extends Controller
             'currency' => 'iicp_credits',
             // S.12 §2.1 pre-flight fields: proxy uses these to decide local vs remote
             'consumer_balance' => $consumerBalance,
+            'effective_balance' => $effectiveBalance['effective_balance'],
+            'balance_scope' => $effectiveBalance['balance_scope'],
+            'operator_wallet_balance' => $effectiveBalance['operator_wallet_balance'],
             'balance_sufficient' => $balanceSufficient,
         ]);
     }

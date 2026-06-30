@@ -40,7 +40,7 @@ class ProbeNodesCommandTest extends TestCase
         $node = $this->makeNode('https://probe-ok.example.com');
 
         Http::fake([
-            'https://probe-ok.example.com' => Http::response('', 200),
+            'https://probe-ok.example.com/iicp/health' => Http::response('', 200),
         ]);
 
         $this->artisan('iicp:probe-nodes')->assertSuccessful();
@@ -54,13 +54,14 @@ class ProbeNodesCommandTest extends TestCase
         $this->assertEquals('DIR-PROBE-NODE-01', $probe->test_id);
     }
 
-    /** Unreachable node: probe records passed=false. */
-    public function test_probe_records_unreachable_node(): void
+    /** Unreachable public node: probe records passed=false (downgrade signal is useful). */
+    public function test_probe_records_unreachable_public_node(): void
     {
         $node = $this->makeNode('https://probe-fail.example.com');
+        $node->update(['public_reachable' => true]);
 
         Http::fake([
-            'https://probe-fail.example.com' => Http::response('', 503),
+            'https://probe-fail.example.com/iicp/health' => Http::response('', 503),
         ]);
 
         $this->artisan('iicp:probe-nodes')->assertSuccessful();
@@ -74,6 +75,30 @@ class ProbeNodesCommandTest extends TestCase
     }
 
     /**
+     * Behavior test: relay-only node (public_reachable=false) that fails probe
+     * must NOT create a TelemetryProbe — the directory's IPv4-only origin cannot
+     * reach IPv6 relay endpoints, so failure is a false negative.
+     * This test fails if the no-false-negative guard is removed.
+     */
+    public function test_relay_only_node_failure_not_recorded(): void
+    {
+        $node = $this->makeNode('http://[2a0a:a543:df54::1]:9484');
+        $node->update(['public_reachable' => false, 'relay_capable' => true]);
+
+        Http::fake([
+            'http://[2a0a:a543:df54::1]:9484/iicp/health' => Http::response('', 503),
+        ]);
+
+        $this->artisan('iicp:probe-nodes')->assertSuccessful();
+
+        $probe = TelemetryProbe::where('node_id', $node->id)
+            ->where('probe_type', 'reachability')
+            ->first();
+
+        $this->assertNull($probe, 'A failed probe for a relay-only node must NOT be recorded (false negative guard)');
+    }
+
+    /**
      * #413 — a false→true promote must emit a REACHABILITY_RESTORE event so the
      * node's (re)appearance in discover is auditable (fails without the emit).
      */
@@ -82,7 +107,7 @@ class ProbeNodesCommandTest extends TestCase
         $node = $this->makeNode('https://comesback.example.com');
         $node->update(['public_reachable' => false]); // currently hidden from discover
 
-        Http::fake(['https://comesback.example.com' => Http::response('', 200)]);
+        Http::fake(['https://comesback.example.com/iicp/health' => Http::response('', 200)]);
 
         $this->artisan('iicp:probe-nodes')->assertSuccessful();
 
@@ -102,7 +127,7 @@ class ProbeNodesCommandTest extends TestCase
         $node = $this->makeNode('https://stable.example.com');
         $node->update(['public_reachable' => true]);
 
-        Http::fake(['https://stable.example.com' => Http::response('', 200)]);
+        Http::fake(['https://stable.example.com/iicp/health' => Http::response('', 200)]);
 
         $this->artisan('iicp:probe-nodes')->assertSuccessful();
 
@@ -110,7 +135,26 @@ class ProbeNodesCommandTest extends TestCase
             ->where('node_id', $node->id)->count(), 'No event when there is no transition');
     }
 
-    /** SSRF guard: private/loopback endpoints must not be probed. */
+    /** #536 — an active probe success clears the confirmed-dead endpoint flag. */
+    public function test_reachable_dead_flagged_node_clears_endpoint_dead_flag(): void
+    {
+        $node = $this->makeNode('https://dead-flag-clears.example.com');
+        $node->update(['public_reachable' => true, 'endpoint_verified_dead_at' => now()->subMinutes(15)]);
+
+        Http::fake(['https://dead-flag-clears.example.com/iicp/health' => Http::response('', 200)]);
+
+        $this->artisan('iicp:probe-nodes')->assertSuccessful();
+
+        $this->assertTrue((bool) $node->fresh()->public_reachable);
+        $this->assertNull($node->fresh()->endpoint_verified_dead_at);
+        $event = NodeEvent::where('event_type', 'REACHABILITY_RESTORE')
+            ->where('node_id', $node->id)
+            ->first();
+        $this->assertNotNull($event, 'Dead-flag clear must be auditable');
+        $this->assertSame(true, $event->payload['endpoint_verified_dead_at_cleared']);
+    }
+
+    /** SSRF guard: private endpoints must not be probed and no false-negative probe is filed. */
     public function test_private_endpoint_is_skipped(): void
     {
         $node = $this->makeNode('http://192.168.1.50:8090');
@@ -119,17 +163,17 @@ class ProbeNodesCommandTest extends TestCase
 
         $this->artisan('iicp:probe-nodes')->assertSuccessful();
 
-        $probe = TelemetryProbe::where('node_id', $node->id)
-            ->where('probe_type', 'reachability')
-            ->first();
-
-        $this->assertNotNull($probe, 'Probe row created even for private endpoint (SSRF result)');
-        $this->assertFalse($probe->passed, 'Private endpoint probe must record passed=false');
+        // No probe record: private endpoints are not public_reachable, so a failure is
+        // not filed (same no-false-negative guard as relay-only nodes).
+        $this->assertNull(
+            TelemetryProbe::where('node_id', $node->id)->where('probe_type', 'reachability')->first(),
+            'No probe row for private endpoint (SSRF guard + no false-negative rule)',
+        );
 
         Http::assertNothingSent();
     }
 
-    /** Loopback endpoint must not be probed. */
+    /** Loopback endpoint must not be probed, no false-negative probe filed. */
     public function test_loopback_endpoint_is_skipped(): void
     {
         $node = $this->makeNode('http://127.0.0.1:8090');
@@ -138,30 +182,96 @@ class ProbeNodesCommandTest extends TestCase
 
         $this->artisan('iicp:probe-nodes')->assertSuccessful();
 
-        $probe = TelemetryProbe::where('node_id', $node->id)
-            ->where('probe_type', 'reachability')
-            ->first();
-        $this->assertNotNull($probe);
-        $this->assertFalse($probe->passed);
+        $this->assertNull(
+            TelemetryProbe::where('node_id', $node->id)->where('probe_type', 'reachability')->first(),
+            'No probe row for loopback endpoint',
+        );
         Http::assertNothingSent();
     }
 
-    /** HEAD fallback to GET on 405: still records passed=true. */
-    public function test_head_405_falls_back_to_get(): void
+    /** #559: root 404 must not matter when canonical /iicp/health is healthy. */
+    public function test_root_404_but_health_endpoint_200_records_passed(): void
     {
-        $node = $this->makeNode('https://probe-no-head.example.com');
+        $node = $this->makeNode('https://probe-health.example.com');
 
         Http::fake([
-            'https://probe-no-head.example.com' => Http::sequence()
-                ->push('', 405)   // HEAD → 405
-                ->push('ok', 200), // GET → 200
+            'https://probe-health.example.com' => Http::response('not found', 404),
+            'https://probe-health.example.com/iicp/health' => Http::response([
+                'status' => 'ok',
+                'node_id' => $node->id,
+                'available' => true,
+            ], 200),
         ]);
 
         $this->artisan('iicp:probe-nodes')->assertSuccessful();
 
         $probe = TelemetryProbe::where('node_id', $node->id)->first();
         $this->assertNotNull($probe);
-        $this->assertTrue($probe->passed, 'HEAD 405 + GET 200 must record passed=true');
+        $this->assertTrue($probe->passed, 'GET /iicp/health 200 must record passed=true even when / is 404');
+        $this->assertSame('/iicp/health', $probe->metadata['path'] ?? null);
+        Http::assertSent(fn ($request) => $request->url() === 'https://probe-health.example.com/iicp/health');
+        Http::assertNotSent(fn ($request) => $request->url() === 'https://probe-health.example.com');
+    }
+
+    /** Rust/TS/Python health JSON with status=ok and available boolean is accepted. */
+    public function test_health_json_shape_is_accepted(): void
+    {
+        $node = $this->makeNode('https://probe-rust-sdk.example.com');
+
+        Http::fake([
+            'https://probe-rust-sdk.example.com/iicp/health' => Http::response([
+                'status' => 'ok',
+                'node_id' => $node->id,
+                'region' => 'eu-central',
+                'available' => true,
+                'models' => ['qwen2.5:0.5b'],
+            ], 200),
+        ]);
+
+        $this->artisan('iicp:probe-nodes')->assertSuccessful();
+
+        $probe = TelemetryProbe::where('node_id', $node->id)->first();
+        $this->assertNotNull($probe);
+        $this->assertTrue($probe->passed);
+    }
+
+    /**
+     * Behavior test (no-IPv6-egress guard, 2026-06-11): an IPv6-literal endpoint
+     * cannot be reached from an origin without IPv6 egress, so probing it only
+     * records false negatives. With iicp_probe_ipv6_egress=false (default) the
+     * node must be skipped entirely — no HTTP call, no TelemetryProbe row —
+     * even when it self-attests public_reachable=true.
+     */
+    public function test_ipv6_literal_skipped_without_egress(): void
+    {
+        $node = $this->makeNode('http://[2a0a:a543:df54:0:888:9777:7743:8ae]:9484');
+        $node->update(['public_reachable' => true]);
+
+        Http::fake();
+
+        $this->artisan('iicp:probe-nodes')->assertSuccessful();
+
+        $this->assertNull(
+            TelemetryProbe::where('node_id', $node->id)->where('probe_type', 'reachability')->first(),
+            'IPv6-literal endpoint must not be probed or recorded when origin has no IPv6 egress',
+        );
+        Http::assertNothingSent();
+    }
+
+    /** With IICP_PROBE_IPV6_EGRESS=true the IPv6-literal endpoint IS probed and recorded. */
+    public function test_ipv6_literal_probed_with_egress_enabled(): void
+    {
+        config(['app.iicp_probe_ipv6_egress' => true]);
+
+        $node = $this->makeNode('http://[2a0a:a543:df54:0:888:9777:7743:8ae]:9484');
+
+        Http::fake(['*' => Http::response('', 200)]);
+
+        $this->artisan('iicp:probe-nodes')->assertSuccessful();
+
+        $probe = TelemetryProbe::where('node_id', $node->id)->where('probe_type', 'reachability')->first();
+        $this->assertNotNull($probe, 'IPv6 endpoint must be probed when egress is enabled');
+        $this->assertTrue($probe->passed);
     }
 
     /** Batch limit: --batch=1 probes at most 1 node. */

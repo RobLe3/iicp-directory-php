@@ -5,6 +5,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Node;
+use App\Models\Operator;
 use App\Services\NodeHealthService;
 use App\Services\NodeScorer;
 use Illuminate\Http\JsonResponse;
@@ -61,6 +62,7 @@ class RegistryController extends Controller
 
         $query = Node::where('last_seen', '>=', $cutoff)
             ->where('available', true)
+            ->where('status', 'active')
             ->with(['capabilities', 'reputation']);
 
         if (! empty($validated['region'])) {
@@ -81,30 +83,42 @@ class RegistryController extends Controller
         $total = $query->count();
         $items = $query->latest('last_seen')->skip(($page - 1) * $limit)->take($limit)->get();
 
-        $nodes = $items->map(function (Node $n) {
+        $healthService = app(NodeHealthService::class);
+        $nodes = $items->map(function (Node $n) use ($healthService) {
+            $scorer = app(NodeScorer::class);
+            $health = $healthService->forNode($n);
             // UUID IDs: show 8-char hex prefix (anonymized).
             // Custom alphanumeric names: show full name (already operator-chosen).
             $isUuid = preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $n->id);
             $entry = [
                 'node_id_prefix' => $isUuid ? substr($n->id, 0, 8) : $n->id,
                 'region' => $n->region,
+                'active' => NodeScorer::isHeartbeating($n),
                 'reputation_score' => round($n->reputation?->score ?? 0.5, 3),
                 // Authoritative tier from NodeScorer (same source the discover
                 // endpoint uses) so the list view renders the exact same tier as
                 // the detail view — no client-side recomputation drift.
                 'reputation_tier' => NodeScorer::reputationTier($n),
+                'trust_progress' => NodeScorer::trustProgress($n),
                 'probation' => ($n->reputation?->completed_tasks_count ?? 0) < 100,
                 'intents' => $n->capabilities->pluck('intent')->unique()->values()->all(),
                 'models' => $n->capabilities->flatMap(fn ($c) => $c->models ?? [])->unique()->values()->all(),
+                'capability_summary' => $scorer->capabilitySummary($n),
                 'quantization' => $n->capabilities->pluck('quantization')->filter()->unique()->values()->all(),
                 'inference_engine' => $n->capabilities->pluck('inference_engine')->filter()->unique()->values()->all(),
                 'backend' => $n->backend,
                 'last_seen' => $n->last_seen?->toIso8601String(),
+                ...NodeScorer::performanceSignals($n),
                 'credit_cost_multiplier' => $n->credit_cost_multiplier ?? 1.0,
                 'pricing_model' => $n->pricing_model ?? 'per_token',
                 'attested' => (bool) ($n->attested ?? false),
                 'cip_enabled' => (bool) ($n->allow_remote_inference ?? false),
                 'public_listing' => (bool) ($n->public_listing ?? false),
+                ...NodeScorer::routingSignals($n, $health),
+                'health_summary' => NodeScorer::healthSummary($health),
+                ...NodeScorer::complianceSignals($n),
+                'backend_stability' => NodeScorer::backendStability($n),
+                'status_summary' => NodeScorer::statusSummary($n, $health),
             ];
             // ADR-017 REG-01: operator_url only exposed when operator has opted into public listing
             if ($n->public_listing) {
@@ -148,7 +162,9 @@ class RegistryController extends Controller
         }
 
         $rep = $node->reputation;
+        $scorer = app(NodeScorer::class);
         $cutoff = now()->subSeconds(self::ACTIVE_WINDOW_S);
+        $health = (new NodeHealthService)->forNode($node);
 
         $isUuid = preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $node->id);
 
@@ -159,15 +175,23 @@ class RegistryController extends Controller
             'last_seen' => $node->last_seen?->toIso8601String(),
             'reputation_score' => round($rep?->score ?? 0.5, 3),
             'reputation_tier' => NodeScorer::reputationTier($node),
+            'trust_progress' => NodeScorer::trustProgress($node),
             // ADR-044 (#372) — composed per-node health vector + 8-category
             // exposure classification, surfaced on the public registry profile
             // (privacy-preserving: aggregate signals only, no endpoint/secrets).
-            'health' => (new NodeHealthService)->forNode($node),
+            'health' => $health,
+            'health_summary' => NodeScorer::healthSummary($health),
+            ...NodeScorer::routingSignals($node, $health),
+            ...NodeScorer::complianceSignals($node),
+            'backend_stability' => NodeScorer::backendStability($node),
+            'status_summary' => NodeScorer::statusSummary($node, $health),
+            'capability_summary' => $scorer->capabilitySummary($node),
             // #397 — transport protocols the node speaks (http/https/iicp-native),
             // derived from endpoint schemes. Privacy-preserving: protocol tokens only.
             'transport' => NodeScorer::transportMethods($node->endpoint, $node->transport_endpoint),
             'exposure_mode' => $node->exposure_mode,
             'observed_latency_ms' => $rep?->observed_latency_ms,
+            ...NodeScorer::performanceSignals($node),
             'probation' => ($rep?->completed_tasks_count ?? 0) < 100,
             'completed_tasks' => $rep?->completed_tasks_count ?? 0,
             'intents' => $node->capabilities->pluck('intent')->unique()->values()->all(),
@@ -188,6 +212,11 @@ class RegistryController extends Controller
             'public_listing' => (bool) ($node->public_listing ?? false),
             // ADR-017 REG-01: operator_url only when node has opted into public listing
             ...($node->public_listing ? ['operator_url' => $node->operator_url] : []),
+            // #463 — public operator handle (who hosts this node), resolved from the operators
+            // record by operator_pubkey. Public-by-design (setting a name is the opt-in); the
+            // operator_pubkey itself is NEVER exposed; operator_fingerprint is a short
+            // public hash so clients can disambiguate look-alike display names.
+            ...$this->operatorDisplayName($node),
         ]);
     }
 
@@ -196,6 +225,24 @@ class RegistryController extends Controller
      * Each entry: {date: Y-m-d, uptime_pct: float 0–100}.
      * Heartbeat interval is 30s → 2880 expected per full day. Today uses elapsed seconds.
      */
+    /**
+     * #463 — the public operator handle for the node's hosting operator, resolved from the
+     * operators record by operator_pubkey. Returns `['operator_display_name' => ...]` when a
+     * name is set, else `[]`. NEVER returns operator_pubkey (directory-private).
+     */
+    private function operatorDisplayName(Node $node): array
+    {
+        if (empty($node->operator_pubkey)) {
+            return [];
+        }
+        $name = Operator::where('operator_pubkey', $node->operator_pubkey)->value('display_name');
+
+        return $name ? [
+            'operator_display_name' => $name,
+            'operator_fingerprint' => Operator::publicFingerprint($node->operator_pubkey),
+        ] : [];
+    }
+
     private function buildUptimeHistory(Node $node): array
     {
         $registeredAt = $node->created_at ?? now()->subDays(30);
@@ -222,7 +269,16 @@ class RegistryController extends Controller
                 ? max(1, (int) (now()->diffInSeconds(now()->copy()->startOfDay()) / 30))
                 : 2880;
             $pct = $cnt > 0 ? min(100.0, round($cnt / $expected * 100, 1)) : 0.0;
-            $history[] = ['date' => $date, 'uptime_pct' => $pct];
+            $history[] = [
+                'date' => $date,
+                // Backward-compatible numeric field.  When evidence is
+                // no_samples, dashboards should render this as unknown/no
+                // evidence rather than as proven downtime.
+                'uptime_pct' => $pct,
+                'evidence' => $cnt > 0 ? 'heartbeat_samples' : 'no_samples',
+                'observed_heartbeat_count' => $cnt,
+                'expected_heartbeat_count' => $expected,
+            ];
         }
 
         return $history;
@@ -269,10 +325,11 @@ class RegistryController extends Controller
         $cutoff = now()->subSeconds(self::ACTIVE_WINDOW_S);
 
         $totalNodes = Node::count();
-        $activeNodes = Node::where('available', true)->where('last_seen', '>=', $cutoff)->count();
+        $activeNodes = Node::where('available', true)->where('status', 'active')->where('last_seen', '>=', $cutoff)->count();
 
         // Regional distribution
         $regions = Node::where('available', true)
+            ->where('status', 'active')
             ->where('last_seen', '>=', $cutoff)
             ->selectRaw('region, COUNT(*) as cnt')
             ->groupBy('region')
@@ -284,6 +341,7 @@ class RegistryController extends Controller
         $intentCoverage = DB::table('capabilities')
             ->join('nodes', 'nodes.id', '=', 'capabilities.node_id')
             ->where('nodes.available', true)
+            ->where('nodes.status', 'active')
             ->where('nodes.last_seen', '>=', $cutoff)
             ->selectRaw('capabilities.intent, COUNT(DISTINCT nodes.id) as cnt')
             ->groupBy('capabilities.intent')
@@ -308,6 +366,7 @@ class RegistryController extends Controller
         $rows = DB::table('capabilities')
             ->join('nodes', 'nodes.id', '=', 'capabilities.node_id')
             ->where('nodes.available', true)
+            ->where('nodes.status', 'active')
             ->where('nodes.last_seen', '>=', $cutoff)
             ->selectRaw('capabilities.intent, COUNT(DISTINCT nodes.id) as node_count')
             ->groupBy('capabilities.intent')

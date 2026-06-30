@@ -33,9 +33,17 @@ class SeedDidResolver
     {
         $key = self::CACHE_KEY_PREFIX.md5($seedUrl);
 
-        return Cache::remember($key, self::CACHE_TTL_SECONDS, function () use ($seedUrl): ?string {
-            return $this->fetchAndExtract($seedUrl);
+        // Cache the key HEX-encoded (text-safe): the database cache store serialises the
+        // value into a utf8 column, which rejects the raw 32-byte binary key with
+        // SQLSTATE[HY000] 1366 "Incorrect string value" — crashing the replica sync loop.
+        // The public contract still returns the raw 32 bytes (sodium verify needs them).
+        $hex = Cache::remember($key, self::CACHE_TTL_SECONDS, function () use ($seedUrl): ?string {
+            $raw = $this->fetchAndExtract($seedUrl);
+
+            return $raw === null ? null : bin2hex($raw);
         });
+
+        return is_string($hex) && strlen($hex) === 64 && ctype_xdigit($hex) ? hex2bin($hex) : null;
     }
 
     public function forget(string $seedUrl): void

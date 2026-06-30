@@ -5,10 +5,13 @@
 namespace App\Services;
 
 use App\Models\Node;
+use App\Models\Operator;
+use App\Rules\RoutableEndpoint;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -41,236 +44,43 @@ class NodeRegistry
 
     private const LIVENESS_TIMEOUT_S = 5;
 
+    private const DEFAULT_MAX_ACTIVE_NODES_PER_SOURCE_IP = 20;
+
     public function register(array $data, string $observedIp = '0.0.0.0'): array
     {
-        // #326 + #334 — public_reachable flag controls default /v1/discover
-        // visibility. The probe model:
-        //   - NATted node (operator declared traversal): skip dial-back probe
-        //     (directory can't reach behind NAT); trust the operator's claim;
-        //     mark public_reachable=true. Layer 3 cron re-verifies periodically.
-        //   - NOT-NATted: run the assertLive probe; success → public_reachable=true.
-        //     Failure rejects the registration (existing behavior preserved).
-        //   - Dev env (local/testing) or IICP_SKIP_LIVENESS_CHECK: probe is no-op;
-        //     public_reachable defaults to false (operator can use include_internal).
         $isDeclaredReachable = $this->isDeclaredReachable($data);
         if (! $isDeclaredReachable) {
             $this->assertLive($data['endpoint']);
         }
         $publicReachable = $this->computePublicReachable($isDeclaredReachable);
 
+        // Bcrypt hashing is CPU-bound; intentionally outside the DB transaction.
         $plainToken = Str::random(40);
         $hashedToken = password_hash($plainToken, PASSWORD_BCRYPT);
         $plainProxyToken = Str::random(40);
         $hashedProxyToken = password_hash($plainProxyToken, PASSWORD_BCRYPT);
-        // Operator may supply its own HMAC key (for pricing declaration signing); otherwise generate
         $hmacKey = (! empty($data['node_hmac_key'])) ? $data['node_hmac_key'] : bin2hex(random_bytes(32));
+        // #489 — collect advertised model names so the tier ceiling can be applied in resolvePricingBlock.
+        $advertisedModels = [];
+        foreach ($data['capabilities'] ?? [] as $cap) {
+            foreach ($cap['models'] ?? [] as $m) {
+                $advertisedModels[] = (string) $m;
+            }
+        }
+        $pricingAttrs = $this->resolvePricingBlock($data['pricing'] ?? [], $hmacKey, $advertisedModels);
 
-        // ADR-019 pricing block — verify declaration_signature if present (IICP-E010)
-        $pricingAttrs = $this->resolvePricingBlock($data['pricing'] ?? [], $hmacKey);
-
-        // Identity recovery: if node_id is provided, find any existing record (any status).
-        // Active-node re-registration happens when the adapter restarts while still within the
-        // heartbeat window — issue new tokens and restore to active without creating a duplicate.
-        // Dormant/archived recovery preserves earned reputation for part-time providers.
-        //
-        // #370 — wrap the DB read-write section in a serialisable transaction with
-        // lockForUpdate() on re-registration lookups. The bcrypt hashing above is
-        // intentionally outside the transaction (it's CPU-bound and must not hold
-        // a DB lock while running). The transaction covers the Node read → write →
-        // capabilities delete+create sequence, preventing the race that caused
-        // intermittent 500s under near-simultaneous registrations.
-        $existingNodeId = $data['node_id'] ?? null;
-
+        // #370 — serialisable transaction prevents race conditions on concurrent re-registrations.
+        // 3 automatic retries on deadlock (MySQL error 1213 / SQLSTATE 40001).
         return DB::transaction(function () use (
-            $data, $observedIp, $existingNodeId,
+            $data, $observedIp,
             $plainToken, $hashedToken, $plainProxyToken, $hashedProxyToken,
             $hmacKey, $pricingAttrs, $publicReachable
         ) {
-            $recovered = false;
-            $node = null;
-
-            if ($existingNodeId) {
-                // lockForUpdate ensures concurrent re-registrations for the same node_id
-                // queue at the DB level rather than racing on the read-then-write sequence.
-                $node = Node::where('id', $existingNodeId)->lockForUpdate()->first();
-
-                if ($node) {
-                    // RT-6-1 (#390): cx_public_key change requires ownership proof.
-                    // A caller supplying a cx_public_key that differs from the stored value
-                    // must also supply current_node_token validated against node_token_hash.
-                    // This prevents unauthenticated key-substitution attacks on re-registration.
-                    $incomingCxKey = $data['cx_public_key'] ?? null;
-                    $storedCxKey = $node->cx_public_key;
-                    if ($incomingCxKey !== null && $incomingCxKey !== $storedCxKey) {
-                        $currentToken = $data['current_node_token'] ?? null;
-                        if (! $currentToken || ! password_verify($currentToken, $node->node_token_hash)) {
-                            throw new \InvalidArgumentException('IICP-E049: cx_public_key update requires valid current_node_token');
-                        }
-                    }
-
-                    $node->update([
-                        'endpoint' => $data['endpoint'],
-                        'transport_endpoint' => $data['transport_endpoint'] ?? $node->transport_endpoint,
-                        'region' => $data['region'],
-                        'node_token_hash' => $hashedToken,
-                        'proxy_token_hash' => $hashedProxyToken,
-                        'node_hmac_key' => $hmacKey,
-                        'max_concurrent' => $data['limits']['max_concurrent'],
-                        'tokens_per_min' => $data['limits']['tokens_per_min'],
-                        'available' => true,
-                        'status' => 'active',
-                        'dormant_since' => null,
-                        'public_listing' => (bool) ($data['listing']['public_listing'] ?? false),
-                        'operator_url' => $data['listing']['operator_url'] ?? null,
-                        'operator_contact' => $data['listing']['operator_contact'] ?? null,
-                        'last_seen' => now(),
-                        'observed_source_ip' => $observedIp,
-                        // #331 Phase A.1 / ADR-041 — re-register can update NAT details (env may have changed)
-                        'transport_method' => $data['transport_method'] ?? $node->transport_method,
-                        'nat_type' => $data['nat_type'] ?? $node->nat_type,
-                        'transport_metadata' => $data['transport_metadata'] ?? $node->transport_metadata,
-                        // #326 — re-register refreshes the public_reachable flag
-                        'public_reachable' => $publicReachable,
-                        // SDK identification (free-form for future languages)
-                        'sdk_language' => $data['sdk_language'] ?? $node->sdk_language,
-                        'sdk_version' => $data['sdk_version'] ?? $node->sdk_version,
-                        // Detected backend server flavor (ollama/lmstudio/vllm/...).
-                        'backend' => $data['backend'] ?? $node->backend,
-                        // ADR-043 §9 — exposure_mode if re-registering with updated qualification
-                        'exposure_mode' => $data['exposure_mode'] ?? $node->exposure_mode,
-                        // IICP-CX S.16 §3.1 — ownership-gated cx_public_key update (RT-6-1 #390)
-                        'cx_public_key' => $incomingCxKey ?? $storedCxKey,
-                    ]);
-                    $recovered = true;
-                }
-            }
-
-            $nodeId = $existingNodeId ?? (string) Str::uuid();
-
-            if (! $node) {
-                // #370 — UniqueConstraintViolationException can occur if two concurrent
-                // requests race on a node_id that was not found by lockForUpdate() (e.g.
-                // a fresh UUID collision, which is astronomically rare, or a narrow window
-                // where the SELECT ran before the INSERT committed). Treat as re-registration.
-                try {
-                    $node = Node::create([
-                        'id' => $nodeId,
-                        'endpoint' => $data['endpoint'],
-                        'transport_endpoint' => $data['transport_endpoint'] ?? null,
-                        'region' => $data['region'],
-                        'node_token_hash' => $hashedToken,
-                        'proxy_token_hash' => $hashedProxyToken,
-                        'node_hmac_key' => $hmacKey,
-                        'max_concurrent' => $data['limits']['max_concurrent'],
-                        'tokens_per_min' => $data['limits']['tokens_per_min'],
-                        'available' => true,
-                        'relay_capable' => (bool) ($data['relay_capable'] ?? false),
-                        // #331 Phase A.1 / ADR-041 — NAT-traversal observability (all nullable)
-                        'transport_method' => $data['transport_method'] ?? null,
-                        'nat_type' => $data['nat_type'] ?? null,
-                        'transport_metadata' => $data['transport_metadata'] ?? null,
-                        // #326 — fresh registration sets the flag per probe outcome
-                        'public_reachable' => $publicReachable,
-                        // SDK identification (free-form for future languages)
-                        'sdk_language' => $data['sdk_language'] ?? null,
-                        'sdk_version' => $data['sdk_version'] ?? null,
-                        // Detected backend server flavor (ollama/lmstudio/vllm/...).
-                        'backend' => $data['backend'] ?? null,
-                        // ADR-043 §9 — 8-category network exposure classification
-                        'exposure_mode' => $data['exposure_mode'] ?? null,
-                        // IICP-CX S.16 §3.1 — X25519 public key advertisement (#360)
-                        'cx_public_key' => $data['cx_public_key'] ?? null,
-                        'status' => 'active',
-                        'dormant_since' => null,
-                        'identity_key' => hash('sha256', $nodeId),
-                        'lifetime_jobs' => 0,
-                        // CIP-D1: Provider opt-in policy block (spec S.12 §2.1) — all default false
-                        'allow_remote_inference' => (bool) ($data['policy']['allow_remote_inference'] ?? false),
-                        'allow_tool_execution' => (bool) ($data['policy']['allow_tool_execution'] ?? false),
-                        'allow_file_access' => (bool) ($data['policy']['allow_file_access'] ?? false),
-                        'pricing_credits_per_1000' => isset($data['policy']['pricing_credits_per_1000'])
-                            ? (float) $data['policy']['pricing_credits_per_1000']
-                            : null,
-                        // ADR-019 declarative pricing
-                        'credit_cost_multiplier' => $pricingAttrs['credit_cost_multiplier'],
-                        'pricing_model' => $pricingAttrs['pricing_model'],
-                        'declaration_signature' => $pricingAttrs['declaration_signature'],
-                        'attested' => $pricingAttrs['attested'],
-                        'pricing_effective_from' => $pricingAttrs['effective_from'],
-                        'pricing_effective_until' => $pricingAttrs['effective_until'],
-                        // ADR-017: Operator opt-in public listing
-                        'public_listing' => (bool) ($data['listing']['public_listing'] ?? false),
-                        'operator_url' => $data['listing']['operator_url'] ?? null,
-                        'operator_contact' => $data['listing']['operator_contact'] ?? null,
-                        'last_seen' => now(),
-                        'observed_source_ip' => $observedIp,
-                    ]);
-                } catch (UniqueConstraintViolationException) {
-                    // Race: another request created this node_id between our SELECT and INSERT.
-                    // Treat as re-registration — reload with a lock and update tokens.
-                    $node = Node::where('id', $nodeId)->lockForUpdate()->firstOrFail();
-                    $node->update([
-                        'node_token_hash' => $hashedToken,
-                        'proxy_token_hash' => $hashedProxyToken,
-                        'node_hmac_key' => $hmacKey,
-                        'available' => true,
-                        'status' => 'active',
-                        'last_seen' => now(),
-                        'observed_source_ip' => $observedIp,
-                        'public_reachable' => $publicReachable,
-                    ]);
-                    $recovered = true;
-                }
-            }
-
-            // On recovery the provider declares new capabilities — replace existing.
-            // On fresh registration the node has no prior capabilities.
-            if ($recovered) {
-                $node->capabilities()->delete();
-                $node->availabilityWindows()->delete();
-            }
-
-            foreach ($data['capabilities'] as $cap) {
-                $node->capabilities()->create([
-                    'intent' => $cap['intent'],
-                    'models' => $cap['models'],
-                    'max_tokens' => $cap['max_tokens'],
-                    'quantization' => $cap['quantization'] ?? null,
-                    'inference_engine' => $cap['inference_engine'] ?? null,
-                    // #408/ADR-046 — input modalities; default text-only when the
-                    // SDK doesn't declare it (back-compatible with pre-0.7.33 nodes).
-                    'input_modalities' => $cap['input_modalities'] ?? ['text'],
-                ]);
-            }
-
-            if (! empty($data['availability'])) {
-                foreach ($data['availability'] as $window) {
-                    $node->availabilityWindows()->create([
-                        'start_time' => $window['start'],
-                        'end_time' => $window['end'],
-                        'share' => $window['share'] ?? 1.0,
-                    ]);
-                }
-            }
-
-            // ADR-045 Phase A (#407) — bind a verified operator identity when a valid
-            // ed25519 delegation is presented. Lenient: a valid delegation → verified
-            // binding (did_key tier, self-asserted); an invalid/absent one leaves the
-            // node unverified (no false binding is possible without the operator's
-            // signature, so this fails safe without aborting the registration).
-            if (! empty($data['operator_delegation'])) {
-                $del = $data['operator_delegation'];
-                [$ok] = $this->delegationVerifier->verify(
-                    $del,
-                    (string) $node->id,
-                    [$del['operator_pub'] ?? ''], // self-asserted; did:web trust-set layers on later (OPEN-2)
-                );
-                $node->update($ok ? [
-                    'operator_pubkey' => $del['operator_pub'],
-                    'operator_verified' => true,
-                    'operator_trust_tier' => 'did_key',
-                ] : ['operator_verified' => false]);
-            }
+            [$node, $recovered] = $this->persistNode(
+                $data, $observedIp, $hashedToken, $hashedProxyToken, $hmacKey, $pricingAttrs, $publicReachable
+            );
+            $this->bindCapabilitiesAndAvailability($node, $data, $recovered);
+            $this->bindOperatorIdentity($node, $data);
 
             return [
                 'node_id' => $node->id,
@@ -285,10 +95,259 @@ class NodeRegistry
                 'recovered' => $recovered,
                 'lifetime_jobs' => $node->lifetime_jobs ?? 0,
             ];
-
-            // 3 automatic retries on deadlock (MySQL error 1213 / SQLSTATE 40001).
-            // The transaction closure above is the full DB section of register().
         }, 3);
+    }
+
+    /**
+     * Persist a node record — re-registration (node_id supplied) or fresh insert.
+     * Returns [Node, bool $recovered]. Runs inside the caller's DB transaction.
+     */
+    private function persistNode(
+        array $data,
+        string $observedIp,
+        string $hashedToken,
+        string $hashedProxyToken,
+        string $hmacKey,
+        array $pricingAttrs,
+        bool $publicReachable
+    ): array {
+        $existingNodeId = $data['node_id'] ?? null;
+        $recovered = false;
+        $node = null;
+
+        if ($existingNodeId) {
+            $node = Node::where('id', $existingNodeId)->lockForUpdate()->first();
+            if ($node) {
+                $this->applyReRegistrationUpdate($node, $data, $observedIp, $hashedToken, $hashedProxyToken, $hmacKey, $publicReachable);
+                $recovered = true;
+            }
+        }
+
+        $nodeId = $existingNodeId ?? (string) Str::uuid();
+
+        if (! $node) {
+            $this->assertSourceIpCapacity($observedIp);
+            // #370 — race guard: a concurrent request may have inserted between our SELECT and INSERT.
+            try {
+                $node = $this->createFreshNode($nodeId, $data, $observedIp, $hashedToken, $hashedProxyToken, $hmacKey, $pricingAttrs, $publicReachable);
+            } catch (UniqueConstraintViolationException) {
+                $node = Node::where('id', $nodeId)->lockForUpdate()->firstOrFail();
+                $node->update([
+                    'node_token_hash' => $hashedToken,
+                    'proxy_token_hash' => $hashedProxyToken,
+                    'node_hmac_key' => $hmacKey,
+                    'available' => true,
+                    'status' => 'active',
+                    'last_seen' => now(),
+                    'observed_source_ip' => $observedIp,
+                    'public_reachable' => $publicReachable,
+                ]);
+                $recovered = true;
+            }
+        }
+
+        return [$node, $recovered];
+    }
+
+    /** RT-6-1 (#390) + #418-A — update an existing node on re-registration. */
+    private function applyReRegistrationUpdate(
+        Node $node,
+        array $data,
+        string $observedIp,
+        string $hashedToken,
+        string $hashedProxyToken,
+        string $hmacKey,
+        bool $publicReachable
+    ): void {
+        $incomingCxKey = $data['cx_public_key'] ?? null;
+        $storedCxKey = $node->cx_public_key;
+        if ($incomingCxKey !== null && $incomingCxKey !== $storedCxKey) {
+            $currentToken = $data['current_node_token'] ?? null;
+            if (! $currentToken || ! password_verify($currentToken, $node->node_token_hash)) {
+                throw new \InvalidArgumentException('IICP-E049: cx_public_key update requires valid current_node_token');
+            }
+        }
+
+        // IICP-E050 (F2/#529, approach E) — a re-registration that CHANGES the
+        // primary `endpoint` (the discover/health URL consumers route to) must
+        // prove control of the node_id: either a valid current_node_token
+        // (ownership) OR the previously-stored endpoint is verifiably gone (a
+        // rotating tunnel/CGNAT node's old URL is already dead — the legitimate-
+        // rotation path). Otherwise it's an endpoint-substitution hijack.
+        //
+        // Phase-1 scope: only the primary `endpoint` is gated — it is both the
+        // hijack vector and the natural probe target. A change to a secondary
+        // routing field (`transport_endpoint`/`relay_endpoint`) while `endpoint`
+        // is unchanged is a same-node refinement (the unchanged, still-alive
+        // endpoint + heartbeat token already prove control) and is gated only
+        // by E′ (token, adoption-gated Phase 4), not by an old-endpoint probe.
+        $endpointChanged = ($data['endpoint'] ?? null) !== $node->endpoint;
+        if ($endpointChanged) {
+            $currentToken = $data['current_node_token'] ?? null;
+            $hasOwnership = $currentToken && password_verify($currentToken, $node->node_token_hash);
+            if (! $hasOwnership && $node->endpoint && $this->isEndpointAlive($node->endpoint)) {
+                throw new \InvalidArgumentException(
+                    'IICP-E050: endpoint change requires current_node_token or the previous endpoint to be unreachable'
+                );
+            }
+        }
+
+        $node->update([
+            'endpoint' => $data['endpoint'],
+            // #418-A: declaration-authoritative; null clears a stale iicp:// value.
+            'transport_endpoint' => $data['transport_endpoint'] ?? null,
+            'region' => $data['region'],
+            'node_token_hash' => $hashedToken,
+            'proxy_token_hash' => $hashedProxyToken,
+            'node_hmac_key' => $hmacKey,
+            'max_concurrent' => $data['limits']['max_concurrent'],
+            'tokens_per_min' => $data['limits']['tokens_per_min'],
+            'available' => true,
+            'status' => 'active',
+            'dormant_since' => null,
+            'public_listing' => (bool) ($data['listing']['public_listing'] ?? false),
+            'operator_url' => $data['listing']['operator_url'] ?? null,
+            'operator_contact' => $data['listing']['operator_contact'] ?? null,
+            'last_seen' => now(),
+            'observed_source_ip' => $observedIp,
+            'transport_method' => $data['transport_method'] ?? $node->transport_method,
+            'nat_type' => $data['nat_type'] ?? $node->nat_type,
+            'transport_metadata' => $data['transport_metadata'] ?? $node->transport_metadata,
+            'public_reachable' => $publicReachable,
+            'sdk_language' => $data['sdk_language'] ?? $node->sdk_language,
+            'sdk_version' => $data['sdk_version'] ?? $node->sdk_version,
+            'auto_update_enabled' => $data['auto_update_enabled'] ?? $node->auto_update_enabled,
+            'auto_update_interval_s' => $data['auto_update_interval_s'] ?? $node->auto_update_interval_s,
+            'sdk_latest_seen' => $data['sdk_latest_seen'] ?? $node->sdk_latest_seen,
+            'sdk_update_last_checked_at' => $data['sdk_update_last_checked_at'] ?? $node->sdk_update_last_checked_at,
+            'sdk_update_error_class' => $data['sdk_update_error_class'] ?? $node->sdk_update_error_class,
+            'backend' => $data['backend'] ?? $node->backend,
+            'exposure_mode' => $data['exposure_mode'] ?? $node->exposure_mode,
+            'cx_public_key' => $incomingCxKey ?? $storedCxKey,
+            // #495 §3.6 — gossip Ed25519 signing key; preserve existing if not re-supplied
+            'gossip_public_key' => $data['public_key'] ?? $node->gossip_public_key,
+        ]);
+    }
+
+    /** Create a new Node record for first-time registration. */
+    private function createFreshNode(
+        string $nodeId,
+        array $data,
+        string $observedIp,
+        string $hashedToken,
+        string $hashedProxyToken,
+        string $hmacKey,
+        array $pricingAttrs,
+        bool $publicReachable
+    ): Node {
+        return Node::create([
+            'id' => $nodeId,
+            'endpoint' => $data['endpoint'],
+            'transport_endpoint' => $data['transport_endpoint'] ?? null,
+            'region' => $data['region'],
+            'node_token_hash' => $hashedToken,
+            'proxy_token_hash' => $hashedProxyToken,
+            'node_hmac_key' => $hmacKey,
+            'max_concurrent' => $data['limits']['max_concurrent'],
+            'tokens_per_min' => $data['limits']['tokens_per_min'],
+            'available' => true,
+            'relay_capable' => (bool) ($data['relay_capable'] ?? false),
+            'transport_method' => $data['transport_method'] ?? null,
+            'nat_type' => $data['nat_type'] ?? null,
+            'transport_metadata' => $data['transport_metadata'] ?? null,
+            'public_reachable' => $publicReachable,
+            'sdk_language' => $data['sdk_language'] ?? null,
+            'sdk_version' => $data['sdk_version'] ?? null,
+            'auto_update_enabled' => $data['auto_update_enabled'] ?? null,
+            'auto_update_interval_s' => $data['auto_update_interval_s'] ?? null,
+            'sdk_latest_seen' => $data['sdk_latest_seen'] ?? null,
+            'sdk_update_last_checked_at' => $data['sdk_update_last_checked_at'] ?? null,
+            'sdk_update_error_class' => $data['sdk_update_error_class'] ?? null,
+            'backend' => $data['backend'] ?? null,
+            'exposure_mode' => $data['exposure_mode'] ?? null,
+            'cx_public_key' => $data['cx_public_key'] ?? null,
+            // #495 §3.6 — gossip Ed25519 signing key registered by adapter
+            'gossip_public_key' => $data['public_key'] ?? null,
+            'status' => 'active',
+            'dormant_since' => null,
+            'identity_key' => hash('sha256', $nodeId),
+            'lifetime_jobs' => 0,
+            'allow_remote_inference' => (bool) ($data['policy']['allow_remote_inference'] ?? false),
+            'allow_tool_execution' => (bool) ($data['policy']['allow_tool_execution'] ?? false),
+            'allow_file_access' => (bool) ($data['policy']['allow_file_access'] ?? false),
+            'pricing_credits_per_1000' => isset($data['policy']['pricing_credits_per_1000'])
+                ? (float) $data['policy']['pricing_credits_per_1000']
+                : null,
+            'credit_cost_multiplier' => $pricingAttrs['credit_cost_multiplier'],
+            'pricing_model' => $pricingAttrs['pricing_model'],
+            'declaration_signature' => $pricingAttrs['declaration_signature'],
+            'attested' => $pricingAttrs['attested'],
+            'pricing_effective_from' => $pricingAttrs['effective_from'],
+            'pricing_effective_until' => $pricingAttrs['effective_until'],
+            'public_listing' => (bool) ($data['listing']['public_listing'] ?? false),
+            'operator_url' => $data['listing']['operator_url'] ?? null,
+            'operator_contact' => $data['listing']['operator_contact'] ?? null,
+            'last_seen' => now(),
+            'observed_source_ip' => $observedIp,
+        ]);
+    }
+
+    /** Replace capabilities + availability on recovery; append on fresh registration. */
+    private function bindCapabilitiesAndAvailability(Node $node, array $data, bool $recovered): void
+    {
+        if ($recovered) {
+            $node->capabilities()->delete();
+            $node->availabilityWindows()->delete();
+        }
+
+        foreach ($data['capabilities'] as $cap) {
+            $node->capabilities()->create([
+                'intent' => $cap['intent'],
+                'models' => $cap['models'],
+                'max_tokens' => $cap['max_tokens'],
+                'quantization' => $cap['quantization'] ?? null,
+                'inference_engine' => $cap['inference_engine'] ?? null,
+                // #408/ADR-046 — default text-only for pre-0.7.33 nodes.
+                'input_modalities' => $cap['input_modalities'] ?? ['text'],
+            ]);
+        }
+
+        if (! empty($data['availability'])) {
+            foreach ($data['availability'] as $window) {
+                $node->availabilityWindows()->create([
+                    'start_time' => $window['start'],
+                    'end_time' => $window['end'],
+                    'share' => $window['share'] ?? 1.0,
+                ]);
+            }
+        }
+    }
+
+    /**
+     * ADR-045 Phase A (#407) — bind a verified operator identity when a valid ed25519
+     * delegation is presented. Lenient: invalid/absent leaves the node unverified.
+     */
+    private function bindOperatorIdentity(Node $node, array $data): void
+    {
+        if (empty($data['operator_delegation'])) {
+            return;
+        }
+
+        $del = $data['operator_delegation'];
+        [$ok] = $this->delegationVerifier->verify(
+            $del,
+            (string) $node->id,
+            [$del['operator_pub'] ?? ''], // self-asserted; did:web trust-set layers on later (OPEN-2)
+        );
+        $node->update($ok ? [
+            'operator_pubkey' => $del['operator_pub'],
+            'operator_verified' => true,
+            'operator_trust_tier' => 'did_key',
+        ] : ['operator_verified' => false]);
+
+        if ($ok) {
+            $this->upsertOperator($del['operator_pub'], $data);
+        }
     }
 
     public function validateToken(string $nodeId, string $plainToken): ?Node
@@ -324,8 +383,12 @@ class NodeRegistry
     /**
      * Resolve and validate an ADR-019 pricing block.
      * If declaration_signature is present, verify HMAC-SHA256 against $hmacKey (IICP-E010).
+     * $advertisedModels allows a compute-anchored ceiling check (#489): a 0.5B model
+     * cannot claim a higher multiplier than its tier ceiling (tier_weight × 3).
+     *
+     * @param  array<string>  $advertisedModels  Model names from capabilities (e.g. ["qwen2.5:0.5b"])
      */
-    public function resolvePricingBlock(array $pricing, string $hmacKey): array
+    public function resolvePricingBlock(array $pricing, string $hmacKey, array $advertisedModels = []): array
     {
         $multiplier = isset($pricing['credit_cost_multiplier'])
             ? (float) $pricing['credit_cost_multiplier']
@@ -347,6 +410,19 @@ class NodeRegistry
             $attested = true;
         }
 
+        // #489 — compute-anchored ceiling: clamp multiplier to tier_weight × 3.
+        // Prevents a 0.5B node from claiming rates that exceed even a 70B node.
+        if (! empty($advertisedModels)) {
+            $tier = self::classifyModelTier($advertisedModels);
+            $ceiling = self::TIER_WEIGHTS[$tier] * 3.0;
+            if ($multiplier > $ceiling) {
+                Log::warning('NodeRegistry: multiplier clamped by tier ceiling', [
+                    'declared' => $multiplier, 'tier' => $tier, 'ceiling' => $ceiling,
+                ]);
+                $multiplier = $ceiling;
+            }
+        }
+
         return [
             'credit_cost_multiplier' => $multiplier,
             'pricing_model' => $model,
@@ -355,6 +431,58 @@ class NodeRegistry
             'effective_from' => isset($pricing['effective_from']) ? $pricing['effective_from'] : null,
             'effective_until' => isset($pricing['effective_until']) ? $pricing['effective_until'] : null,
         ];
+    }
+
+    /**
+     * Compute-anchored tier weights — 1 credit ≈ 1000 tokens at 7B reference cost.
+     * Matches the display values in StatsController (single source of truth here).
+     *
+     * @internal
+     */
+    private const TIER_WEIGHTS = [
+        'sub_1b' => 0.05,
+        '7b' => 1.0,
+        '13b' => 2.0,
+        '30b' => 6.5,
+        '70b' => 32.0,
+        '100b_plus' => 75.0,
+    ];
+
+    /**
+     * Classify a set of model names to the highest applicable compute tier.
+     * Parses patterns like "7b", "7.5B", "0.5b", "llama3.1:8b", "qwen2.5:0.5b".
+     * Returns '7b' (reference tier) when no parameter count is detectable.
+     *
+     * @param  array<string>  $models
+     */
+    public static function classifyModelTier(array $models): string
+    {
+        $maxWeight = 0.0;
+        $bestTier = '7b';
+        foreach ($models as $name) {
+            if (preg_match('/(\d+(?:\.\d+)?)\s*[bB](?:[^a-zA-Z]|$)/', (string) $name, $m)) {
+                $n = (float) $m[1];
+                if ($n < 1) {
+                    $tier = 'sub_1b';
+                } elseif ($n < 10) {
+                    $tier = '7b';
+                } elseif ($n < 20) {
+                    $tier = '13b';
+                } elseif ($n < 50) {
+                    $tier = '30b';
+                } elseif ($n < 85) {
+                    $tier = '70b';
+                } else {
+                    $tier = '100b_plus';
+                }
+                if (self::TIER_WEIGHTS[$tier] > $maxWeight) {
+                    $maxWeight = self::TIER_WEIGHTS[$tier];
+                    $bestTier = $tier;
+                }
+            }
+        }
+
+        return $bestTier;
     }
 
     /**
@@ -401,6 +529,95 @@ class NodeRegistry
     }
 
     /**
+     * #463/#310/#464 — upsert the operator-identity record for a verified operator_pubkey
+     * (== operator_id). display_name is public + mutable (a delegated re-register proves
+     * key-control, so it may change it); contact is never accepted here. On FIRST register,
+     * pin operator_integrity_hash + the directory-observed first_seen_ms (authoritative for
+     * founder ordinals — never the backdatable created_at). A later register presenting a
+     * different integrity hash means an edited created_at/operator_id → logged, pin kept
+     * (fail-safe; never abort the node's registration over an identity edge case).
+     */
+    private function upsertOperator(string $operatorPub, array $data): void
+    {
+        $displayName = $data['operator_display_name'] ?? null;
+        $normalizedDisplayName = $this->normalizeOperatorDisplayName($displayName);
+        $existing = Operator::where('operator_pubkey', $operatorPub)->first();
+
+        if ($normalizedDisplayName !== null) {
+            $collision = Operator::query()
+                ->whereNot('operator_pubkey', $operatorPub)
+                ->whereNotNull('display_name')
+                ->get(['operator_pubkey', 'display_name'])
+                ->first(fn (Operator $op) => $this->normalizeOperatorDisplayName($op->display_name) === $normalizedDisplayName);
+
+            if ($collision !== null) {
+                throw ValidationException::withMessages([
+                    'operator_display_name' => 'operator_display_name is already claimed by another verified operator (IICP-E051)',
+                ]);
+            }
+        }
+
+        if ($existing === null) {
+            Operator::create([
+                'operator_pubkey' => $operatorPub,
+                'display_name' => $displayName,
+                'attested_created_at' => $data['operator_created_at'] ?? null,
+                'operator_integrity_hash' => $data['operator_integrity_hash'] ?? null,
+                'first_seen_ms' => (int) (microtime(true) * 1000),
+            ]);
+
+            return;
+        }
+
+        $presented = $data['operator_integrity_hash'] ?? null;
+        if ($presented !== null && $existing->operator_integrity_hash !== null
+            && $presented !== $existing->operator_integrity_hash) {
+            Log::warning('iicp.operator.integrity_mismatch', [
+                'operator_pubkey' => substr($operatorPub, 0, 12).'…',
+            ]);
+        }
+        if ($displayName !== null) {
+            $existing->update(['display_name' => $displayName]);
+        }
+    }
+
+    /**
+     * G2 (#525) — cap fresh active registrations per observed source IP.
+     *
+     * This is intentionally a soft, configurable directory-side gate: it does not
+     * affect re-registration of an existing node_id, and operators who need dense
+     * lab clusters can raise or disable it with IICP_REGISTER_MAX_ACTIVE_NODES_PER_IP=0.
+     */
+    private function assertSourceIpCapacity(string $observedIp): void
+    {
+        $limit = (int) env('IICP_REGISTER_MAX_ACTIVE_NODES_PER_IP', self::DEFAULT_MAX_ACTIVE_NODES_PER_SOURCE_IP);
+        if ($limit <= 0 || $observedIp === '0.0.0.0') {
+            return;
+        }
+
+        $activeForIp = Node::query()
+            ->where('observed_source_ip', $observedIp)
+            ->where('status', 'active')
+            ->count();
+
+        if ($activeForIp >= $limit) {
+            throw ValidationException::withMessages([
+                'registration_ip' => 'Too many active nodes registered from this source IP (IICP-E052)',
+            ]);
+        }
+    }
+
+    private function normalizeOperatorDisplayName(?string $displayName): ?string
+    {
+        if ($displayName === null) {
+            return null;
+        }
+        $normalized = strtolower(trim(preg_replace('/\s+/', ' ', $displayName) ?? $displayName));
+
+        return $normalized === '' ? null : $normalized;
+    }
+
+    /**
      * #326 / #346 — set the public_reachable flag at registration time.
      *
      *  - Declared-reachable: operator's nat_type + transport_method block →
@@ -435,15 +652,150 @@ class NodeRegistry
         return true;
     }
 
+    /**
+     * IICP-E050 (F2): is the node's PREVIOUS endpoint still reachable?
+     *
+     * Returns true only if a `GET {endpoint}/iicp/health` succeeds. A failure
+     * (connection refused, timeout, non-2xx) means the old endpoint is gone —
+     * the legitimate-rotation signal that lets a token-less re-registration
+     * move the endpoint. When liveness checks are explicitly skipped (the dev/
+     * test skip flag), we treat the old endpoint as GONE (return false) so the
+     * E050 guard does not gate token-less rotation in environments that have
+     * deliberately opted out of liveness probing; production never sets the
+     * flag, so the real probe always runs there.
+     */
+    public function isEndpointAlive(string $endpoint): bool
+    {
+        if (env('IICP_SKIP_LIVENESS_CHECK', false)) {
+            return false;
+        }
+
+        // IICP-E035 SSRF guard (#535): resolve + validate before dialing. An unsafe
+        // or unresolvable target is treated as GONE (not "alive") — and never dialed.
+        $target = $this->safeProbeTarget($endpoint);
+        if ($target === null) {
+            return false;
+        }
+
+        try {
+            $response = Http::timeout(self::LIVENESS_TIMEOUT_S)
+                ->withoutVerifying()
+                ->withOptions($target[1])
+                ->get($endpoint.'/iicp/health');
+
+            return $response->successful();
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * IICP-E035 SSRF guard (#535): resolve the endpoint host and reject if ANY resolved
+     * IP is internal / reserved / link-local (cloud-metadata) / CGNAT. RoutableEndpoint
+     * blocks dangerous *literal* hosts at registration but never resolves DNS names, so a
+     * name that resolves to an internal IP — or DNS-rebinds between validation and probe
+     * — would otherwise reach the liveness probe. We resolve + validate here, immediately
+     * before the dial, and pin curl's resolution to the validated IP so a rebind cannot
+     * redirect the connection.
+     *
+     * @return array{0:string,1:array<string,mixed>}|null [pinnedIp, http-options] or null if unsafe/unresolvable
+     */
+    private function safeProbeTarget(string $endpoint): ?array
+    {
+        // Consistent with RoutableEndpoint::validate — the SSRF resolve/validate/pin is
+        // a production concern; local/testing use Http::fake or fixed non-resolving hosts.
+        if (config('app.env') === 'local' || config('app.env') === 'testing') {
+            return ['', []];
+        }
+
+        $bare = $this->probeHost($endpoint);
+        if ($bare === null) {
+            return null;
+        }
+
+        $ips = $this->probeIps($bare);
+        if ($ips === [] || $this->hasBlockedProbeIp($ips)) {
+            return null;
+        }
+
+        $scheme = parse_url($endpoint, PHP_URL_SCHEME) ?: 'https';
+        $port = parse_url($endpoint, PHP_URL_PORT) ?: ($scheme === 'https' ? 443 : 80);
+        $pin = $ips[0];
+
+        return [$pin, ['curl' => [CURLOPT_RESOLVE => ["{$bare}:{$port}:{$pin}"]]]];
+    }
+
+    private function probeHost(string $endpoint): ?string
+    {
+        $host = parse_url($endpoint, PHP_URL_HOST);
+        if (! is_string($host) || $host === '') {
+            return null;
+        }
+
+        return trim($host, '[]'); // strip IPv6 literal brackets
+    }
+
+    private function probeIps(string $bare): array
+    {
+        if (filter_var($bare, FILTER_VALIDATE_IP)) {
+            return [$bare];
+        }
+
+        $ips = $this->ipv4Records($bare);
+        $aaaa = @dns_get_record($bare, DNS_AAAA);
+        if (is_array($aaaa)) {
+            $ips = array_merge($ips, $this->ipv6Records($aaaa));
+        }
+
+        return $ips;
+    }
+
+    private function ipv4Records(string $host): array
+    {
+        $records = @gethostbynamel($host);
+
+        return is_array($records) ? $records : [];
+    }
+
+    private function ipv6Records(array $records): array
+    {
+        return array_values(array_filter(array_map(
+            fn (array $rec) => empty($rec['ipv6']) ? null : $rec['ipv6'],
+            $records
+        )));
+    }
+
+    private function hasBlockedProbeIp(array $ips): bool
+    {
+        foreach ($ips as $ip) {
+            if (RoutableEndpoint::ipIsBlocked($ip)) {
+                return true; // ANY internal address → reject the whole host
+            }
+        }
+
+        return false;
+    }
+
     private function assertLive(string $endpoint): void
     {
         if (env('IICP_SKIP_LIVENESS_CHECK', false)) {
             return;
         }
 
+        // IICP-E035 SSRF guard (#535): a DNS endpoint that resolves to an internal
+        // address (or is unresolvable) must not be probed or registered.
+        $target = $this->safeProbeTarget($endpoint);
+        if ($target === null) {
+            throw ValidationException::withMessages([
+                'endpoint' => 'IICP-E035: endpoint host resolves to a non-routable / internal '
+                    .'address, or is unresolvable.',
+            ]);
+        }
+
         try {
             $response = Http::timeout(self::LIVENESS_TIMEOUT_S)
                 ->withoutVerifying()
+                ->withOptions($target[1])
                 ->get($endpoint.'/iicp/health');
 
             if ($response->failed()) {

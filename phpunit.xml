@@ -18,7 +18,12 @@
         </include>
     </source>
     <php>
+        <!-- #509: 745-test suite exhausts the 128M CLI default near the end of the
+             alphabetical order (S-named tests), killing the process AFTER the JSON
+             summary prints - silent coverage loss. scripts/phpunit_strict.sh guards. -->
+        <ini name="memory_limit" value="768M"/>
         <env name="APP_ENV" value="testing"/>
+        <env name="APP_KEY" value="base64:+Ks8E2HpJxEHq4rM2oNxGTVmAqFZXbmGiJvHaJXwXn4="/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>

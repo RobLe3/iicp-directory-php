@@ -25,6 +25,12 @@ class NodeLifecycleCommand extends Command
     // #325 Layer 3 — re-verify cadence + probe budget
     private const REACHABILITY_PROBE_TIMEOUT_S = 3;
 
+    // #493 — ADR-047 Part A: a node that has answered the HMAC liveness challenge
+    // within this window is cryptographically confirmed live. Skip the TCP probe so
+    // the directory's egress limitations don't incorrectly demote publicly-reachable
+    // nodes (e.g. nodes behind a firewall the directory host can't reach outbound).
+    private const LIVENESS_VERIFIED_WINDOW_S = 300;
+
     public function handle(NodeEventLogger $eventLogger): int
     {
         $archived = $this->archiveDormant();
@@ -38,7 +44,7 @@ class NodeLifecycleCommand extends Command
             $this->info("Purged {$purged} archived node(s) (>365 days offline).");
         }
         if ($demoted > 0) {
-            $this->info("Demoted {$demoted} node(s) to public_reachable=false after failed re-probe.");
+            $this->info("Flagged {$demoted} node endpoint(s) dead after failed re-probe.");
         }
 
         return Command::SUCCESS;
@@ -47,11 +53,12 @@ class NodeLifecycleCommand extends Command
     /**
      * #325 Layer 3 — periodic re-verification of public reachability.
      *
-     * For each active node that's currently marked public_reachable=true:
-     *  - Skip NATted nodes (transport_method set + non-'direct'): the directory
-     *    cannot dial back through NAT; Phase 6+ work will add transport-aware
-     *    dial-back via the declared traversal method. Until then, NATted nodes
-     *    trust the operator's claim.
+     * For each fresh active node with a routable listed endpoint:
+     *  - Direct nodes are probed when public_reachable=true.
+     *  - Public HTTPS tunnel/relay endpoints are also probed even when
+     *    public_reachable=false, because HMAC liveness only proves the process is
+     *    alive — it does not prove the advertised endpoint is usable.
+     *  - Other NATted nodes are skipped until transport-aware probes exist.
      *  - For NOT-NATted nodes: HEAD /iicp/health with a 3s timeout. On failure
      *    (connect refused, timeout, non-2xx) confirmed by a second probe, demote
      *    public_reachable=false. The node stays in the DB but is filtered out of
@@ -80,18 +87,81 @@ class NodeLifecycleCommand extends Command
         $candidates = Node::query()
             ->where('available', true)
             ->where('status', 'active')
-            ->where('public_reachable', true)
             ->where('last_seen', '>=', Carbon::now()->subSeconds(120))
-            ->get(['id', 'endpoint', 'transport_method']);
+            ->where(function ($q) {
+                $q->where('public_reachable', true)
+                    ->orWhere(function ($tunnel) {
+                        $tunnel->where('endpoint', 'like', 'https://%')
+                            ->whereIn('transport_method', ['external_tunnel', 'turn_relay']);
+                    })
+                    ->orWhereNotNull('endpoint_verified_dead_at');
+            })
+            ->get(['id', 'endpoint', 'transport_method', 'public_reachable', 'liveness_verified_at', 'endpoint_verified_dead_at']);
+
+        $livenessWindow = Carbon::now()->subSeconds(self::LIVENESS_VERIFIED_WINDOW_S);
 
         $demoted = 0;
         foreach ($candidates as $node) {
-            // Skip NATted — directory can't dial back through NAT
-            if (! empty($node->transport_method) && $node->transport_method !== 'direct') {
+            if (! $this->shouldProbeEndpoint($node)) {
+                continue;
+            }
+            // A production origin without IPv6 egress cannot prove an IPv6-literal
+            // direct endpoint dead.  If the node is cryptographically live, clear a
+            // stale dead flag and keep the route as self-attested/unverified instead
+            // of hiding a working operator node from discover.
+            if ($this->isIpv6LiteralEndpoint((string) $node->endpoint)
+                && ! config('app.iicp_probe_ipv6_egress')
+            ) {
+                if ($node->endpoint_verified_dead_at !== null
+                    && $node->liveness_verified_at !== null
+                    && $node->liveness_verified_at >= $livenessWindow
+                ) {
+                    Node::where('id', $node->id)->update([
+                        'endpoint_verified_dead_at' => null,
+                    ]);
+                    $eventLogger->log('REACHABILITY_RESTORE', (string) $node->id, [
+                        'from' => (bool) $node->public_reachable,
+                        'to' => (bool) $node->public_reachable,
+                        'reason' => 'liveness_verified_ipv6_probe_unavailable',
+                        'endpoint' => (string) $node->endpoint,
+                        'transport_method' => $node->transport_method ?: 'direct',
+                        'probe_source' => 'node_lifecycle',
+                        'endpoint_verified_dead_at_cleared' => true,
+                        'directory_ipv6_egress' => false,
+                    ]);
+                }
+
+                continue;
+            }
+            // #493 — ADR-047 Part A: skip TCP probe if the node answered the HMAC
+            // liveness challenge recently. Cryptographic proof of liveness is stronger
+            // than TCP dial-back and works when the directory's egress can't reach the node.
+            // #536 exception: public HTTPS tunnel/relay URLs must still be endpoint-
+            // probed; HMAC liveness can succeed while a Quick Tunnel URL is dead.
+            if (! $this->isPublicHttpsTunnelEndpoint($node)
+                && $node->liveness_verified_at !== null
+                && $node->liveness_verified_at >= $livenessWindow
+            ) {
                 continue;
             }
             [$ok, $reason] = $this->probeReachable((string) $node->endpoint);
             if ($ok) {
+                if ($node->endpoint_verified_dead_at !== null) {
+                    Node::where('id', $node->id)->update([
+                        'public_reachable' => true,
+                        'endpoint_verified_dead_at' => null,
+                    ]);
+                    $eventLogger->log('REACHABILITY_RESTORE', (string) $node->id, [
+                        'from' => false,
+                        'to' => true,
+                        'reason' => 'probe_success',
+                        'endpoint' => (string) $node->endpoint,
+                        'transport_method' => $node->transport_method ?: 'direct',
+                        'probe_source' => 'node_lifecycle',
+                        'endpoint_verified_dead_at_cleared' => true,
+                    ]);
+                }
+
                 continue;
             }
             // Confirm-probe — only demote on two consecutive failures (parity with
@@ -101,7 +171,10 @@ class NodeLifecycleCommand extends Command
                 continue;
             }
 
-            Node::where('id', $node->id)->update(['public_reachable' => false]);
+            Node::where('id', $node->id)->update([
+                'public_reachable' => false,
+                'endpoint_verified_dead_at' => Carbon::now(),
+            ]);
             $eventLogger->log('REACHABILITY_DEMOTE', (string) $node->id, [
                 'from' => true,
                 'to' => false,
@@ -109,6 +182,7 @@ class NodeLifecycleCommand extends Command
                 'endpoint' => (string) $node->endpoint,
                 'transport_method' => $node->transport_method ?: 'direct',
                 'probe_source' => 'node_lifecycle',
+                'endpoint_verified_dead_at_set' => true,
             ]);
             $demoted++;
         }
@@ -131,6 +205,59 @@ class NodeLifecycleCommand extends Command
         } catch (ConnectionException) {
             return [false, 'probe_connect_failed'];
         }
+    }
+
+    private function shouldProbeEndpoint(Node $node): bool
+    {
+        if (! $this->isSafeProbeTarget((string) $node->endpoint)) {
+            return false;
+        }
+
+        if ($node->endpoint_verified_dead_at !== null) {
+            return true;
+        }
+
+        if ($this->isPublicHttpsTunnelEndpoint($node)) {
+            return true;
+        }
+
+        // Skip NATted — directory can't dial back through NAT unless it is a
+        // public HTTPS tunnel/relay URL covered above.
+        return empty($node->transport_method) || $node->transport_method === 'direct';
+    }
+
+    private function isPublicHttpsTunnelEndpoint(Node $node): bool
+    {
+        return str_starts_with((string) $node->endpoint, 'https://')
+            && in_array($node->transport_method, ['external_tunnel', 'turn_relay'], true);
+    }
+
+    private function isIpv6LiteralEndpoint(string $endpoint): bool
+    {
+        $host = parse_url($endpoint, PHP_URL_HOST) ?? '';
+
+        return str_contains($host, ':') || str_starts_with($host, '[');
+    }
+
+    private function isSafeProbeTarget(string $endpoint): bool
+    {
+        $host = parse_url($endpoint, PHP_URL_HOST) ?? '';
+        if ($host === '' || $host === 'localhost') {
+            return false;
+        }
+
+        $host = ltrim(rtrim($host, ']'), '[');
+        if ($host === '::1') {
+            return false;
+        }
+
+        foreach (['10.', '172.16.', '172.17.', '172.18.', '172.19.', '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.', '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.', '192.168.', '127.', '169.254.'] as $prefix) {
+            if (str_starts_with($host, $prefix)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function archiveDormant(): int

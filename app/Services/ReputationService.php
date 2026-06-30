@@ -34,6 +34,15 @@ class ReputationService
     // EMA decay for latency smoothing only
     private const EMA_ALPHA = 0.1;
 
+    // RT-01b (#525, G1a) — counters are advisory (spec §11.2): bound the
+    // per-heartbeat contribution to completed_tasks_count / lifetime_jobs to a
+    // realistic single-node throughput ceiling (10 tasks/s × ~30 s cadence) so
+    // a node cannot inflate the displayed tally toward the 1000/heartbeat
+    // validation ceiling (~120k/h). Clamped here (not at validation) so a
+    // legitimate bursty heartbeat is never rejected, and the score path is
+    // unaffected (it has its own hourly cap, RT-01).
+    public const MAX_COUNTED_SUCCESS_PER_HEARTBEAT = 300;
+
     // Normative delta constants — spec §11.2 (iicp-semantics.md)
     private const DELTA_SUCCESS = 0.01;
 
@@ -63,9 +72,11 @@ class ReputationService
             ['score' => 0.5, 'tasks_total' => 0, 'tasks_failed' => 0, 'completed_tasks_count' => 0, 'avg_latency_ms' => 0.0],
         );
 
-        $newTotal = $rep->tasks_total + $tasksSuccess + $tasksFailed;
+        // RT-01b: clamp the advisory-counter contribution (not the score path).
+        $countedSuccess = min($tasksSuccess, self::MAX_COUNTED_SUCCESS_PER_HEARTBEAT);
+        $newTotal = $rep->tasks_total + $countedSuccess + $tasksFailed;
         $newFailed = $rep->tasks_failed + $tasksFailed;
-        $newCompleted = $rep->completed_tasks_count + $tasksSuccess;
+        $newCompleted = $rep->completed_tasks_count + $countedSuccess;
 
         $newLatency = $rep->avg_latency_ms === 0.0
             ? $avgLatencyMs

@@ -47,6 +47,31 @@ class SeedDidResolverTest extends TestCase
         $this->assertSame($rawPub, $key);
     }
 
+    public function test_cached_value_is_text_safe_not_raw_binary(): void
+    {
+        // Regression: the raw 32-byte key cached directly triggers SQLSTATE 1366
+        // ("Incorrect string value") on the database cache store's utf8 column, crash-
+        // looping the replica. The cached form must be text-safe (hex); publicKey() still
+        // returns the raw 32 bytes.
+        $kp = sodium_crypto_sign_keypair();
+        $rawPub = sodium_crypto_sign_publickey($kp);
+        $b64 = rtrim(strtr(base64_encode($rawPub), '+/', '-_'), '=');
+        Http::fake([
+            'https://iicp.network/.well-known/did.json' => Http::response($this->makeDidDoc($b64), 200),
+        ]);
+
+        $resolver = new SeedDidResolver;
+        $returned = $resolver->publicKey('https://iicp.network');
+
+        $this->assertSame($rawPub, $returned, 'public contract returns raw 32 bytes');
+
+        $cached = Cache::get(SeedDidResolver::CACHE_KEY_PREFIX.md5('https://iicp.network'));
+        $this->assertIsString($cached);
+        $this->assertSame(64, strlen($cached));
+        $this->assertTrue(ctype_xdigit($cached), 'cached value must be hex (utf8-safe), not raw binary');
+        $this->assertSame($rawPub, hex2bin($cached));
+    }
+
     public function test_returns_null_on_fetch_failure(): void
     {
         Http::fake(['https://iicp.network/.well-known/did.json' => Http::response('', 404)]);

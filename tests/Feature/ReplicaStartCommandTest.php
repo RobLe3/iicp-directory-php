@@ -95,18 +95,18 @@ class ReplicaStartCommandTest extends TestCase
     {
         Storage::fake();
         Http::fake([
-            'https://iicp.network/v1/replicas/register' => Http::response([
+            'https://iicp.network/api/v1/replicas/register' => Http::response([
                 'replica_id' => 'rep-'.str_repeat('a', 32),
                 'replica_token' => 'jwt.test.token',
                 'since_seq' => 42,
                 'genesis_hash' => 'abc123def456'.str_repeat('0', 52),
             ], 200),
-            'https://iicp.network/v1/snapshot' => Http::response([
+            'https://iicp.network/api/v1/snapshot' => Http::response([
                 'schema_version' => 'v0.3.0', 'snapshot_seq' => 42, 'snapshot_ts_ms' => 1700000000,
                 'genesis_hash' => 'abc123def456'.str_repeat('0', 52),
                 'nodes' => [], 'capabilities' => [],
             ], 200),
-            'https://iicp.network/v1/events*' => Http::response([
+            'https://iicp.network/api/v1/events*' => Http::response([
                 'events' => [
                     ['seq' => 43, 'event_type' => 'REGISTER', 'ts_ms' => 1700000000, 'signer_did' => 'did:web:iicp.network', 'event_id' => 'e1'],
                     ['seq' => 44, 'event_type' => 'CREDIT_AWARD', 'ts_ms' => 1700000001, 'signer_did' => 'did:web:iicp.network', 'event_id' => 'e2'],
@@ -135,7 +135,7 @@ class ReplicaStartCommandTest extends TestCase
     {
         Storage::fake();
         Http::fake([
-            'https://iicp.network/v1/replicas/register' => Http::response([
+            'https://iicp.network/api/v1/replicas/register' => Http::response([
                 'error' => ['code' => 'IICP-E040', 'message' => 'invalid_did_document'],
             ], 400),
         ]);
@@ -165,7 +165,7 @@ class ReplicaStartCommandTest extends TestCase
         ]));
 
         Http::fake([
-            'https://iicp.network/v1/events*' => Http::response([
+            'https://iicp.network/api/v1/events*' => Http::response([
                 'events' => [],
                 'genesis_hash' => 'gh-saved',
             ], 200),
@@ -181,11 +181,43 @@ class ReplicaStartCommandTest extends TestCase
 
         $this->assertSame(0, $exit);
         Http::assertNotSent(function ($request) {
-            return str_contains($request->url(), '/v1/replicas/register');
+            return str_contains($request->url(), '/api/v1/replicas/register');
         });
         // Verify event poll used since_seq=105 from saved state
         Http::assertSent(function ($request) {
             return str_contains($request->url(), 'since_seq=105');
+        });
+    }
+
+    public function test_no_register_tails_events_without_handshake_or_token(): void
+    {
+        // FED-READY-1 read-only tail (matches the Rust replica): --no-register skips the
+        // join handshake + snapshot and polls the public event log token-less from seq 0.
+        Storage::delete('replica-state-noreg.json');
+
+        Http::fake([
+            'https://seed.test/api/v1/events*' => Http::response([
+                'events' => [],
+                'genesis_hash' => 'gh-noreg',
+            ], 200),
+        ]);
+
+        $exit = $this->artisan('iicp:replica-start', [
+            '--seed-url' => 'https://seed.test',
+            '--no-register' => true,
+            '--state-file' => 'replica-state-noreg.json',
+            '--once' => true,
+        ])->run();
+
+        $this->assertSame(0, $exit);
+        // No join handshake and no snapshot fetch in read-only mode.
+        Http::assertNotSent(fn ($r) => str_contains($r->url(), '/api/v1/replicas/register'));
+        Http::assertNotSent(fn ($r) => str_contains($r->url(), '/api/v1/snapshot'));
+        // Polls the public event log from seq 0 with NO bearer token.
+        Http::assertSent(function ($r) {
+            return str_contains($r->url(), '/api/v1/events')
+                && str_contains($r->url(), 'since_seq=0')
+                && ! $r->hasHeader('Authorization');
         });
     }
 }

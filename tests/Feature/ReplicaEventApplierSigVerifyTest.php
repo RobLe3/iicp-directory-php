@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Services\NodeEventLogger;
 use App\Services\ReplicaEventApplier;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -41,11 +42,13 @@ class ReplicaEventApplierSigVerifyTest extends TestCase
             'node_id' => '550e8400-e29b-41d4-a716-446655440001',
             'ts_ms' => 1700000000000,
             'payload' => ['endpoint' => 'https://n.test', 'region' => 'eu'],
+            // #458: genesis-case chain link (no continuity arg passed → only sig is checked).
+            'prev_hash' => NodeEventLogger::GENESIS_ROOT,
         ], $overrides);
 
         $payloadHash = hash('sha256', $this->canonicalJson($ev['payload']));
         $signingInput = implode(':', [
-            $ev['event_id'], $ev['event_type'], (string) $ev['seq'], (string) $ev['ts_ms'], $payloadHash,
+            $ev['event_id'], $ev['event_type'], (string) $ev['seq'], (string) $ev['ts_ms'], $payloadHash, $ev['prev_hash'],
         ]);
         $message = hash('sha256', $signingInput, true);
         $ev['sig'] = bin2hex(sodium_crypto_sign_detached($message, $this->secretKey));
@@ -133,5 +136,22 @@ class ReplicaEventApplierSigVerifyTest extends TestCase
 
         $r = $this->applier->apply($ev, null);
         $this->assertSame(ReplicaEventApplier::RESULT_APPLIED, $r['status']);
+    }
+
+    public function test_broken_hash_chain_is_rejected(): void
+    {
+        // #458: a perfectly-signed event whose prev_hash does not link to the predecessor
+        // we just applied must be rejected — this is the tamper-evidence (a seed that
+        // deleted/inserted/reordered an event breaks the link of the next one).
+        $ev = $this->signedEvent(); // validly signed, prev_hash = GENESIS_ROOT
+        $expectedPrev = hash('sha256', str_repeat('cd', 64)); // expect a DIFFERENT predecessor
+
+        $r = $this->applier->apply($ev, $this->publicKey, $expectedPrev);
+        $this->assertSame(ReplicaEventApplier::RESULT_REJECTED, $r['status']);
+        $this->assertStringContainsString('hash-chain continuity broken', $r['detail']);
+
+        // …and the same event with the matching expected prev_hash is accepted.
+        $ok = $this->applier->apply($this->signedEvent(), $this->publicKey, NodeEventLogger::GENESIS_ROOT);
+        $this->assertSame(ReplicaEventApplier::RESULT_APPLIED, $ok['status']);
     }
 }

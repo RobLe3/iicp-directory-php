@@ -123,7 +123,24 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
-    'iicp_version' => 'v1.10.17',
+    'iicp_version' => 'v1.10.55',
+
+    // #373 Phase B: whether the directory origin has IPv6 egress. DomainFactory
+    // shared hosting does NOT — probing IPv6-literal node endpoints from there only
+    // records false negatives, so iicp:probe-nodes skips them unless this is set.
+    'iicp_probe_ipv6_egress' => (bool) env('IICP_PROBE_IPV6_EGRESS', false),
+
+    // #310 founder recognition (§5.4). The founder-era anchor: founder tier windows
+    // (Genesis-50 ≤3mo / Founders-500 ≤6mo / Founders-1000 ≤12mo) are measured from this
+    // instant. Maintainer-ratified 2026-06-06 = 1780704000000 (2026-06-06T00:00:00Z).
+    // PERMANENT once founders are minted — never change it (it would re-tier immutable slots).
+    'iicp_genesis_ms' => (int) env('IICP_GENESIS_MS', 1780704000000),
+
+    // The founder's operator public key (ed25519, base64) — ordinal #1, reserved for the
+    // maintainer by directive 2026-06-06. The cryptographic operator_pubkey is the unique
+    // identifier (operator_contact is not sent to the directory, so #1 is resolved by key, not
+    // by contact). Never served publicly. Overridable via env if the founder key is rotated.
+    'iicp_founder_one_pubkey' => env('IICP_FOUNDER_ONE_PUBKEY', 'sbPEVw2mnmrWsZR7NuNmOb9q0mwhHH++z0cENY0gtbI='),
 
     'genesis_ed25519_secret_key' => env('IICP_GENESIS_ED25519_SECRET_KEY'),
 

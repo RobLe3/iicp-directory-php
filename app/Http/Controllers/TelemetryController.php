@@ -85,6 +85,9 @@ class TelemetryController extends Controller
             'results.*.latency_ms' => ['nullable', 'numeric', 'min:0', 'max:60000'],
             'results.*.detail' => ['nullable', 'string', 'max:512'],
             'results.*.metadata' => ['nullable', 'array'],
+            // #373 — per-node attribution: a reachability/conformance probe targeting a
+            // specific node carries its id; directory-infra probes omit it (node_id=null).
+            'results.*.node_id' => ['sometimes', 'nullable', 'string', 'size:36'],
         ]);
 
         $probedAt = Carbon::parse($data['probed_at'])->utc()->format('Y-m-d H:i:s');
@@ -101,6 +104,8 @@ class TelemetryController extends Controller
             'latency_ms' => $r['latency_ms'] ?? null,
             'detail' => $r['detail'] ?? null,
             'metadata' => isset($r['metadata']) ? json_encode($r['metadata']) : null,
+            // #373 — attribute the probe to a node when the result names one (else null).
+            'node_id' => $r['node_id'] ?? null,
         ]);
 
         TelemetryProbe::insert($rows->all());
@@ -138,8 +143,10 @@ class TelemetryController extends Controller
             'qos_met' => ['required', 'boolean'],
         ]);
 
-        // Deduplication: one report per (node_id, proxy_node_id, time_bucket=60s)
-        $timeBucket = (int) (floor(time() / 60) * 60);
+        // Deduplication: one report per (node_id, proxy_node_id, time_bucket=60s).
+        // now()->timestamp (not time()) so tests can freeze the clock — two reports
+        // straddling a minute edge land in different buckets otherwise (flaky dedup).
+        $timeBucket = (int) (floor(now()->timestamp / 60) * 60);
 
         $existing = ProxyTelemetry::where('node_id', $data['node_id'])
             ->where('proxy_node_id', $proxy->id)

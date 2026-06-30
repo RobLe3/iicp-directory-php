@@ -535,6 +535,36 @@ class RegisterTest extends TestCase
             ->assertJson(['error' => 'IICP-E034', 'message' => 'TooManyRegistrationAttempts']);
     }
 
+    /** @test #525: fresh registrations from one source IP have an active-node capacity gate */
+    public function test_rejects_fresh_registration_when_source_ip_active_node_capacity_is_reached(): void
+    {
+        $previous = getenv('IICP_REGISTER_MAX_ACTIVE_NODES_PER_IP');
+        putenv('IICP_REGISTER_MAX_ACTIVE_NODES_PER_IP=1');
+
+        try {
+            Node::create([
+                'id' => (string) Str::uuid(),
+                'endpoint' => 'https://existing.example.com',
+                'region' => 'eu-central',
+                'node_token_hash' => password_hash('tok', PASSWORD_BCRYPT),
+                'proxy_token_hash' => password_hash('proxy', PASSWORD_BCRYPT),
+                'node_hmac_key' => bin2hex(random_bytes(32)),
+                'max_concurrent' => 1,
+                'tokens_per_min' => 1000,
+                'available' => true,
+                'status' => 'active',
+                'identity_key' => hash('sha256', 'existing'),
+                'observed_source_ip' => '127.0.0.1',
+            ]);
+
+            $this->postJson('/api/v1/register', $this->validPayload)
+                ->assertStatus(422)
+                ->assertJsonPath('error.fields.registration_ip.0', 'Too many active nodes registered from this source IP (IICP-E052)');
+        } finally {
+            putenv('IICP_REGISTER_MAX_ACTIVE_NODES_PER_IP='.($previous === false ? '' : $previous));
+        }
+    }
+
     // --- IICP-CX S.16 §3.1 — X25519 public key advertisement (#360) ---
 
     private array $cxKey = [
@@ -646,5 +676,182 @@ class RegisterTest extends TestCase
         $second = $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId]));
         $second->assertStatus(201)
             ->assertJsonPath('node_id', $nodeId);
+    }
+
+    /** @test #418-A: an explicit null transport_endpoint on re-register CLEARS a stale value. */
+    public function test_reregister_with_explicit_null_clears_stale_transport_endpoint(): void
+    {
+        $nodeId = (string) Str::uuid();
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId]))
+            ->assertStatus(201);
+
+        // Simulate a stale native-transport endpoint stored by an earlier SDK session.
+        Node::where('id', $nodeId)->update(['transport_endpoint' => 'iicp://node.example.com:9484']);
+        $this->assertSame('iicp://node.example.com:9484', Node::find($nodeId)->transport_endpoint);
+
+        // The current SDK no longer advertises native transport → sends explicit null.
+        // Before #418-A the `?? existing` merge pinned the stale value forever.
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'transport_endpoint' => null,
+        ]))->assertStatus(201);
+
+        $this->assertNull(Node::find($nodeId)->transport_endpoint, 'explicit null must clear the stale transport_endpoint');
+    }
+
+    /** @test #418-A: transport_endpoint is declaration-authoritative — a re-register that no
+     * longer declares native transport resets the stored value (the SDK always sends the field). */
+    public function test_reregister_resets_transport_endpoint_to_latest_declaration(): void
+    {
+        $nodeId = (string) Str::uuid();
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId]))
+            ->assertStatus(201);
+        Node::where('id', $nodeId)->update(['transport_endpoint' => 'iicp://node.example.com:9484']);
+
+        // A re-register whose payload does not carry native transport → the node's current
+        // declaration wins → the stale iicp:// endpoint is cleared (not pinned forever).
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId]))
+            ->assertStatus(201);
+
+        $this->assertNull(Node::find($nodeId)->transport_endpoint);
+    }
+
+    // ── IICP-E050 (F2/#529) — endpoint-substitution hijack guard, approach E ──
+
+    /** @test hijack: changing endpoint while the OLD endpoint is still alive, with no token → 403 E050 */
+    public function test_e050_rejects_endpoint_change_when_old_alive_and_no_token(): void
+    {
+        Http::fake([
+            'https://node.example.com/iicp/health' => Http::response('ok', 200),
+            'https://attacker.example.com/iicp/health' => Http::response('ok', 200),
+        ]);
+        $nodeId = (string) Str::uuid();
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId]))
+            ->assertStatus(201);
+
+        // Attacker re-registers the same node_id pointing at their own (live) server, no token.
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'endpoint' => 'https://attacker.example.com',
+        ]))->assertStatus(403)->assertJsonPath('error.code', 'IICP-E050');
+
+        // The hijack did not take effect.
+        $this->assertSame('https://node.example.com', Node::find($nodeId)->endpoint);
+    }
+
+    /** @test legitimate rotation: changing endpoint while the OLD endpoint is GONE → 201 (no token needed) */
+    public function test_e050_allows_endpoint_change_when_old_endpoint_is_gone(): void
+    {
+        // old-tunnel: ALIVE at the first register's liveness probe, then GONE
+        // (502) at the E050 old-endpoint probe during re-registration.
+        Http::fake([
+            'https://old-tunnel.example.com/iicp/health' => Http::sequence()
+                ->push('ok', 200)
+                ->push('gone', 502),
+            'https://new-tunnel.example.com/iicp/health' => Http::response('ok', 200),
+        ]);
+        $nodeId = (string) Str::uuid();
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'endpoint' => 'https://old-tunnel.example.com',
+        ]))->assertStatus(201);
+
+        // The tunnel rotated: old URL now 502s, node re-registers the new URL
+        // without a token — the dead old endpoint is the legitimate-rotation signal.
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'endpoint' => 'https://new-tunnel.example.com',
+        ]))->assertStatus(201);
+
+        $this->assertSame('https://new-tunnel.example.com', Node::find($nodeId)->endpoint);
+    }
+
+    /** @test ownership: changing endpoint with a valid current_node_token → 201 even if old is alive */
+    public function test_e050_allows_endpoint_change_with_valid_current_node_token(): void
+    {
+        Http::fake([
+            'https://node.example.com/iicp/health' => Http::response('ok', 200),
+            'https://moved.example.com/iicp/health' => Http::response('ok', 200),
+        ]);
+        $nodeId = (string) Str::uuid();
+        $token = $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId]))
+            ->assertStatus(201)->json('node_token');
+
+        // Legitimate move with ownership proof — old endpoint still alive, but token proves control.
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'endpoint' => 'https://moved.example.com',
+            'current_node_token' => $token,
+        ]))->assertStatus(201);
+
+        $this->assertSame('https://moved.example.com', Node::find($nodeId)->endpoint);
+    }
+
+    // ── Migration safety matrix (#529/#55) — does the deployed directory keep
+    // DOWNLEVEL clients (no current_node_token) working during the transition,
+    // and does an UPDATED client solve the rotation problem? ──────────────────
+
+    /** @test DOWNLEVEL: first registration (no current_node_token) → 201 */
+    public function test_downlevel_first_register_works(): void
+    {
+        $nodeId = (string) Str::uuid();
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId]))
+            ->assertStatus(201);
+    }
+
+    /** @test DOWNLEVEL: re-register with the SAME endpoint (restart, no token) → 201 */
+    public function test_downlevel_reregister_same_endpoint_works(): void
+    {
+        $nodeId = (string) Str::uuid();
+        $p = array_merge($this->validPayload, ['node_id' => $nodeId]);
+        $this->postJson('/api/v1/register', $p)->assertStatus(201);
+        $this->postJson('/api/v1/register', $p)->assertStatus(201); // no E050 gate (endpoint unchanged)
+    }
+
+    /** @test DOWNLEVEL: legitimate rotation (endpoint changed, OLD DEAD, no token) → 201
+     *  This is the dominant tunnel/CGNAT restart case — downlevel clients keep working. */
+    public function test_downlevel_rotation_with_dead_old_endpoint_works(): void
+    {
+        Http::fake([
+            'https://old.example.com/iicp/health' => Http::sequence()->push('ok', 200)->push('gone', 502),
+            'https://new.example.com/iicp/health' => Http::response('ok', 200),
+        ]);
+        $nodeId = (string) Str::uuid();
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId, 'endpoint' => 'https://old.example.com']))->assertStatus(201);
+        // No current_node_token (downlevel) — accepted because the old endpoint is gone.
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId, 'endpoint' => 'https://new.example.com']))->assertStatus(201);
+        $this->assertSame('https://new.example.com', Node::find($nodeId)->endpoint);
+    }
+
+    /** @test UPDATED client SOLVES the hard case: rotation while OLD STILL ALIVE,
+     *  using current_node_token → 201 (the downlevel path would 403 here). */
+    public function test_updated_client_rotates_even_when_old_alive(): void
+    {
+        Http::fake([
+            'https://a.example.com/iicp/health' => Http::response('ok', 200),
+            'https://b.example.com/iicp/health' => Http::response('ok', 200),
+        ]);
+        $nodeId = (string) Str::uuid();
+        $token = $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId, 'endpoint' => 'https://a.example.com']))
+            ->assertStatus(201)->json('node_token');
+        // Updated client sends current_node_token → accepted even though old is alive.
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId, 'endpoint' => 'https://b.example.com', 'current_node_token' => $token]))
+            ->assertStatus(201);
+        $this->assertSame('https://b.example.com', Node::find($nodeId)->endpoint);
+    }
+
+    /** @test The ONLY rejection: endpoint change while OLD ALIVE + no token (the
+     *  hijack signature). Closing the live hijack requires this; legitimate
+     *  downlevel rotation almost never hits it (old endpoint is dead). */
+    public function test_endpoint_change_old_alive_no_token_is_rejected(): void
+    {
+        Http::fake([
+            'https://live.example.com/iicp/health' => Http::response('ok', 200),
+            'https://evil.example.com/iicp/health' => Http::response('ok', 200),
+        ]);
+        $nodeId = (string) Str::uuid();
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId, 'endpoint' => 'https://live.example.com']))->assertStatus(201);
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId, 'endpoint' => 'https://evil.example.com']))
+            ->assertStatus(403)->assertJsonPath('error.code', 'IICP-E050');
     }
 }

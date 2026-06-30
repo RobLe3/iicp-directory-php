@@ -201,10 +201,10 @@ class ReplicaPreflightCommand extends Command
     {
         $this->line('<fg=cyan>[4/5] Seed reachability + genesis_hash</fg=cyan>');
         try {
-            $resp = Http::timeout(15)->acceptJson()->get("{$seedUrl}/v1/events", ['limit' => 1]);
+            $resp = Http::timeout(15)->acceptJson()->get("{$seedUrl}/api/v1/events", ['limit' => 1]);
             if ($resp->status() !== 200) {
                 $this->markFail(
-                    "Seed {$seedUrl}/v1/events returned HTTP {$resp->status()}",
+                    "Seed {$seedUrl}/api/v1/events returned HTTP {$resp->status()}",
                     'Verify seed URL + that seed is online'
                 );
 
@@ -213,7 +213,7 @@ class ReplicaPreflightCommand extends Command
             $genesisHash = $resp->json('genesis_hash');
             if (! $genesisHash) {
                 $this->markFail(
-                    'Seed /v1/events response missing genesis_hash',
+                    'Seed /api/v1/events response missing genesis_hash',
                     'Seed must be running directory v1.5+ with event log enabled'
                 );
 

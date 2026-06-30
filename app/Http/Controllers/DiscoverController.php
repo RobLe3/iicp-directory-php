@@ -21,6 +21,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Node;
+use App\Models\Operator;
 use App\Services\NodeScorer;
 use App\Services\OtelTracer;
 use Illuminate\Http\JsonResponse;
@@ -34,6 +36,20 @@ class DiscoverController extends Controller
 
     /** Default page size — chosen to comfortably feed FallbackChain (5 attempts). */
     private const DEFAULT_LIMIT = 10;
+
+    /**
+     * Discovery contains live serving URLs. For Quick Tunnel / browser-reachable
+     * nodes those URLs may rotate whenever a client restarts or rebuilds a
+     * tunnel. Longer CDN staleness looked fast on paper but made the browser
+     * mesh believe no keyed relay/browser node existed after a healthy tunnel
+     * rotation. Keep a small origin cache only to absorb bursts; do not let the
+     * edge hold node availability for minutes.
+     */
+    private const ORIGIN_CACHE_SECONDS = 5;
+
+    private const EDGE_MAX_AGE_SECONDS = 10;
+
+    private const EDGE_STALE_REVALIDATE_SECONDS = 5;
 
     public function __construct(private NodeScorer $scorer) {}
 
@@ -57,6 +73,13 @@ class DiscoverController extends Controller
             }
         }
 
+        // #528 — query-string booleans arrive as the strings "true"/"false";
+        // Laravel's `boolean` rule rejects those, so normalize before validating
+        // (the browser relay auto-discovery sends `relay_capable=true`).
+        if ($request->has('relay_capable')) {
+            $request->merge(['relay_capable' => filter_var($request->input('relay_capable'), FILTER_VALIDATE_BOOLEAN)]);
+        }
+
         $validated = $request->validate([
             'intent' => ['required', 'string', 'max:255'],
             'qos' => ['sometimes', 'string', 'in:realtime,interactive,batch,best-effort'],
@@ -69,6 +92,8 @@ class DiscoverController extends Controller
             'min_quality_score' => ['sometimes', 'numeric', 'min:0', 'max:1'],
             // CIP-D1: filter to CIP-Provider nodes only (allow_remote_inference=true, S.12 §5.2)
             'cip_capable' => ['sometimes', 'boolean'],
+            // #528 — filter to relay-capable nodes (browser/CGNAT relay auto-discovery)
+            'relay_capable' => ['sometimes', 'boolean'],
             // #326 — default discover returns ONLY public_reachable=true nodes (the
             // honest 'mesh is empty if no public nodes' state). Operators / dev tools
             // can opt into seeing internal-only nodes with include_internal=true.
@@ -76,20 +101,22 @@ class DiscoverController extends Controller
             'include_internal' => ['sometimes', 'boolean'],
             // #408/ADR-046 — filter to nodes accepting this input modality (e.g. image → vision-capable).
             'modality' => ['sometimes', 'string', 'in:text,image,audio,video'],
+            // #548 — additive shadow score; normal discover ordering remains v1.
+            'score_version' => ['sometimes', 'string', 'in:v2_shadow'],
         ]);
 
         $span = OtelTracer::startSpan($request, 'iicp.directory.discover');
         $start = microtime(true);
 
-        // Cache discover results for 120s — 4× heartbeat cadence; acceptable staleness for
-        // node discovery since stale nodes are pruned by heartbeat timeouts anyway.
-        // Bumped 60s→120s in #324 v1.9.22 (iter-1405) — pairs with CF s-maxage 300s below.
-        // Probe-latency simulation (reports/probe-latency-long-term-2026-05-26.md A3 model)
-        // predicts ~85% CF hit rate at this combination → p50 ≈ 43ms, p95 ≈ 282ms.
+        // Cache discover results very briefly only. This endpoint carries the
+        // currently usable serving endpoint; for Quick Tunnel / relay/browser
+        // routes a several-minute CDN cache can outlive the real tunnel and
+        // make the browser UI report "no relay/browser node" while the registry
+        // already shows a healthy node.
         $includeInternal = (bool) ($validated['include_internal'] ?? false);
         $cacheKey = 'discover:v1:'.md5(json_encode($validated));
-        $nodes = Cache::remember($cacheKey, 120, function () use ($validated, $includeInternal) {
-            return $this->scorer->discover(
+        $nodes = Cache::remember($cacheKey, self::ORIGIN_CACHE_SECONDS, function () use ($validated, $includeInternal) {
+            $scored = $this->scorer->discover(
                 intent: $validated['intent'],
                 qos: $validated['qos'] ?? null,
                 region: $validated['region'] ?? null,
@@ -101,7 +128,11 @@ class DiscoverController extends Controller
                 cipCapable: isset($validated['cip_capable']) ? (bool) $validated['cip_capable'] : null,
                 includeInternal: $includeInternal,
                 modality: $validated['modality'] ?? null,
+                relayCapable: isset($validated['relay_capable']) ? (bool) $validated['relay_capable'] : null,
+                scoreVersion: $validated['score_version'] ?? null,
             );
+
+            return $this->withOperatorNames($scored);
         });
 
         $queryMs = round((microtime(true) - $start) * 1000);
@@ -111,18 +142,73 @@ class DiscoverController extends Controller
             ->setAttribute('iicp.discover.cip_capable_filter', isset($validated['cip_capable']) ? (bool) $validated['cip_capable'] : false);
         $span->end();
 
-        // Cache-Control: s-maxage=300 tells Cloudflare to cache discover for 300s.
-        // stale-while-revalidate=120 extends effective edge cache to 420s total.
-        // Bumped from s-maxage=120 in #324 v1.9.22 (iter-1405) — paired with the
-        // 60→120s Laravel cache bump above. Discover is public+unauthenticated; CDN
-        // caching is safe. Tolerable staleness: heartbeats expire at 90s so a stale
-        // discover entry includes nodes whose heartbeat may have lapsed; proxy's
-        // 5s per-attempt timeout handles fall-through to next candidate naturally.
+        // Cache-Control: discover is public+unauthenticated, but node serving
+        // URLs are live routing state. Keep edge staleness below one heartbeat
+        // interval so browser dispatch and relay election converge quickly after
+        // tunnel rebuilds.
+        // #402 (optional): relay_available signals ≥1 relay-capable node in the result set
+        // so SDK auto-election (peer_manager::elect_relay) can warn operators up-front when
+        // no relay peer exists, without a second round-trip to the directory.
+        $relayAvailable = ! empty(array_filter($nodes, fn ($n) => ($n['relay_capable'] ?? false) === true));
+
         return response()->json([
             'nodes' => $nodes,
             'count' => count($nodes),
+            'relay_available' => $relayAvailable,
             'query_ms' => $queryMs,
-        ])->header('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=120')
+        ])->header(
+            'Cache-Control',
+            sprintf(
+                'public, max-age=%d, s-maxage=%d, stale-while-revalidate=%d',
+                self::ORIGIN_CACHE_SECONDS,
+                self::EDGE_MAX_AGE_SECONDS,
+                self::EDGE_STALE_REVALIDATE_SECONDS,
+            )
+        )
             ->header('Vary', 'Accept-Encoding');
+    }
+
+    /**
+     * #463 — enrich discover results with the operator's public `display_name`, resolved by
+     * `operator_pubkey` for delegation-verified bindings. Batched: 2 queries regardless of result
+     * size (node_id→operator_pubkey, then operator_pubkey→display_name). The operator_pubkey and
+     * contact are NEVER included in the response; `operator_fingerprint` is a short public hash for
+     * display-name disambiguation. A node without a verified operator binding simply gets neither
+     * operator key.
+     *
+     * @param  array<int,array<string,mixed>>  $nodes
+     * @return array<int,array<string,mixed>>
+     */
+    private function withOperatorNames(array $nodes): array
+    {
+        $ids = array_values(array_filter(array_map(static fn ($n) => $n['node_id'] ?? null, $nodes)));
+        if ($ids === []) {
+            return $nodes;
+        }
+
+        $pubByNode = Node::query()
+            ->whereIn('id', $ids)
+            ->whereNotNull('operator_pubkey')
+            ->where('operator_verified', true)
+            ->pluck('operator_pubkey', 'id');
+        if ($pubByNode->isEmpty()) {
+            return $nodes;
+        }
+
+        $nameByPub = Operator::query()
+            ->whereIn('operator_pubkey', $pubByNode->unique()->values()->all())
+            ->whereNotNull('display_name')
+            ->pluck('display_name', 'operator_pubkey');
+
+        foreach ($nodes as &$node) {
+            $pub = $pubByNode[$node['node_id'] ?? ''] ?? null;
+            if ($pub !== null && isset($nameByPub[$pub])) {
+                $node['operator_display_name'] = $nameByPub[$pub];
+                $node['operator_fingerprint'] = Operator::publicFingerprint($pub);
+            }
+        }
+        unset($node);
+
+        return $nodes;
     }
 }

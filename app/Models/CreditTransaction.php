@@ -9,9 +9,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class CreditTransaction extends Model
 {
-    protected $fillable = ['node_id', 'amount', 'type', 'task_id', 'reason'];
+    protected $fillable = ['node_id', 'amount', 'type', 'task_id', 'reason', 'expires_at'];
 
-    protected $casts = ['amount' => 'decimal:4'];
+    protected $casts = ['amount' => 'decimal:4', 'expires_at' => 'datetime'];
 
     public function credit(): BelongsTo
     {

@@ -3,6 +3,9 @@
 namespace Tests\Feature;
 
 use App\Models\Node;
+use App\Models\NodeEvent;
+use App\Services\NodeEventLogger;
+use App\Services\NodeScorer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -21,6 +24,7 @@ class RegistryTest extends TestCase
             'max_concurrent' => 4,
             'tokens_per_min' => 10000,
             'available' => true,
+            'status' => 'active',
             'load' => 0.2,
             'active_jobs' => 1,
             'last_seen' => now(),
@@ -37,6 +41,20 @@ class RegistryTest extends TestCase
         }
 
         return $node;
+    }
+
+    private function seedLifecycleEvent(string $nodeId, string $type, int $tsMs): void
+    {
+        NodeEvent::create([
+            'event_id' => (string) Str::uuid(),
+            'seq' => (NodeEvent::max('seq') ?? 0) + 1,
+            'event_type' => $type,
+            'node_id' => $nodeId,
+            'ts_ms' => $tsMs,
+            'payload' => [],
+            'prev_hash' => NodeEventLogger::GENESIS_ROOT,
+            'signature' => null,
+        ]);
     }
 
     // -------------------------------------------------------------------------
@@ -128,7 +146,19 @@ class RegistryTest extends TestCase
         $response = $this->getJson('/api/v1/registry/nodes');
 
         $response->assertStatus(200)
-            ->assertJsonStructure(['total', 'page', 'limit', 'nodes' => [['node_id_prefix', 'region', 'intents']]]);
+            ->assertJsonStructure(['total', 'page', 'limit', 'nodes' => [[
+                'node_id_prefix', 'region', 'intents',
+                'directory_observed_reachable', 'route_evidence', 'routing_hint', 'browser_usable',
+                'backend_stability' => ['backend_state', 'reason_class', 'routing_guard', 'evidence'],
+                'performance' => ['task_latency_ms', 'task_latency_ms_basis', 'health_impact'],
+                'health_summary' => ['score', 'label', 'confidence', 'evidence_level', 'latency_ms_basis', 'components'],
+                'active', 'trust_progress' => ['completed_tasks', 'tasks_until_gold', 'probation'],
+                'status_summary' => [
+                    'state', 'headline', 'description', 'reasons', 'evidence_gaps',
+                    'evidence_last_refreshed_at', 'evidence_source', 'health_basis',
+                    'trust_progress' => ['completed_tasks', 'tasks_until_gold', 'probation'],
+                ],
+            ]]]);
 
         // Private fields must NOT be present
         $node = $response->json('nodes.0');
@@ -136,6 +166,115 @@ class RegistryTest extends TestCase
         $this->assertArrayNotHasKey('node_token_hash', $node);
         $this->assertArrayNotHasKey('node_hmac_key', $node);
         $this->assertEquals(8, strlen($node['node_id_prefix']));  // prefix only
+        $this->assertSame('https_direct', $node['routing_hint']);
+        $this->assertTrue($node['browser_usable']);
+        $this->assertSame('unknown', $node['backend_stability']['backend_state']);
+    }
+
+    public function test_registry_nodes_status_summary_distinguishes_limited_reach_from_public_routable(): void
+    {
+        $limited = $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
+        $limited->update([
+            'endpoint' => 'http://[2001:db8::1]:9484',
+            'public_reachable' => false,
+            'exposure_mode' => null,
+            'sdk_version' => '0.7.68',
+            'cx_public_key' => ['algorithm' => 'X25519', 'key' => 'abc'],
+        ]);
+
+        $response = $this->getJson('/api/v1/registry/nodes')->assertOk();
+        $node = $response->json('nodes.0');
+
+        $this->assertTrue($node['active']);
+        $this->assertSame('limited_reach', $node['status_summary']['state']);
+        $this->assertFalse($node['status_summary']['public_routable']);
+        $this->assertContains('limited_or_unverified_reach', $node['status_summary']['reasons']);
+    }
+
+    public function test_registry_nodes_explains_high_score_probation_gate(): void
+    {
+        $node = $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
+        $node->update([
+            'public_reachable' => true,
+            'sdk_version' => '0.7.72',
+            'cx_public_key' => ['algorithm' => 'X25519', 'key' => 'abc'],
+        ]);
+        $node->reputation()->create([
+            'score' => 0.995,
+            'tasks_total' => 79,
+            'tasks_failed' => 0,
+            'completed_tasks_count' => 79,
+            'avg_latency_ms' => 120,
+        ]);
+
+        $response = $this->getJson('/api/v1/registry/nodes')->assertOk();
+
+        $this->assertSame('silver', $response->json('nodes.0.reputation_tier'));
+        $this->assertTrue($response->json('nodes.0.probation'));
+        $this->assertSame(79, $response->json('nodes.0.trust_progress.completed_tasks'));
+        $this->assertSame(21, $response->json('nodes.0.trust_progress.tasks_until_gold'));
+        $this->assertSame('task_history_probation', $response->json('nodes.0.status_summary.evidence_gaps.0.code'));
+    }
+
+    public function test_registry_health_summary_exposes_raw_and_display_band(): void
+    {
+        $summary = NodeScorer::healthSummary([
+            'score' => 84,
+            'label' => 'degraded',
+            'confidence' => 'low',
+            'evidence_level' => 'self_attested',
+            'latency_ms_basis' => 'none',
+            'observed' => false,
+            'components' => [
+                'reachability' => 1.0,
+                'latency' => 0.5,
+                'uptime' => null,
+                'stability' => null,
+            ],
+            'evaluated_at' => now()->toIso8601String(),
+        ]);
+
+        $this->assertSame('degraded', $summary['label']);
+        $this->assertSame('evidence limited', $summary['display']['label']);
+        $this->assertSame('steady', $summary['display']['tone']);
+        $this->assertSame('degraded', $summary['display']['raw_label']);
+        $this->assertTrue($summary['display']['near_threshold']);
+    }
+
+    public function test_status_summary_does_not_flap_at_healthy_boundary(): void
+    {
+        $node = $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
+        $node->update([
+            'public_reachable' => true,
+            'sdk_version' => '0.7.72',
+            'cx_public_key' => ['algorithm' => 'X25519', 'key' => 'abc'],
+        ]);
+
+        $nearHealthy = NodeScorer::statusSummary($node, [
+            'score' => 84,
+            'label' => 'degraded',
+            'confidence' => 'low',
+            'evidence_level' => 'self_attested',
+            'latency_ms_basis' => 'none',
+            'observed' => false,
+            'components' => [],
+            'evaluated_at' => now()->toIso8601String(),
+        ]);
+        $healthy = NodeScorer::statusSummary($node, [
+            'score' => 85,
+            'label' => 'healthy',
+            'confidence' => 'medium',
+            'evidence_level' => 'directory_observed',
+            'latency_ms_basis' => 'directory_probe',
+            'observed' => true,
+            'components' => [],
+            'evaluated_at' => now()->toIso8601String(),
+        ]);
+
+        $this->assertSame('ready', $nearHealthy['state']);
+        $this->assertSame('ready', $healthy['state']);
+        $this->assertContains('health_degraded', $nearHealthy['reasons']);
+        $this->assertContains('health_healthy', $healthy['reasons']);
     }
 
     public function test_registry_nodes_filters_by_region(): void
@@ -213,14 +352,94 @@ class RegistryTest extends TestCase
         $response->assertStatus(200)
             ->assertJsonStructure([
                 'health' => ['score', 'label', 'observed', 'components' => [
-                    'liveness', 'reachability', 'latency', 'success_rate', 'reputation',
-                ]],
+                    'liveness', 'reachability', 'latency', 'uptime', 'stability', 'freshness',
+                ], 'confidence', 'evidence_level', 'latency_ms_basis'],
+                'health_summary' => ['score', 'label', 'confidence', 'evidence_level', 'latency_ms_basis', 'components'],
+                'directory_observed_reachable',
+                'route_evidence',
+                'routing_hint',
+                'browser_usable',
+                'performance' => ['task_latency_ms', 'task_latency_ms_basis', 'health_impact'],
+                'trust_progress' => ['completed_tasks', 'tasks_until_gold', 'probation'],
+                'status_summary' => [
+                    'state', 'headline', 'description', 'reasons', 'evidence_gaps',
+                    'evidence_last_refreshed_at', 'evidence_source', 'health_basis',
+                    'trust_progress' => ['completed_tasks', 'tasks_until_gold', 'probation'],
+                ],
+                'capability_summary' => ['model_count_registered', 'model_count_live', 'model_family_count', 'modalities', 'quality_evidence'],
                 'exposure_mode',
             ])
-            ->assertJsonPath('exposure_mode', 'ipv4_public_direct');
+            ->assertJsonPath('health.confidence', 'low')
+            ->assertJsonPath('exposure_mode', 'ipv4_public_direct')
+            ->assertJsonPath('route_evidence', 'self_attested')
+            ->assertJsonPath('routing_hint', 'https_direct')
+            ->assertJsonPath('browser_usable', true);
 
         // No endpoint/secrets leaked alongside the new fields (REG-01 still holds).
         $this->assertArrayNotHasKey('endpoint', $response->json());
+    }
+
+    public function test_registry_node_show_exposes_backend_stability_separately_from_health(): void
+    {
+        $node = $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
+        $node->update([
+            'backend_stability' => [
+                'backend_state' => 'degraded',
+                'reason_class' => 'backend_cold',
+                'retry_after_s' => 45,
+            ],
+        ]);
+        $prefix = substr($node->id, 0, 8);
+
+        $response = $this->getJson("/api/v1/registry/nodes/{$prefix}")->assertOk();
+
+        $response->assertJsonPath('backend_stability.backend_state', 'degraded')
+            ->assertJsonPath('backend_stability.reason_class', 'backend_cold')
+            ->assertJsonPath('backend_stability.routing_guard', 'observe_only')
+            ->assertJsonPath('status_summary.backend_stability.backend_state', 'degraded');
+        $this->assertArrayHasKey('health', $response->json());
+        $this->assertArrayNotHasKey('endpoint', $response->json());
+    }
+
+    public function test_registry_node_show_status_summary_explains_keyless_downlevel_node(): void
+    {
+        $node = $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
+        $node->update([
+            'public_reachable' => true,
+            'sdk_version' => '0.7.62',
+            'cx_public_key' => null,
+        ]);
+        $prefix = substr($node->id, 0, 8);
+
+        $response = $this->getJson("/api/v1/registry/nodes/{$prefix}")->assertOk();
+
+        $this->assertSame('upgrade_privacy_needed', $response->json('status_summary.state'));
+        $this->assertTrue($response->json('status_summary.public_routable'));
+        $this->assertFalse($response->json('status_summary.key_ready'));
+        $this->assertFalse($response->json('status_summary.client_current'));
+        $this->assertContains('encryption_key_missing', $response->json('status_summary.reasons'));
+        $this->assertContains('client_upgrade_needed', $response->json('status_summary.reasons'));
+    }
+
+    public function test_registry_node_show_status_summary_marks_unverified_ipv6_direct_without_calling_it_broken(): void
+    {
+        $node = $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
+        $node->update([
+            'endpoint' => 'http://[2a0a:a543::1]:9484',
+            'public_reachable' => false,
+            'exposure_mode' => 'ipv6_direct_firewall_required',
+            'sdk_version' => '0.7.68',
+            'cx_public_key' => ['algorithm' => 'X25519', 'key' => 'abc'],
+        ]);
+        $prefix = substr($node->id, 0, 8);
+
+        $response = $this->getJson("/api/v1/registry/nodes/{$prefix}")->assertOk();
+
+        $this->assertSame('direct_unverified', $response->json('status_summary.state'));
+        $this->assertSame('http_ipv6', $response->json('routing_hint'));
+        $this->assertNull($response->json('directory_observed_reachable'));
+        $this->assertTrue($response->json('status_summary.public_routable'));
+        $this->assertSame('ipv6_not_directory_verified', $response->json('status_summary.evidence_gaps.1.code'));
     }
 
     // #397 — node detail surfaces the transport protocols a node speaks
@@ -242,6 +461,19 @@ class RegistryTest extends TestCase
         $this->assertArrayNotHasKey('transport_endpoint', $response->json());
     }
 
+    public function test_registry_node_show_populates_verified_uptime_and_stability_components(): void
+    {
+        $node = $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
+        $prefix = substr($node->id, 0, 8);
+        $this->seedLifecycleEvent($node->id, 'REGISTER', (int) (microtime(true) * 1000) - 3_600_000);
+
+        $response = $this->getJson("/api/v1/registry/nodes/{$prefix}");
+
+        $response->assertStatus(200);
+        $this->assertIsNumeric($response->json('health.components.uptime'));
+        $this->assertIsNumeric($response->json('health.components.stability'));
+    }
+
     public function test_registry_node_show_returns_uptime_history_structure(): void
     {
         $node = $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
@@ -256,6 +488,9 @@ class RegistryTest extends TestCase
         foreach ($history as $entry) {
             $this->assertArrayHasKey('date', $entry);
             $this->assertArrayHasKey('uptime_pct', $entry);
+            $this->assertArrayHasKey('evidence', $entry);
+            $this->assertArrayHasKey('observed_heartbeat_count', $entry);
+            $this->assertArrayHasKey('expected_heartbeat_count', $entry);
             $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}$/', $entry['date']);
             $this->assertGreaterThanOrEqual(0.0, $entry['uptime_pct']);
             $this->assertLessThanOrEqual(100.0, $entry['uptime_pct']);
@@ -287,6 +522,7 @@ class RegistryTest extends TestCase
         $this->assertArrayHasKey($today, $history->all());
         // Today had 1440 records: uptime_pct must be > 0
         $this->assertGreaterThan(0.0, $history[$today]['uptime_pct']);
+        $this->assertSame('heartbeat_samples', $history[$today]['evidence']);
     }
 
     public function test_registry_node_show_returns_empty_latency_percentiles_when_no_telemetry(): void

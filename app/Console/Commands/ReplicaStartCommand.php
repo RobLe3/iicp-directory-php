@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Storage;
  * Bring up this directory in replica mode.
  *
  * Phase: P6-1.3a skeleton — registers against a Genesis Seed and polls
- *        GET /v1/events for new entries, logging them. State-mirror
+ *        GET /api/v1/events for new entries, logging them. State-mirror
  *        application (write to local nodes / credits / replicas tables)
  *        is P6-1.3b and intentionally NOT performed here.
  *
@@ -39,9 +39,13 @@ class ReplicaStartCommand extends Command
         .'{--did= : This replica\'s did:web identifier (required)} '
         .'{--endpoint= : This replica\'s public https endpoint (required)} '
         .'{--state-file=replica-state.json : Path inside storage/app for persisted state} '
-        .'{--poll-interval=30 : Seconds between GET /v1/events polls} '
+        .'{--poll-interval=30 : Seconds between GET /api/v1/events polls} '
         .'{--once : Register + one poll, then exit (used by P6-1.4 tests)} '
         .'{--apply : Apply events to local state (P6-1.3b); default is log-only (P6-1.3a behaviour)} '
+        .'{--no-register : Read-only event tail — skip the join handshake and snapshot, just '
+        .'poll the public GET /api/v1/events log from seq 0 (matches the Rust replica\'s mirror '
+        .'mechanism; FED-READY-1 existence parity without FED-READY-3 trusted registration). '
+        .'--did/--endpoint not required in this mode.} '
         .'{--dry-run : Print intended actions; no network, no persistence}';
 
     protected $description = 'Bring up this directory in replica mode (Phase 6 — skeleton; state-mirror is P6-1.3b)';
@@ -55,16 +59,20 @@ class ReplicaStartCommand extends Command
         $pollInterval = max(5, (int) $this->option('poll-interval'));
         $once = (bool) $this->option('once');
         $apply = (bool) $this->option('apply');
+        $noRegister = (bool) $this->option('no-register');
         $dryRun = (bool) $this->option('dry-run');
 
-        foreach (['seed-url' => $seedUrl, 'did' => $did, 'endpoint' => $endpoint] as $name => $val) {
+        // Read-only tail only needs the seed URL; the join handshake (did/endpoint) is skipped.
+        $required = $noRegister ? ['seed-url' => $seedUrl] : ['seed-url' => $seedUrl, 'did' => $did, 'endpoint' => $endpoint];
+        foreach ($required as $name => $val) {
             if ($val === '') {
                 $this->error("Missing required option: --{$name}");
 
                 return self::INVALID;
             }
         }
-        if ($invalid = $this->validateUrlSchemes($seedUrl, $endpoint)) {
+        // Validate the seed scheme always; the replica's own endpoint only when registering.
+        if ($invalid = $this->validateUrlSchemes($seedUrl, $noRegister ? $seedUrl : $endpoint)) {
             return $invalid;
         }
 
@@ -80,14 +88,19 @@ class ReplicaStartCommand extends Command
 
         if ($dryRun) {
             $this->line('<fg=yellow>DRY-RUN: would POST {did, endpoint} to '
-                ."{$seedUrl}/v1/replicas/register, persist response, then poll "
-                ."{$seedUrl}/v1/events?since_seq=N every {$pollInterval}s.</fg=yellow>");
+                ."{$seedUrl}/api/v1/replicas/register, persist response, then poll "
+                ."{$seedUrl}/api/v1/events?since_seq=N every {$pollInterval}s.</fg=yellow>");
 
             return self::SUCCESS;
         }
 
         $state = $this->loadState($stateFile);
-        if ($state === null) {
+        if ($state === null && $noRegister) {
+            // Read-only tail: no registration, no token — GET /api/v1/events is public.
+            $this->line('<fg=green>→ Read-only tail (--no-register): mirroring the public event log from seq 0</fg=green>');
+            $state = ['replica_id' => 'read-only-tail', 'replica_token' => '', 'since_seq' => 0, 'last_seq' => 0, 'genesis_hash' => null];
+            $this->saveState($stateFile, $state);
+        } elseif ($state === null) {
             $this->line('<fg=green>→ No prior state — registering against seed</fg=green>');
             $state = $this->register($seedUrl, $did, $endpoint);
             if ($state === null) {
@@ -98,11 +111,11 @@ class ReplicaStartCommand extends Command
                 .' since_seq='.$state['since_seq']
                 .' genesis_hash='.substr((string) ($state['genesis_hash'] ?? ''), 0, 16).'…</fg=green>');
 
-            // Bootstrap via GET /v1/snapshot (S.13 §5.3 step 1 + §5.5).
+            // Bootstrap via GET /api/v1/snapshot (S.13 §5.3 step 1 + §5.5).
             $this->line('<fg=green>→ Fetching snapshot for one-RTT bootstrap</fg=green>');
             $bootstrap = $this->bootstrapFromSnapshot($seedUrl, $state['replica_token'], $apply);
             if ($bootstrap === null) {
-                $this->warn('Snapshot fetch failed; will catch up via /v1/events from since_seq=0');
+                $this->warn('Snapshot fetch failed; will catch up via /api/v1/events from since_seq=0');
             } else {
                 $state['last_seq'] = (int) $bootstrap['snapshot_seq'];
                 $this->saveState($stateFile, $state);
@@ -181,7 +194,7 @@ class ReplicaStartCommand extends Command
     private function register(string $seedUrl, string $did, string $endpoint): ?array
     {
         $resp = Http::timeout(30)->acceptJson()
-            ->post("{$seedUrl}/v1/replicas/register", ['did' => $did, 'endpoint' => $endpoint]);
+            ->post("{$seedUrl}/api/v1/replicas/register", ['did' => $did, 'endpoint' => $endpoint]);
         if (! $resp->successful()) {
             $this->error("Registration failed: HTTP {$resp->status()} — {$resp->body()}");
 
@@ -212,7 +225,7 @@ class ReplicaStartCommand extends Command
     private function bootstrapFromSnapshot(string $seedUrl, string $token, bool $apply): ?array
     {
         $resp = Http::timeout(30)->withToken($token)->acceptJson()
-            ->get("{$seedUrl}/v1/snapshot");
+            ->get("{$seedUrl}/api/v1/snapshot");
         if (! $resp->successful()) {
             $this->error("Snapshot fetch failed: HTTP {$resp->status()}");
 
@@ -260,13 +273,18 @@ class ReplicaStartCommand extends Command
 
     private function fetchEvents(string $seedUrl, string $token, int $sinceSeq): ?array
     {
-        $resp = Http::timeout(15)->withToken($token)->acceptJson()
-            ->get("{$seedUrl}/v1/events", ['since_seq' => $sinceSeq, 'limit' => 100]);
+        // GET /api/v1/events is public — only attach the bearer when we actually have one
+        // (read-only --no-register tail runs token-less).
+        $req = Http::timeout(15)->acceptJson();
+        if ($token !== '') {
+            $req = $req->withToken($token);
+        }
+        $resp = $req->get("{$seedUrl}/api/v1/events", ['since_seq' => $sinceSeq, 'limit' => 100]);
         if (! $resp->successful()) {
             $body = $resp->json();
             if (($body['error']['code'] ?? null) === 'IICP-E045') {
                 $this->warn('Seed returned IICP-E045 (snapshot_required) — replica fell behind rolling window. '
-                    .'P6-1.3b will implement GET /v1/snapshot bootstrap; for now, restart with fresh state.');
+                    .'P6-1.3b will implement GET /api/v1/snapshot bootstrap; for now, restart with fresh state.');
             }
 
             return null;
@@ -289,6 +307,10 @@ class ReplicaStartCommand extends Command
         }
         $applier = $apply ? app(ReplicaEventApplier::class) : null;
         $verifyKey = $apply ? $this->resolveSeedVerifyKey() : null;
+        // #458: track the last applied signature so each next event's prev_hash can be
+        // checked for chain continuity. Unknown at drain start (only seq is persisted), so
+        // the first event skips the continuity check; its own signature is still verified.
+        $prevSig = null;
         foreach ($events as $ev) {
             $seq = $ev['seq'] ?? '?';
             $type = $ev['event_type'] ?? '?';
@@ -296,8 +318,12 @@ class ReplicaStartCommand extends Command
             $signer = $ev['signer_did'] ?? '?';
             $suffix = '[NOT APPLIED — pass --apply]';
             if ($applier) {
-                $r = $applier->apply($ev, $verifyKey);
+                $expectedPrev = $prevSig === null ? null : hash('sha256', $prevSig);
+                $r = $applier->apply($ev, $verifyKey, $expectedPrev);
                 $suffix = "[{$r['status']}: {$r['detail']}]";
+                if (($r['status'] ?? '') === ReplicaEventApplier::RESULT_APPLIED) {
+                    $prevSig = $ev['sig'] ?? null;
+                }
             }
             $this->line("  · seq={$seq} type={$type} ts_ms={$tsMs} signer={$signer} {$suffix}");
         }

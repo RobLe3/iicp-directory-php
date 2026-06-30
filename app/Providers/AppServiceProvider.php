@@ -41,5 +41,10 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('heartbeat', function (Request $request) {
             return Limit::perMinute(60)->by($request->input('node_id', $request->ip()));
         });
+
+        // POST /v1/consumer-token: 20 per minute per authenticated node (#496)
+        RateLimiter::for('consumer-token', function (Request $request) {
+            return Limit::perMinute(20)->by($request->bearerToken() ?? $request->ip());
+        });
     }
 }

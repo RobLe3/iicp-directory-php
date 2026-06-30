@@ -15,7 +15,7 @@ class TelemetryProbe extends Model
 
     protected $fillable = [
         'probe_token_id', 'node_id', 'run_id', 'probe_id', 'probe_type',
-        'test_id', 'level', 'passed', 'latency_ms', 'detail', 'metadata',
+        'test_id', 'level', 'passed', 'latency_ms', 'detail', 'metadata', 'probed_at',
     ];
 
     protected $casts = [

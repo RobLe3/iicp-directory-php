@@ -32,6 +32,32 @@ class NodeScorer
 {
     private const EXPIRY_SECONDS = 90;
 
+    /** Current SDK baseline for strict demotion of downlevel/unkeyed nodes. */
+    public const SDK_BASELINE_VERSION = '0.7.68';
+
+    private const BACKEND_STATES = ['ok', 'degraded', 'draining'];
+
+    private const BACKEND_REASONS = ['ok', 'backend_cold', 'backend_loading', 'backend_unstable', 'observer_error'];
+
+    private const BACKEND_ROUTING_GUARDS = [
+        'ok' => 'none',
+        'degraded' => 'observe_only',
+        'draining' => 'avoid_for_admission',
+    ];
+
+    private const BACKEND_STATE_SUMMARIES = [
+        'ok' => 'Backend reports ready for new work.',
+        'draining' => 'Backend is draining; discovery should avoid assigning new work for now.',
+    ];
+
+    private const BACKEND_REASON_SUMMARIES = [
+        'backend_cold' => 'Backend is reachable but cold; first request may warm it up.',
+        'backend_loading' => 'Backend is loading or unloading a model.',
+        'backend_unstable' => 'Backend reports instability separate from network reachability.',
+        'observer_error' => 'Backend reports degraded readiness.',
+        'ok' => 'Backend reports degraded readiness.',
+    ];
+
     /**
      * ADR-047 (#411) — reachability tiers. A heartbeating node with a routable
      * serving surface (any of the 8 ADR-043 §9 exposure_mode categories) is
@@ -93,6 +119,8 @@ class NodeScorer
         ?bool $cipCapable = null,
         bool $includeInternal = false,
         ?string $modality = null,
+        ?bool $relayCapable = null,
+        ?string $scoreVersion = null,
     ): array {
         $cutoff = Carbon::now()->subSeconds(self::EXPIRY_SECONDS);
 
@@ -108,11 +136,19 @@ class NodeScorer
             // Legacy/internal nodes (no exposure_mode) stay hidden unless
             // include_internal=true. This un-hides heartbeating CGNAT/IPv6 fleets
             // the dial-back-only filter wrongly dropped.
-            ->when(! $includeInternal, fn ($q) => $q->where(function ($w) {
-                $w->where('public_reachable', true)
-                    ->orWhereIn('exposure_mode', self::RELAY_REACHABLE_EXPOSURE_MODES);
-            }))
+            ->when(! $includeInternal, fn ($q) => $q
+                // #536 — a listed endpoint confirmed dead must be hidden from normal
+                // discover even if the node is relay-capable or has a routable
+                // exposure_mode. include_internal remains the diagnostics escape hatch.
+                ->whereNull('endpoint_verified_dead_at')
+                ->where(function ($w) {
+                    $w->where('public_reachable', true)
+                        ->orWhereIn('exposure_mode', self::RELAY_REACHABLE_EXPOSURE_MODES);
+                }))
             ->when($cipCapable === true, fn ($q) => $q->where('allow_remote_inference', true))
+            // #528 — ?relay_capable=true filters to nodes that can act as a relay
+            // (browser/CGNAT auto-discovery binds these). Previously a no-op param.
+            ->when($relayCapable === true, fn ($q) => $q->where('relay_capable', true))
             // #408/ADR-046 — ?modality=image filters to nodes whose capability for
             // this intent accepts that input modality (vision = image-capable chat).
             ->when($modality !== null, fn ($q) => $q->whereHas(
@@ -128,11 +164,33 @@ class NodeScorer
 
         $nodes = $query->get();
 
+        // #494: nodes reporting health_models=[] have no model capacity right now.
+        // Exclude them from all discover results (null = not yet reported → keep; [] = explicitly empty → drop).
+        $nodes = $nodes->filter(function (Node $node) {
+            $hm = $node->health_models;
+
+            return $hm === null || count($hm) > 0;
+        });
+
+        // #561: backend/model readiness is not the same as network reachability.
+        // Unknown or degraded/cold backends stay discoverable for compatibility
+        // and transparent UI display. Only an explicit `draining` report is an
+        // admission guard: the node is asking clients to avoid starting new work.
+        $nodes = self::filterBackendAdmission($nodes);
+
         // When ?model= is specified, exclude nodes that don't advertise the model at all.
         // Nodes with model_match=0.0 scored below MIN_SCORE anyway, but filtering early
         // is cheaper and makes intent obvious in the code path.
+        // #494: also exclude nodes whose reported health_models (if not null) don't include
+        // the requested model — they registered it but the runtime can't serve it right now.
         if ($model !== null) {
             $nodes = $nodes->filter(function (Node $node) use ($model) {
+                // If the node has reported health_models (not null), trust them over static
+                // capabilities: the runtime is the authority on what it can serve right now.
+                if ($node->health_models !== null) {
+                    return in_array($model, $node->health_models, true);
+                }
+                // Backward compat: no health_models reported yet — fall back to static caps.
                 foreach ($node->capabilities as $cap) {
                     if (in_array($model, $cap->models ?? [], true)) {
                         return true;
@@ -182,89 +240,127 @@ class NodeScorer
             ->take($limit)
             ->values();
 
-        return $scored->map(fn (array $item) => [
-            'node_id' => $item['node']->id,
-            'endpoint' => $item['node']->endpoint,
-            // spec v0.7.0 — native IICP binary endpoint; null when node only serves HTTP
-            'transport_endpoint' => $item['node']->transport_endpoint,
-            // #331 Phase A.1 / ADR-041 — NAT-traversal observability surfaced in discover
-            'transport_method' => $item['node']->transport_method,
-            'nat_type' => $item['node']->nat_type,
-            'transport_metadata' => $item['node']->transport_metadata,
-            // SDK identification surfaced so consumers / dashboards can
-            // render a language badge (#338 follow-up). Free-form for future
-            // C / C++ / Java / Go / WASM SDKs.
-            'sdk_language' => $item['node']->sdk_language,
-            'sdk_version' => $item['node']->sdk_version,
-            // IICP-CX S.16 §3.2 — X25519 public key surfaced so CX-Consumers can
-            // encrypt task payloads E2E to the node (#360). null = node does not
-            // support CX and MUST NOT receive CX-encrypted payloads.
-            'public_key' => $item['node']->cx_public_key,
-            // Address-family signal — 'ipv4' / 'ipv6' / 'dual' / 'unknown'.
-            // Derived from endpoint + transport_endpoint hosts so dashboards
-            // can render an IPv4/IPv6 badge per maintainer directive 2026-05-27.
-            'address_family' => $this->detectAddressFamily(
-                $item['node']->endpoint,
-                $item['node']->transport_endpoint,
-            ),
-            // #397 — transport protocols (http/https/iicp-native) so clients can
-            // prefer the native binary path without a second round-trip to detail.
-            'transport' => self::transportMethods(
-                $item['node']->endpoint,
-                $item['node']->transport_endpoint,
-            ),
-            'score' => round($item['score'], 4),
-            'latency_estimate_ms' => $item['node']->reputation?->observed_latency_ms !== null
-                ? (int) round($item['node']->reputation->observed_latency_ms)
-                : null,
-            'available' => $item['node']->available,
-            'relay_capable' => (bool) $item['node']->relay_capable,
-            // ADR-043 §9 — 8-category network exposure classification. Surfaced
-            // so consumers can prefer directly-reachable nodes (closes #372/#344
-            // live-verify gap: the column was stored but never serialized).
-            'exposure_mode' => $item['node']->exposure_mode,
-            // ADR-047 (#411) — reachability tier so clients prefer directly-dialable
-            // nodes and fall back to relay-routed ones. `direct` = dial-back verified;
-            // `relay` = heartbeating + routable surface, reach via relay (#341/#402).
-            'reachability_tier' => $item['node']->public_reachable ? 'direct' : 'relay',
-            // ADR-044 (#372) — composed per-node health label so clients can
-            // prefer healthy nodes without a second round-trip to node detail.
-            'health_label' => $this->health->forNode($item['node'])['label'],
-            'region' => $item['node']->region,
-            'reputation_score' => $item['node']->reputation?->score ?? 0.5,
-            'reputation_tier' => self::reputationTier($item['node']),
-            'max_concurrent' => $item['node']->max_concurrent,
-            'active_jobs' => $item['node']->active_jobs,
-            'load' => $item['node']->load,
-            'models' => $item['node']->capabilities->flatMap(fn ($c) => $c->models ?? [])->unique()->values()->all(),
-            // #408/ADR-046 — union of input modalities across this intent's capabilities
-            // (e.g. ["text","image"] when the node has a vision model). Default ["text"].
-            'input_modalities' => $item['node']->capabilities
-                ->flatMap(fn ($c) => $c->input_modalities ?: ['text'])->unique()->values()->all(),
-            'quantization' => $item['node']->capabilities->pluck('quantization')->filter()->unique()->values()->all(),
-            'inference_engine' => $item['node']->capabilities->pluck('inference_engine')->filter()->unique()->values()->all(),
-            'backend' => $item['node']->backend,
-            // CIP-D1: Provider opt-in policy block (spec S.12 §2.1)
-            'cip_policy' => [
-                'allow_remote_inference' => (bool) $item['node']->allow_remote_inference,
-                'allow_tool_execution' => (bool) $item['node']->allow_tool_execution,
-                'allow_file_access' => (bool) $item['node']->allow_file_access,
-                'pricing_credits_per_1000' => $item['node']->pricing_credits_per_1000,
-            ],
-            // CIP conformance level per S.12 §5.2 (REP1)
-            'cip_conformance_level' => $item['node']->allow_remote_inference ? 'CIP-Provider' : 'CIP-None',
-            // ADR-019 pricing declaration
-            'pricing' => [
-                'credit_cost_multiplier' => $item['node']->credit_cost_multiplier ?? 1.0,
-                'pricing_model' => $item['node']->pricing_model ?? 'per_token',
-                'attested' => (bool) ($item['node']->attested ?? false),
-            ],
-        ])->all();
+        return $scored->map(function (array $item) use ($model, $scoreVersion): array {
+            $node = $item['node'];
+            $registeredModels = $this->registeredModels($node);
+            $liveModels = $this->liveModels($node, $registeredModels);
+            $health = $this->health->forNode($node);
+            $capabilitySummary = $this->capabilitySummary($node, $registeredModels, $liveModels);
+            $routingSignals = self::routingSignals($node, $health);
+            $out = [
+                'node_id' => $node->id,
+                'endpoint' => $node->endpoint,
+                // spec v0.7.0 — native IICP binary endpoint; null when node only serves HTTP
+                'transport_endpoint' => $node->transport_endpoint,
+                // #331 Phase A.1 / ADR-041 — NAT-traversal observability surfaced in discover
+                'transport_method' => $node->transport_method,
+                'nat_type' => $node->nat_type,
+                'transport_metadata' => $node->transport_metadata,
+                // SDK identification surfaced so consumers / dashboards can
+                // render a language badge (#338 follow-up). Free-form for future
+                // C / C++ / Java / Go / WASM SDKs.
+                'sdk_language' => $node->sdk_language,
+                'sdk_version' => $node->sdk_version,
+                // IICP-CX S.16 §3.2 — canonical X25519 public key surfaced under the
+                // same name used by REGISTER/storage so CX-Consumers can encrypt task
+                // payloads E2E to the node (#360). null = node does not support CX and
+                // MUST NOT receive CX-encrypted payloads.
+                'cx_public_key' => $node->cx_public_key,
+                // Deprecated compatibility alias: older discover/NODELIST text exposed
+                // this CX key as `public_key`. Keep it until the planned field unification
+                // cutover; fixed Rust clients tolerate both names and prefer cx_public_key.
+                'public_key' => $node->cx_public_key,
+                // Address-family signal — 'ipv4' / 'ipv6' / 'dual' / 'unknown'.
+                // Derived from endpoint + transport_endpoint hosts so dashboards
+                // can render an IPv4/IPv6 badge per maintainer directive 2026-05-27.
+                'address_family' => $this->detectAddressFamily(
+                    $node->endpoint,
+                    $node->transport_endpoint,
+                ),
+                // #397 — transport protocols (http/https/iicp-native) so clients can
+                // prefer the native binary path without a second round-trip to detail.
+                'transport' => self::transportMethods(
+                    $node->endpoint,
+                    $node->transport_endpoint,
+                ),
+                'score' => round($item['score'], 4),
+                'latency_estimate_ms' => $node->reputation?->observed_latency_ms !== null
+                    ? (int) round($node->reputation->observed_latency_ms)
+                    : null,
+                ...self::performanceSignals($node),
+                'available' => $node->available,
+                'relay_capable' => (bool) $node->relay_capable,
+                'probation' => ($node->reputation?->completed_tasks_count ?? 0) < 100,
+                'trust_progress' => self::trustProgress($node),
+                // ADR-043 §9 — 8-category network exposure classification. Surfaced
+                // so consumers can prefer directly-reachable nodes (closes #372/#344
+                // live-verify gap: the column was stored but never serialized).
+                'exposure_mode' => $node->exposure_mode,
+                // ADR-047 (#411) — reachability tier so clients prefer directly-dialable
+                // nodes and fall back to relay-routed ones. `direct` = dial-back verified;
+                // `relay` = heartbeating + routable surface, reach via relay (#341/#402).
+                // Deprecated display hint: see route_evidence/routing_hint/browser_usable
+                // for the split machine-readable routing contract.
+                'reachability_tier' => $node->public_reachable ? 'direct' : 'relay',
+                // Additive routing-signal split: discoverability, directory-observed
+                // reachability and browser usability are different facts. Keep the
+                // legacy reachability_tier above for one adoption window.
+                ...$routingSignals,
+                ...self::complianceSignals($node),
+                // ADR-044 (#372) — composed per-node health label so clients can
+                // prefer healthy nodes without a second round-trip to node detail.
+                'health_label' => $health['label'],
+                'health_confidence' => $health['confidence'] ?? null,
+                'region' => $node->region,
+                'reputation_score' => $node->reputation?->score ?? 0.5,
+                'reputation_tier' => self::reputationTier($node),
+                'max_concurrent' => $node->max_concurrent,
+                'active_jobs' => $node->active_jobs,
+                'load' => $node->load,
+                // #494: if health_models is reported, advertise only models currently live;
+                // otherwise fall back to static capabilities (backward compat, null = unknown).
+                'models' => $liveModels,
+                'capability_summary' => $capabilitySummary,
+                // #408/ADR-046 — union of input modalities across this intent's capabilities
+                // (e.g. ["text","image"] when the node has a vision model). Default ["text"].
+                'input_modalities' => $node->capabilities
+                    ->flatMap(fn ($c) => $c->input_modalities ?: ['text'])->unique()->values()->all(),
+                'quantization' => $node->capabilities->pluck('quantization')->filter()->unique()->values()->all(),
+                'inference_engine' => $node->capabilities->pluck('inference_engine')->filter()->unique()->values()->all(),
+                'backend' => $node->backend,
+                'backend_stability' => self::backendStability($node),
+                // CIP-D1: Provider opt-in policy block (spec S.12 §2.1)
+                'cip_policy' => [
+                    'allow_remote_inference' => (bool) $node->allow_remote_inference,
+                    'allow_tool_execution' => (bool) $node->allow_tool_execution,
+                    'allow_file_access' => (bool) $node->allow_file_access,
+                    'pricing_credits_per_1000' => $node->pricing_credits_per_1000,
+                ],
+                // CIP conformance level per S.12 §5.2 (REP1)
+                'cip_conformance_level' => $node->allow_remote_inference ? 'CIP-Provider' : 'CIP-None',
+                // ADR-019 pricing declaration
+                'pricing' => [
+                    'credit_cost_multiplier' => $node->credit_cost_multiplier ?? 1.0,
+                    'pricing_model' => $node->pricing_model ?? 'per_token',
+                    'attested' => (bool) ($node->attested ?? false),
+                ],
+            ];
+
+            if ($scoreVersion === 'v2_shadow') {
+                $out += $this->routingScoreV2($node, $health, $capabilitySummary, $model);
+            }
+
+            return $out;
+        })->all();
     }
 
     /**
-     * Reputation tier per S.12 §5.1.1 (REP2).
-     * Platinum requires score ≥ 0.85 AND identity age ≥ 720 h (30 days).
+     * Reputation tier per S.12 §5.1.1 (REP2) plus #554 observation gates.
+     *
+     * Score remains necessary but not sufficient for higher public trust tiers:
+     * Gold requires at least 100 completed observations, and Platinum requires
+     * at least 1000 completed observations plus identity age ≥ 720 h (30 days).
+     * This keeps sudden score jumps from being presented as sustained trust.
      *
      * Single source of truth for tier labels — consumed by the discover
      * endpoint AND the registry list/detail endpoints so the website renders
@@ -272,26 +368,688 @@ class NodeScorer
      */
     public static function reputationTier(Node $node): string
     {
-        // Bronze is the floor tier for all sub-Silver nodes (CIP spec v0.6.9,
-        // 2026-05-30): probation nodes (< 100 tasks) AND low-score post-probation
-        // nodes (score < 0.40) both emit "bronze"; "none" is retired.
-        $completedTasks = $node->reputation?->completed_tasks_count ?? 0;
-        if ($completedTasks < 100) {
-            return 'bronze';
-        }
         $score = $node->reputation?->score ?? 0.5;
+        $completed = (int) ($node->reputation?->completed_tasks_count ?? 0);
         if ($score < 0.40) {
             return 'bronze';
         }
         if ($score < 0.65) {
             return 'silver';
         }
+
+        // #554: high public tiers require sustained observed work, not only a
+        // score threshold. Nodes with too little evidence stay at the safer
+        // Silver display tier even if a local/test heartbeat jumps the score.
+        if ($completed < 100) {
+            return 'silver';
+        }
+
         if ($score < 0.85) {
             return 'gold';
         }
         $ageHours = $node->created_at?->diffInHours(now()) ?? 0;
 
-        return $ageHours >= 720 ? 'platinum' : 'gold';
+        return ($ageHours >= 720 && $completed >= 1000) ? 'platinum' : 'gold';
+    }
+
+    public static function trustProgress(Node $node): array
+    {
+        $completed = (int) ($node->reputation?->completed_tasks_count ?? 0);
+
+        return [
+            'completed_tasks' => $completed,
+            'gold_min_tasks' => 100,
+            'platinum_min_tasks' => 1000,
+            'tasks_until_gold' => max(0, 100 - $completed),
+            'tasks_until_platinum' => max(0, 1000 - $completed),
+            'probation' => $completed < 100,
+        ];
+    }
+
+    /**
+     * Additive routing-signal split for clients and dashboards.
+     *
+     * - directory_observed_reachable: true/false only when a recent active probe
+     *   produced evidence; null means no directory observation is available.
+     * - route_evidence: whether the current route is observed, self-attested, or
+     *   missing.
+     * - routing_hint: coarse client transport bucket, not a trust label.
+     * - browser_usable: true only for endpoints a normal HTTPS page may call.
+     *
+     * This intentionally does NOT change discovery eligibility; it replaces the
+     * overloaded meaning clients were reading into reachability_tier.
+     */
+    public static function routingSignals(Node $node, ?array $health = null): array
+    {
+        $observedReachable = self::directoryObservedReachable($health);
+
+        return [
+            'directory_observed_reachable' => $observedReachable,
+            'route_evidence' => $observedReachable !== null
+                ? 'directory_observed'
+                : (self::selfAttestsRoute($node) ? 'self_attested' : 'missing'),
+            'routing_hint' => self::routingHint($node),
+            'browser_usable' => self::browserUsableEndpoint($node->endpoint),
+        ];
+    }
+
+    public static function complianceSignals(Node $node): array
+    {
+        $sdkStatus = self::sdkStatus($node->sdk_version);
+        $keyReady = $node->cx_public_key !== null;
+
+        return [
+            'sdk_status' => $sdkStatus,
+            'sdk_baseline_version' => self::SDK_BASELINE_VERSION,
+            'upgrade_required' => $sdkStatus !== 'current',
+            'key_ready' => $keyReady,
+            'privacy_routing_status' => $keyReady ? 'key_ready' : 'transitional',
+            'auto_update' => [
+                'enabled' => $node->auto_update_enabled,
+                'interval_s' => $node->auto_update_interval_s,
+                'latest_seen' => $node->sdk_latest_seen,
+                'last_checked_at' => $node->sdk_update_last_checked_at?->toIso8601String(),
+                'error_class' => $node->sdk_update_error_class,
+                'evidence' => $node->auto_update_enabled === null ? 'unknown' : 'self_reported',
+            ],
+        ];
+    }
+
+    /**
+     * Task/inference latency and related QoS evidence (#560).
+     *
+     * These values describe model request performance, not operational
+     * reachability. They are kept out of NodeHealthService's liveness score so
+     * slow but reachable inference work does not make a node look network-degraded.
+     *
+     * @return array{performance: array<string,mixed>}
+     */
+    public static function performanceSignals(Node $node): array
+    {
+        $proxyObserved = self::positiveFloat($node->reputation?->observed_latency_ms);
+        $selfRecent = self::positiveFloat($node->avg_latency_ms_recent);
+        $selfLifetime = self::positiveFloat($node->avg_latency_ms);
+        $taskLatency = $proxyObserved ?? $selfRecent ?? $selfLifetime;
+
+        return [
+            'performance' => [
+                'task_latency_ms' => $taskLatency !== null ? (int) round($taskLatency) : null,
+                'task_latency_ms_basis' => self::taskLatencyBasis($proxyObserved, $selfRecent, $selfLifetime),
+                'proxy_observed_latency_ms' => $proxyObserved !== null ? round($proxyObserved, 2) : null,
+                'self_reported_recent_latency_ms' => $selfRecent !== null ? round($selfRecent, 2) : null,
+                'self_reported_lifetime_latency_ms' => $selfLifetime !== null ? round($selfLifetime, 2) : null,
+                'health_impact' => 'separate_from_operational_health',
+                'summary' => 'Task/inference latency is a performance signal, not a reachability-health input.',
+            ],
+        ];
+    }
+
+    private static function positiveFloat(mixed $value): ?float
+    {
+        return is_numeric($value) && (float) $value > 0 ? (float) $value : null;
+    }
+
+    private static function taskLatencyBasis(?float $proxyObserved, ?float $selfRecent, ?float $selfLifetime): string
+    {
+        return match (true) {
+            $proxyObserved !== null => 'proxy_observed_task',
+            $selfRecent !== null => 'self_reported_recent_task',
+            $selfLifetime !== null => 'self_reported_lifetime_task',
+            default => 'none',
+        };
+    }
+
+    /**
+     * Redacted provider-local backend/model readiness report (#561).
+     *
+     * This is intentionally separate from directory/node reachability health:
+     * - reachability says "can the directory or a client reach the serving surface?"
+     * - backend_stability says "is the provider's local model backend ready for new work?"
+     *
+     * Backward compatibility: nodes that do not report the block are "unknown",
+     * not unhealthy. Only explicit `draining` is used as a hard admission guard.
+     *
+     * @return array<string,mixed>
+     */
+    public static function backendStability(Node $node): array
+    {
+        $raw = is_array($node->backend_stability) ? $node->backend_stability : null;
+        if ($raw === null || $raw === []) {
+            return self::unknownBackendStability();
+        }
+
+        $state = self::coerceBackendToken($raw['backend_state'] ?? null, self::BACKEND_STATES, 'degraded');
+        $reason = self::coerceBackendToken($raw['reason_class'] ?? null, self::BACKEND_REASONS, 'observer_error');
+
+        return [
+            'backend_state' => $state,
+            'reason_class' => $reason,
+            'routing_guard' => self::BACKEND_ROUTING_GUARDS[$state] ?? 'none',
+            'evidence' => 'self_reported',
+            'retry_after_s' => self::optionalBackendInt($raw, 'retry_after_s'),
+            'drain_until' => self::optionalBackendInt($raw, 'drain_until'),
+            'summary' => self::backendSummaryText($state, $reason),
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private static function unknownBackendStability(): array
+    {
+        return [
+            'backend_state' => 'unknown',
+            'reason_class' => 'not_reported',
+            'routing_guard' => 'none',
+            'evidence' => 'not_reported',
+            'retry_after_s' => null,
+            'drain_until' => null,
+            'summary' => 'Backend stability has not been reported yet.',
+        ];
+    }
+
+    /** @param list<string> $allowed */
+    private static function coerceBackendToken(mixed $value, array $allowed, string $fallback): string
+    {
+        $token = is_string($value) ? $value : $fallback;
+
+        return in_array($token, $allowed, true) ? $token : $fallback;
+    }
+
+    /** @param array<string,mixed> $raw */
+    private static function optionalBackendInt(array $raw, string $field): ?int
+    {
+        return isset($raw[$field]) && is_numeric($raw[$field])
+            ? max(0, (int) $raw[$field])
+            : null;
+    }
+
+    private static function backendSummaryText(string $state, string $reason): string
+    {
+        if ($state === 'degraded') {
+            return self::BACKEND_REASON_SUMMARIES[$reason] ?? 'Backend reports degraded readiness.';
+        }
+
+        return self::BACKEND_STATE_SUMMARIES[$state] ?? 'Backend stability has not been reported yet.';
+    }
+
+    private static function filterBackendAdmission($nodes)
+    {
+        return $nodes->reject(
+            fn (Node $node) => self::backendStability($node)['routing_guard'] === 'avoid_for_admission'
+        );
+    }
+
+    /**
+     * Privacy-preserving health digest for list views.
+     *
+     * The full registry detail endpoint exposes the complete health vector. The
+     * list endpoint only needs enough evidence to explain why a routable/keyed
+     * node is labelled ready vs. watch without leaking endpoint details.
+     */
+    public static function healthSummary(?array $health): ?array
+    {
+        if ($health === null) {
+            return null;
+        }
+
+        return [
+            'score' => $health['score'] ?? null,
+            'label' => $health['label'] ?? null,
+            'display' => self::healthDisplay($health),
+            'confidence' => $health['confidence'] ?? null,
+            'evidence_level' => $health['evidence_level'] ?? null,
+            'latency_ms_basis' => $health['latency_ms_basis'] ?? null,
+            'observed' => (bool) ($health['observed'] ?? false),
+            'evaluated_at' => $health['evaluated_at'] ?? null,
+            'components' => [
+                'reachability' => $health['components']['reachability'] ?? null,
+                'latency' => $health['components']['latency'] ?? null,
+                'uptime' => $health['components']['uptime'] ?? null,
+                'stability' => $health['components']['stability'] ?? null,
+            ],
+        ];
+    }
+
+    /**
+     * Public display band for operational health.
+     *
+     * The raw ADR-044 label remains exposed as `label`. This display helper keeps
+     * public list/detail labels from flipping at the 84/85 healthy threshold when
+     * the practical signal is simply "usable, evidence still settling". It does
+     * not change routing/scoring rules.
+     */
+    private static function healthDisplay(array $health): array
+    {
+        $score = isset($health['score']) && is_numeric($health['score'])
+            ? (int) $health['score']
+            : null;
+        $raw = $health['label'] ?? null;
+
+        if ($raw === 'offline') {
+            return [
+                'label' => 'offline',
+                'tone' => 'neutral',
+                'raw_label' => $raw,
+                'near_threshold' => false,
+                'message' => 'No fresh heartbeat evidence is available.',
+            ];
+        }
+
+        if ($raw === 'critical' || ($score !== null && $score < 40)) {
+            return [
+                'label' => 'critical',
+                'tone' => 'danger',
+                'raw_label' => $raw,
+                'near_threshold' => false,
+                'message' => 'Current operational evidence indicates a real problem.',
+            ];
+        }
+
+        if ($raw === 'impaired' || ($score !== null && $score < 65)) {
+            return [
+                'label' => 'impaired',
+                'tone' => 'warning',
+                'raw_label' => $raw,
+                'near_threshold' => false,
+                'message' => 'Current operational evidence is weak enough to watch before routing.',
+            ];
+        }
+
+        if ($score !== null && $score >= 80 && $score < 85) {
+            return [
+                'label' => 'evidence limited',
+                'tone' => 'steady',
+                'raw_label' => $raw,
+                'near_threshold' => true,
+                'message' => 'The node is in the healthy-boundary confidence band; raw score and evidence remain visible.',
+            ];
+        }
+
+        if ($raw === 'healthy' || ($score !== null && $score >= 85)) {
+            return [
+                'label' => 'healthy',
+                'tone' => 'good',
+                'raw_label' => $raw,
+                'near_threshold' => false,
+                'message' => 'Recent operational evidence supports normal use.',
+            ];
+        }
+
+        return [
+            'label' => 'watch',
+            'tone' => 'warning',
+            'raw_label' => $raw,
+            'near_threshold' => false,
+            'message' => 'The node is usable only with caution until more operational evidence improves.',
+        ];
+    }
+
+    /**
+     * Plain-language status summary for public dashboards.  This is not used for
+     * scoring; it keeps UI wording honest by separating heartbeat presence,
+     * public routability, privacy readiness, client currency, and health.
+     */
+    public static function statusSummary(Node $node, ?array $health = null): array
+    {
+        $routing = self::routingSignals($node, $health);
+        $compliance = self::complianceSignals($node);
+        $backend = self::backendStability($node);
+        $trustProgress = self::trustProgress($node);
+        $heartbeating = self::isHeartbeating($node);
+        $publicRoutable = self::publicRoutable($node);
+        $reasons = self::statusSummaryReasons($node, $compliance, $heartbeating, $publicRoutable, $health);
+        $posture = self::statusPosture($routing, $compliance, $heartbeating, $publicRoutable, $health);
+
+        return [
+            'state' => $posture['state'],
+            'headline' => $posture['headline'],
+            'description' => $posture['description'],
+            'reasons' => $reasons,
+            'heartbeating' => $heartbeating,
+            'public_routable' => $publicRoutable,
+            'browser_usable' => (bool) ($routing['browser_usable'] ?? false),
+            'key_ready' => (bool) $compliance['key_ready'],
+            'client_current' => $compliance['sdk_status'] === 'current',
+            'backend_stability' => $backend,
+            'trust_progress' => $trustProgress,
+            'evidence_last_refreshed_at' => $health['evaluated_at'] ?? $node->last_seen?->toIso8601String(),
+            'evidence_source' => $health['evidence_level'] ?? null,
+            'health_basis' => $health['latency_ms_basis'] ?? null,
+            'evidence_gaps' => self::evidenceGaps($health, $routing, $compliance, $trustProgress),
+        ];
+    }
+
+    private static function statusSummaryReasons(
+        Node $node,
+        array $compliance,
+        bool $heartbeating,
+        bool $publicRoutable,
+        ?array $health
+    ): array {
+        $reasons = [
+            $heartbeating ? 'recent_heartbeat' : 'no_recent_heartbeat',
+            $publicRoutable
+                ? 'public_routable'
+                : ($node->endpoint_verified_dead_at !== null ? 'endpoint_confirmed_dead' : 'limited_or_unverified_reach'),
+            $compliance['key_ready'] ? 'key_ready' : 'encryption_key_missing',
+            $compliance['sdk_status'] === 'current' ? 'client_current' : 'client_upgrade_needed',
+        ];
+
+        if (($health['label'] ?? null) !== null) {
+            $reasons[] = 'health_'.$health['label'];
+        }
+
+        return $reasons;
+    }
+
+    private static function statusPosture(
+        array $routing,
+        array $compliance,
+        bool $heartbeating,
+        bool $publicRoutable,
+        ?array $health
+    ): array {
+        if (! $heartbeating) {
+            return [
+                'state' => 'not_seen',
+                'headline' => 'Not currently visible to the mesh.',
+                'description' => 'The directory has not seen a fresh heartbeat, so this node should not be treated as usable.',
+            ];
+        }
+
+        if (! $publicRoutable) {
+            return [
+                'state' => 'limited_reach',
+                'headline' => 'Alive, but not public-routable yet.',
+                'description' => 'The node is checking in, but normal public discovery cannot rely on reaching its serving endpoint.',
+            ];
+        }
+
+        if (! $compliance['key_ready']) {
+            return [
+                'state' => 'upgrade_privacy_needed',
+                'headline' => 'Reachable, but privacy upgrade needed.',
+                'description' => 'The node can be reached, but it does not advertise an IICP-CX encryption key, so strict clients must avoid plaintext fallback.',
+            ];
+        }
+
+        if ($compliance['sdk_status'] !== 'current') {
+            return [
+                'state' => 'upgrade_needed',
+                'headline' => 'Reachable, but client upgrade needed.',
+                'description' => 'The node is usable, but its client version is behind the current compatibility baseline.',
+            ];
+        }
+
+        if (($routing['routing_hint'] ?? null) === 'http_ipv6'
+            && ($routing['route_evidence'] ?? null) !== 'directory_observed') {
+            return [
+                'state' => 'direct_unverified',
+                'headline' => 'Direct IPv6 route is live, but not directory-verified.',
+                'description' => 'The node is checking in and advertises a direct IPv6 route, but this directory cannot currently confirm the endpoint from its own network path.',
+            ];
+        }
+
+        if (self::healthIsUsableForPublicDisplay($health)) {
+            $score = isset($health['score']) && is_numeric($health['score']) ? (int) $health['score'] : null;
+            $nearThreshold = $score !== null && $score >= 80 && $score < 85;
+
+            return [
+                'state' => 'ready',
+                'headline' => $nearThreshold
+                    ? 'Usable; health evidence is near the healthy threshold.'
+                    : 'Routable, key-ready, and currently healthy.',
+                'description' => $nearThreshold
+                    ? 'Raw health is still shown, but the public usability label is kept stable inside the healthy-boundary confidence band.'
+                    : 'Recent evidence supports normal routing, while reputation maturity still depends on completed task history.',
+            ];
+        }
+
+        return [
+            'state' => 'watch',
+            'headline' => 'Usable, but still building evidence.',
+            'description' => 'The node is routable and key-ready, but health, latency, uptime, or task-history evidence is still limited or mixed.',
+        ];
+    }
+
+    private static function healthIsUsableForPublicDisplay(?array $health): bool
+    {
+        if ($health === null) {
+            return false;
+        }
+
+        $label = $health['label'] ?? null;
+        if (in_array($label, ['offline', 'critical', 'impaired'], true)) {
+            return false;
+        }
+
+        $score = isset($health['score']) && is_numeric($health['score'])
+            ? (int) $health['score']
+            : null;
+
+        if ($score === null) {
+            return $label === 'healthy';
+        }
+
+        // Confidence band: avoid public "ready/watch" flapping around the
+        // healthy threshold. Raw score/label are still exposed separately.
+        return $score >= 80;
+    }
+
+    private static function evidenceGaps(?array $health, array $routing, array $compliance, array $trustProgress): array
+    {
+        $gaps = [];
+
+        if (($trustProgress['probation'] ?? true) === true) {
+            $remaining = (int) ($trustProgress['tasks_until_gold'] ?? 100);
+            $completed = (int) ($trustProgress['completed_tasks'] ?? 0);
+            $gaps[] = [
+                'code' => 'task_history_probation',
+                'message' => "{$completed}/100 completed tasks observed; {$remaining} more before Gold can apply.",
+            ];
+        }
+
+        if (($routing['routing_hint'] ?? null) === 'http_ipv6'
+            && ($routing['route_evidence'] ?? null) !== 'directory_observed') {
+            $gaps[] = [
+                'code' => 'ipv6_not_directory_verified',
+                'message' => 'Direct IPv6 endpoint is self-attested; this directory has not independently probed it.',
+            ];
+        } elseif (($routing['route_evidence'] ?? null) === 'self_attested') {
+            $gaps[] = [
+                'code' => 'route_self_attested',
+                'message' => 'Serving route is based on node/declaration evidence, not a fresh directory probe.',
+            ];
+        }
+
+        $latencyBasis = $health['latency_ms_basis'] ?? null;
+        if ($latencyBasis === 'none') {
+            $gaps[] = [
+                'code' => 'latency_missing',
+                'message' => 'No recent directory-observed route latency evidence is available yet.',
+            ];
+        } elseif ($latencyBasis === 'self_reported') {
+            $gaps[] = [
+                'code' => 'latency_self_reported',
+                'message' => 'Latency is self-reported task performance; operational route latency evidence is still limited.',
+            ];
+        }
+
+        foreach (['uptime', 'stability'] as $component) {
+            $value = $health['components'][$component] ?? null;
+            if ($value === null) {
+                $gaps[] = [
+                    'code' => "{$component}_evidence_missing",
+                    'message' => ucfirst($component).' evidence is not available yet.',
+                ];
+            } elseif (is_numeric($value) && (float) $value < 0.8) {
+                $gaps[] = [
+                    'code' => "{$component}_evidence_limited",
+                    'message' => ucfirst($component).' evidence is still limited or recently reset.',
+                ];
+            }
+        }
+
+        if (! (bool) ($compliance['key_ready'] ?? false)) {
+            $gaps[] = [
+                'code' => 'encryption_key_missing',
+                'message' => 'Node does not advertise an IICP-CX key; strict clients avoid plaintext fallback.',
+            ];
+        }
+
+        if (($compliance['sdk_status'] ?? 'unknown') !== 'current') {
+            $gaps[] = [
+                'code' => 'client_upgrade_needed',
+                'message' => 'Client is behind the current compatibility baseline.',
+            ];
+        }
+
+        if (($health['label'] ?? null) !== null && ($health['label'] ?? null) !== 'healthy') {
+            $gaps[] = [
+                'code' => 'health_not_healthy',
+                'message' => 'Operational health is not yet in the healthy band.',
+            ];
+        }
+
+        return $gaps;
+    }
+
+    public static function isHeartbeating(Node $node): bool
+    {
+        return (bool) $node->available
+            && $node->status === 'active'
+            && $node->last_seen !== null
+            && $node->last_seen->gte(Carbon::now()->subSeconds(self::EXPIRY_SECONDS));
+    }
+
+    public static function publicRoutable(Node $node): bool
+    {
+        return $node->endpoint_verified_dead_at === null
+            && (
+                (bool) $node->public_reachable
+                || in_array($node->exposure_mode, self::RELAY_REACHABLE_EXPOSURE_MODES, true)
+            );
+    }
+
+    private static function readinessMultiplier(Node $node): float
+    {
+        $multiplier = 1.0;
+        if (self::sdkStatus($node->sdk_version) !== 'current') {
+            $multiplier -= 0.08;
+        }
+        if ($node->cx_public_key === null) {
+            $multiplier -= 0.07;
+        }
+
+        return max(0.75, $multiplier);
+    }
+
+    public static function sdkStatus(?string $version): string
+    {
+        if ($version === null || trim($version) === '') {
+            return 'unknown';
+        }
+
+        return self::versionAtLeast($version, self::SDK_BASELINE_VERSION) ? 'current' : 'downlevel';
+    }
+
+    private static function versionAtLeast(string $version, string $baseline): bool
+    {
+        $a = self::versionParts($version);
+        $b = self::versionParts($baseline);
+        $n = max(count($a), count($b));
+        for ($i = 0; $i < $n; $i++) {
+            $x = $a[$i] ?? 0;
+            $y = $b[$i] ?? 0;
+            if ($x > $y) {
+                return true;
+            }
+            if ($x < $y) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /** @return list<int> */
+    private static function versionParts(string $version): array
+    {
+        $out = [];
+        foreach (explode('.', ltrim(trim($version), 'vV')) as $part) {
+            if (! preg_match('/^\d+/', $part, $m)) {
+                break;
+            }
+            $out[] = (int) $m[0];
+        }
+
+        return $out;
+    }
+
+    private static function directoryObservedReachable(?array $health): ?bool
+    {
+        if ($health === null) {
+            return null;
+        }
+
+        $evidence = $health['evidence_level'] ?? null;
+        $latencyBasis = $health['latency_ms_basis'] ?? null;
+        $reachability = $health['components']['reachability'] ?? null;
+
+        if ($evidence === 'directory_observed' || $evidence === 'mixed') {
+            return is_numeric($reachability) ? (float) $reachability > 0.0 : null;
+        }
+
+        // A directory probe latency exists only for a successful active probe.
+        if ($latencyBasis === 'directory_probe') {
+            return true;
+        }
+
+        return null;
+    }
+
+    private static function selfAttestsRoute(Node $node): bool
+    {
+        return (bool) $node->public_reachable
+            || (bool) $node->relay_capable
+            || $node->exposure_mode !== null;
+    }
+
+    private static function routingHint(Node $node): string
+    {
+        if ($node->relay_capable) {
+            return 'relay_service';
+        }
+
+        $endpoint = (string) $node->endpoint;
+        $scheme = strtolower((string) (parse_url($endpoint, PHP_URL_SCHEME) ?: ''));
+        if ($scheme === 'https') {
+            return 'https_direct';
+        }
+        if ($scheme === 'http') {
+            return self::hostFamily($endpoint) === 'ipv6' ? 'http_ipv6' : 'http_direct';
+        }
+
+        return 'unknown';
+    }
+
+    private static function browserUsableEndpoint(?string $endpoint): bool
+    {
+        if (! $endpoint) {
+            return false;
+        }
+
+        $scheme = strtolower((string) (parse_url($endpoint, PHP_URL_SCHEME) ?: ''));
+        if ($scheme === 'https') {
+            return true;
+        }
+        if ($scheme !== 'http') {
+            return false;
+        }
+
+        $host = (string) (parse_url($endpoint, PHP_URL_HOST) ?: '');
+        $host = strtolower(trim($host, '[]'));
+
+        return in_array($host, ['localhost', '127.0.0.1', '::1'], true);
     }
 
     /**
@@ -355,7 +1113,113 @@ class NodeScorer
                 + (self::W_REPUTATION * $reputationScore);
         }
 
+        // Strict demotion, not spec watering-down: downlevel or non-key-ready
+        // nodes remain visible for transition, but do not rank as peers with
+        // current SDK + CX evidence.
+        $score *= self::readinessMultiplier($node);
+
         return ['node' => $node, 'score' => $score];
+    }
+
+    /**
+     * Additive #548 capability summary. This is descriptive evidence, not a
+     * claim that one model is better than another.
+     *
+     * @param  list<string>  $registeredModels
+     * @param  list<string>  $liveModels
+     */
+    public function capabilitySummary(Node $node, ?array $registeredModels = null, ?array $liveModels = null): array
+    {
+        $registeredModels ??= $this->registeredModels($node);
+        $liveModels ??= $this->liveModels($node, $registeredModels);
+        $families = array_values(array_unique(array_map(fn (string $m) => $this->modelFamily($m), $liveModels)));
+        $families = array_values(array_filter($families, fn (string $f) => $f !== 'unknown'));
+
+        return [
+            'model_count_registered' => count($registeredModels),
+            'model_count_live' => count($liveModels),
+            'model_family_count' => count($families),
+            'modalities' => $node->capabilities
+                ->flatMap(fn ($c) => $c->input_modalities ?: ['text'])->unique()->values()->all(),
+            'context_window_max' => $node->capabilities->pluck('max_tokens')->filter()->max(),
+            'quality_evidence' => count($liveModels) > 0 ? 'self_declared' : 'none',
+        ];
+    }
+
+    /** @return list<string> */
+    private function registeredModels(Node $node): array
+    {
+        return $node->capabilities->flatMap(fn ($c) => $c->models ?? [])->unique()->values()->all();
+    }
+
+    /** @param list<string> $registeredModels @return list<string> */
+    private function liveModels(Node $node, array $registeredModels): array
+    {
+        return $node->health_models !== null
+            ? array_values(array_intersect($registeredModels, $node->health_models))
+            : $registeredModels;
+    }
+
+    private function modelFamily(string $model): string
+    {
+        $m = strtolower($model);
+        foreach (['llama', 'qwen', 'mistral', 'deepseek', 'phi', 'gemma', 'nomic', 'mixtral', 'codellama'] as $family) {
+            if (str_contains($m, $family)) {
+                return $family;
+            }
+        }
+
+        return 'unknown';
+    }
+
+    private function capabilityFitScore(array $summary, ?string $requestedModel): float
+    {
+        $breadth = min(1.0, log(1 + max(0, (int) $summary['model_count_live']), 2) / log(9, 2));
+        $modality = in_array('text', $summary['modalities'] ?? [], true) ? 1.0 : 0.5;
+        $qualityEvidence = ($summary['quality_evidence'] ?? 'none') === 'none' ? 0.0 : 0.5;
+        $exactModel = $requestedModel === null ? 0.5 : 1.0;
+
+        return round(0.45 * $exactModel + 0.30 * $breadth + 0.15 * $modality + 0.10 * $qualityEvidence, 4);
+    }
+
+    private function routingScoreV2(Node $node, array $health, array $capabilitySummary, ?string $requestedModel): array
+    {
+        $healthScore = max(0.0, min(1.0, ((float) ($health['score'] ?? 0)) / 100.0));
+        $capabilityFit = $this->capabilityFitScore($capabilitySummary, $requestedModel);
+        $loadScore = 1.0 - min($node->load, 1.0);
+        $capacityScore = $node->max_concurrent > 0
+            ? max(0.0, 1.0 - ($node->active_jobs / $node->max_concurrent))
+            : 0.0;
+        $loadCapacity = round(($loadScore + $capacityScore) / 2.0, 4);
+        $reputation = (float) ($node->reputation?->score ?? 0.5);
+        $latency = (float) ($health['components']['latency'] ?? 0.5);
+        $price = $node->pricing_credits_per_1000 !== null
+            ? max(0.0, min(1.0, 1.0 - ($node->pricing_credits_per_1000 / 10.0)))
+            : 0.5;
+        $policy = self::readinessMultiplier($node);
+
+        $score = 0.25 * $healthScore
+            + 0.20 * $capabilityFit
+            + 0.15 * $loadCapacity
+            + 0.15 * $reputation
+            + 0.10 * $latency
+            + 0.05 * $healthScore
+            + 0.05 * $price
+            + 0.05 * $policy;
+
+        return [
+            'routing_score_v2' => round($score, 4),
+            'routing_score_v2_components' => [
+                'health' => round($healthScore, 4),
+                'capability_fit' => $capabilityFit,
+                'load_capacity' => $loadCapacity,
+                'reputation' => round($reputation, 4),
+                'latency' => round($latency, 4),
+                'uptime_stability' => round($healthScore, 4),
+                'price' => round($price, 4),
+                'policy_fit' => round($policy, 4),
+            ],
+        ];
     }
 
     private function computeModelMatch(Node $node, string $model): float
@@ -398,8 +1262,8 @@ class NodeScorer
      */
     private function detectAddressFamily(?string $endpoint, ?string $transportEndpoint): string
     {
-        $primary = $this->hostFamily($endpoint);
-        $tcp = $this->hostFamily($transportEndpoint);
+        $primary = self::hostFamily($endpoint);
+        $tcp = self::hostFamily($transportEndpoint);
         if ($primary === 'unknown' && $tcp === 'unknown') {
             return 'unknown';
         }
@@ -419,7 +1283,7 @@ class NodeScorer
         return $primary !== 'unknown' ? $primary : $tcp;
     }
 
-    private function hostFamily(?string $url): string
+    private static function hostFamily(?string $url): string
     {
         if (! $url) {
             return 'unknown';

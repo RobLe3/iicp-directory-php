@@ -22,6 +22,7 @@ class NodeEvent extends Model
         'node_id',
         'ts_ms',
         'payload',
+        'prev_hash',
         'signature',
     ];
 
@@ -39,5 +40,19 @@ class NodeEvent extends Model
         'REPUTATION_UPDATE',
         'CREDIT_AWARD',
         'DEREGISTER',
+        // ADR-048 (#374): per-node, per-evaluator health vector gossiped for
+        // federation-wide mesh_health aggregation.
+        'HEALTH',
+        // #310 / spec/iicp-recognition.md §5.4 — founder-ordinal recognition (signed on the
+        // #458 hash-chain). FOUNDER_LOCKIN assigns the immutable ordinal after lock-in;
+        // FOUNDER_SUCCESSION transfers an already-locked ordinal's current-holder.
+        'FOUNDER_LOCKIN',
+        'FOUNDER_SUCCESSION',
+        // Uptime tracking (#508): session lifecycle events that make cumulative node
+        // uptime computable from the signed event log rather than approximated.
+        // EVICT: emitted by LivenessMonitor when a node transitions active→dormant.
+        // REACTIVATE: emitted by HeartbeatController when a dormant node sends a heartbeat.
+        'EVICT',
+        'REACTIVATE',
     ];
 }

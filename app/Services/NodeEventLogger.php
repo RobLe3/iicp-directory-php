@@ -18,11 +18,21 @@ use Illuminate\Support\Str;
  */
 class NodeEventLogger
 {
+    /**
+     * Hash-chain genesis root (#458): SHA256_hex("iicp:dir:event-log:genesis:v1"). The
+     * prev_hash of the first signed event (or the first after an unsigned span) is this.
+     * MUST equal iicp-directory-rs federation::GENESIS_ROOT byte-for-byte.
+     */
+    public const GENESIS_ROOT = 'c44802bedf3e63b5a3f1634c5d19263634f92f26dd15401b09b06dd53a80cf9d';
+
     public function log(string $eventType, string $nodeId, array $payload): NodeEvent
     {
         $eventId = (string) Str::uuid();
         $seq = (NodeEvent::max('seq') ?? 0) + 1;
         $tsMs = (int) (microtime(true) * 1000);
+        // Hash-chain link to the predecessor (#458): the tip event's signature seeds this
+        // event's prev_hash; GENESIS_ROOT when there is no signed predecessor.
+        $prevHash = $this->prevHash(NodeEvent::orderByDesc('seq')->value('signature'));
 
         return NodeEvent::create([
             'event_id' => $eventId,
@@ -31,12 +41,27 @@ class NodeEventLogger
             'node_id' => $nodeId,
             'ts_ms' => $tsMs,
             'payload' => $payload,
-            'signature' => $this->sign($eventId, $eventType, $seq, $tsMs, $payload),
+            'prev_hash' => $prevHash,
+            'signature' => $this->sign($eventId, $eventType, $seq, $tsMs, $payload, $prevHash),
         ]);
     }
 
     /**
-     * Compute Ed25519 signature per spec/iicp-federated-directory.md §3.4.
+     * prev_hash for an event whose predecessor's signature is $prevSig (#458): the
+     * SHA-256 (hex) of that 128-hex signature's ASCII bytes; GENESIS_ROOT when there is no
+     * signed predecessor. Chaining on the signature (a hex string identical on the wire
+     * across implementations) keeps prev_hash reproducible regardless of number canonicalization.
+     */
+    public function prevHash(?string $prevSig): string
+    {
+        return ($prevSig === null || $prevSig === '')
+            ? self::GENESIS_ROOT
+            : hash('sha256', $prevSig);
+    }
+
+    /**
+     * Compute Ed25519 signature per spec/iicp-federated-directory.md §3.4 (#458: prev_hash
+     * is bound into the signing input, making the log a tamper-evident chain).
      * Returns null when no genesis key is configured (Phase 6B opt-in).
      */
     private function sign(
@@ -44,7 +69,8 @@ class NodeEventLogger
         string $eventType,
         int $seq,
         int $tsMs,
-        array $payload
+        array $payload,
+        string $prevHash
     ): ?string {
         $hexKey = config('app.genesis_ed25519_secret_key');
         if (! $hexKey || strlen($hexKey) !== 128) {
@@ -52,9 +78,9 @@ class NodeEventLogger
         }
 
         $secretKey = sodium_hex2bin($hexKey);
-        $payloadHash = hash('sha256', $this->canonicalJson($payload));
+        $payloadHash = hash('sha256', self::canonicalJson($payload));
         $message = hash('sha256',
-            implode(':', [$eventId, $eventType, (string) $seq, (string) $tsMs, $payloadHash]),
+            implode(':', [$eventId, $eventType, (string) $seq, (string) $tsMs, $payloadHash, $prevHash]),
             true
         );
 
@@ -64,16 +90,27 @@ class NodeEventLogger
     /**
      * Deterministic JSON serialization — key-sorted, no whitespace.
      * Sufficient for spec §3.4; full RFC 8785 compliance added in Phase 6B.
+     * Public + static since #508: the compliance-attestation endpoint signs with
+     * the same canonical form so external verifiers need ONE canonicalization rule.
+     *
+     * NO JSON_PRESERVE_ZERO_FRACTION: a whole-number float (e.g. credit_cost_multiplier
+     * 1.0) loses its fraction on the storage/wire round-trip (DB JSON column + the
+     * /api/v1/events json_encode + json_decode → integer 1), so signing it as "1.0"
+     * made the signature UNVERIFIABLE from the transmitted payload — by the seed itself
+     * and by any replica (DIR-FED-01). Dropping the flag serializes 1.0 and 1 alike as
+     * "1" (RFC 8785 / JCS behaviour), so the signed canonical form is reproducible from
+     * the wire and matches the Rust replica's serde_json canonicalisation. Regression:
+     * tests/Feature/NodeEventLoggerSignatureTest::test_signature_verifies_after_wire_roundtrip.
      */
-    private function canonicalJson(array $data): string
+    public static function canonicalJson(array $data): string
     {
         ksort($data);
         foreach ($data as &$v) {
             if (is_array($v)) {
-                $v = json_decode($this->canonicalJson($v), true);
+                $v = json_decode(self::canonicalJson($v), true);
             }
         }
 
-        return json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
+        return json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 }

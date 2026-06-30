@@ -5,6 +5,7 @@
 namespace App\Jobs;
 
 use App\Models\TelemetryProbe;
+use Carbon\Carbon;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -23,6 +24,17 @@ class AggregateProbeMetricsJob implements ShouldQueue
         '7d' => '-7 days',
     ];
 
+    /**
+     * Measurement-defect cutoff (GAPS-020 / #508, 2026-06-11T11:25Z): before this
+     * instant every REACH probe constructed a fresh HTTP client + TLS context
+     * INSIDE its latency window, inflating recorded wall latencies by
+     * ~70-450ms. Those samples measure the probe's own bug, not the directory —
+     * excluding them from LATENCY percentiles is sensor recalibration, not
+     * history editing (pass/fail conformance counting is untouched; the rows
+     * themselves are retained). Inert once all windows roll past the cutoff.
+     */
+    private const LATENCY_VALID_FROM = '2026-06-11 11:25:00';
+
     public function handle(): void
     {
         foreach (self::WINDOWS as $label => $cutoff) {
@@ -33,18 +45,57 @@ class AggregateProbeMetricsJob implements ShouldQueue
     private function aggregateWindow(string $window, string $cutoff): void
     {
         $since = now()->modify($cutoff);
+        // Latency samples additionally start at the measurement-defect cutoff.
+        $latencySince = max($since, Carbon::parse(self::LATENCY_VALID_FROM, 'UTC'));
 
         // discover p95 from conformance latency samples
         $discoverSamples = TelemetryProbe::where('test_id', 'DIR-DISC-01')
             ->where('passed', true)
             ->whereNotNull('latency_ms')
-            ->where('probed_at', '>=', $since)
+            ->where('probed_at', '>=', $latencySince)
             ->pluck('latency_ms')
             ->sort()
             ->values();
 
         $this->writeAggregate($window, 'discover_p50_ms', $this->percentile($discoverSamples, 50));
         $this->writeAggregate($window, 'discover_p95_ms', $this->percentile($discoverSamples, 95));
+
+        // #508 latency decomposition: wall latency conflates three very different
+        // layers — the directory app (query_ms), the CDN edge (cf HIT), and the
+        // CDN→origin pull (cf EXPIRED/MISS, ~10× slower on shared hosting). The
+        // 5-min probe cadence aliases against the edge TTL so probes mostly
+        // sample the worst-case origin path that real users rarely hit. Aggregate
+        // each layer separately so directory_health can score what the directory
+        // actually controls.
+        $rows = TelemetryProbe::where('test_id', 'DIR-DISC-01')
+            ->where('passed', true)
+            ->whereNotNull('metadata')
+            ->where('probed_at', '>=', $latencySince)
+            ->get(['latency_ms', 'metadata']);
+
+        $query = collect();
+        $edge = collect();
+        $origin = collect();
+        foreach ($rows as $row) {
+            $meta = is_array($row->metadata) ? $row->metadata : json_decode((string) $row->metadata, true);
+            if (! is_array($meta)) {
+                continue;
+            }
+            if (isset($meta['directory_query_ms']) && is_numeric($meta['directory_query_ms'])) {
+                $query->push((float) $meta['directory_query_ms']);
+            }
+            if ($row->latency_ms !== null) {
+                if (($meta['cf_cache_status'] ?? null) === 'HIT') {
+                    $edge->push((float) $row->latency_ms);
+                } elseif (isset($meta['cf_cache_status'])) {
+                    $origin->push((float) $row->latency_ms);
+                }
+            }
+        }
+
+        $this->writeAggregate($window, 'discover_query_p50_ms', $this->percentile($query->sort()->values(), 50), $query->count());
+        $this->writeAggregate($window, 'discover_edge_p50_ms', $this->percentile($edge->sort()->values(), 50), $edge->count());
+        $this->writeAggregate($window, 'discover_origin_p50_ms', $this->percentile($origin->sort()->values(), 50), $origin->count());
 
         // heartbeat latency — from DIR-HB-02 (invalid-token rejection probe).
         // DIR-HB-02 measures the heartbeat endpoint's full request round-trip
@@ -54,7 +105,7 @@ class AggregateProbeMetricsJob implements ShouldQueue
         $hbSamples = TelemetryProbe::whereIn('test_id', ['DIR-HB-01', 'DIR-HB-02'])
             ->where('passed', true)
             ->whereNotNull('latency_ms')
-            ->where('probed_at', '>=', $since)
+            ->where('probed_at', '>=', $latencySince)
             ->pluck('latency_ms')
             ->sort()
             ->values();

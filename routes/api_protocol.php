@@ -2,7 +2,6 @@
 
 use App\Http\Controllers\AuditReportController;
 use App\Http\Controllers\BootstrapController;
-use App\Http\Controllers\CreditsController;
 use App\Http\Controllers\DeregisterController;
 use App\Http\Controllers\DiscoverController;
 use App\Http\Controllers\HeartbeatController;
@@ -10,6 +9,7 @@ use App\Http\Controllers\MeController;
 use App\Http\Controllers\NodeController;
 use App\Http\Controllers\PeersController;
 use App\Http\Controllers\RegisterController;
+use App\Http\Controllers\RelayTicketController;
 use App\Http\Controllers\TelemetryController;
 use App\Http\Middleware\LoadRedirect;
 use App\Http\Middleware\NodeTokenAuth;
@@ -43,13 +43,8 @@ Route::prefix('v1')->group(function () {
     Route::get('/me', MeController::class)
         ->middleware(NodeTokenAuth::class);
 
-    // Phase 3 — Credits system (all routes require node auth)
-    Route::middleware(NodeTokenAuth::class)->group(function () {
-        Route::get('/credits/balance', [CreditsController::class, 'balance']);
-        Route::get('/credits/transactions', [CreditsController::class, 'transactions']);
-        Route::get('/credits/quote', [CreditsController::class, 'quote']);
-        Route::post('/credits/award', [CreditsController::class, 'award']);
-    });
+    // Phase 3 — Credits system (all routes require node auth).
+    require __DIR__.'/api_protocol_credits.php';
 
     // REACH telemetry ingestion (probe token auth)
     Route::post('/telemetry/probe', [TelemetryController::class, 'store'])
@@ -62,4 +57,10 @@ Route::prefix('v1')->group(function () {
     // Trust-auditor declaration-divergence reports (#118 Part D) — node_token auth
     Route::post('/audit-report', AuditReportController::class)
         ->middleware([NodeTokenAuth::class, 'throttle:60,1']);
+
+    // Relay bind ticket issuance (#510 / DIR-RELAY-03). Authenticated by the
+    // worker's node_token; relays verify the directory signature offline.
+    Route::post('/relay/ticket', [RelayTicketController::class, 'issue'])
+        ->middleware([NodeTokenAuth::class, 'throttle:consumer-token']);
+
 });

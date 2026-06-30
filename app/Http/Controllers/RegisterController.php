@@ -140,6 +140,12 @@ class RegisterController extends Controller
             'operator_delegation.operator_pub' => ['required_with:operator_delegation', 'string', 'max:64'],
             'operator_delegation.not_after' => ['required_with:operator_delegation', 'integer', 'min:1'],
             'operator_delegation.sig' => ['required_with:operator_delegation', 'string', 'max:128'],
+            // #463/#464 — operator-identity attributes (only bound when a delegation verifies).
+            // display_name is the public handle; operator_created_at + operator_integrity_hash
+            // are the identity-integrity fields. contact/email is NEVER accepted here (private).
+            'operator_display_name' => ['sometimes', 'nullable', 'string', 'max:64', 'regex:/^[^\x00-\x1f\x7f]*$/'],
+            'operator_created_at' => ['sometimes', 'nullable', 'string', 'max:40'],
+            'operator_integrity_hash' => ['sometimes', 'nullable', 'string', 'size:64', 'regex:/^[0-9a-f]{64}$/'],
             'limits' => ['required', 'array'],
             'limits.max_concurrent' => ['required', 'integer', 'min:1', 'max:256'],
             'limits.tokens_per_min' => ['required', 'integer', 'min:1'],
@@ -179,6 +185,14 @@ class RegisterController extends Controller
             // C/C++/Java/Go SDKs can self-tag without a directory migration.
             'sdk_language' => ['sometimes', 'nullable', 'string', 'max:32', 'regex:/^[a-z0-9_-]+$/'],
             'sdk_version' => ['sometimes', 'nullable', 'string', 'max:32'],
+            // Optional updater evidence. Advisory only: clients are untrusted, but
+            // this lets the directory distinguish "old and self-updating" from
+            // "old and stuck" without weakening SDK-baseline policy.
+            'auto_update_enabled' => ['sometimes', 'nullable', 'boolean'],
+            'auto_update_interval_s' => ['sometimes', 'nullable', 'integer', 'min:300', 'max:86400'],
+            'sdk_latest_seen' => ['sometimes', 'nullable', 'string', 'max:32'],
+            'sdk_update_last_checked_at' => ['sometimes', 'nullable', 'date'],
+            'sdk_update_error_class' => ['sometimes', 'nullable', 'string', 'max:64'],
             // ADR-043 §9 — 8-category network exposure classification
             'exposure_mode' => ['sometimes', 'nullable', 'string', 'in:outbound_only,ipv4_public_direct,ipv4_cgnat_blocked,ipv6_direct_firewall_required,ipv6_direct_pinhole_available,relay_required,tunnel_required,dual_stack_available'],
             // IICP-CX S.16 §3.1 — X25519 public key advertisement for E2E payload
@@ -216,6 +230,11 @@ class RegisterController extends Controller
                     'error' => ['code' => 'IICP-E049', 'message' => 'cx_public_key update requires valid current_node_token'],
                 ], 403);
             }
+            if (str_starts_with($msg, 'IICP-E050:')) {
+                return response()->json([
+                    'error' => ['code' => 'IICP-E050', 'message' => 'routing-field change requires current_node_token ownership or the previous endpoint to be unreachable'],
+                ], 403);
+            }
             throw $e;
         }
 
@@ -236,11 +255,27 @@ class RegisterController extends Controller
             'region' => $validated['region'],
             'cip_policy' => $cipPolicy,
             'cip_conformance_level' => $cipPolicy['allow_remote_inference'] ? 'CIP-Provider' : 'CIP-None',
+            // #439 — carry reachability so a replica can serve /v1/discover (not just
+            // registry/nodes) for mirrored nodes. Discover filters on public_reachable=true
+            // OR exposure_mode in the relay-reachable set (NodeScorer); without these fields
+            // a replicated node was listed in registry but invisible to discover.
+            'public_reachable' => (bool) ($node->public_reachable ?? false),
+            'exposure_mode' => $node->exposure_mode,
             'pricing' => [
                 'credit_cost_multiplier' => $node->credit_cost_multiplier ?? 1.0,
                 'pricing_model' => $node->pricing_model ?? 'per_token',
                 'pricing_credits_per_1000' => $node->pricing_credits_per_1000 ?? null,
             ],
+            // #438 — carry the node's capabilities so a replica can serve /v1/discover
+            // for nodes registered AFTER its snapshot (the event log was otherwise
+            // capability-less → post-bootstrap nodes invisible on replicas). Only the
+            // discover-relevant fields; replicas rebuild capability rows from these.
+            'capabilities' => array_map(fn ($c) => [
+                'intent' => $c['intent'],
+                'models' => $c['models'],
+                'max_tokens' => $c['max_tokens'],
+                'input_modalities' => $c['input_modalities'] ?? ['text'],
+            ], $validated['capabilities']),
         ]);
 
         // Award free evaluation credits on registration (issue #306 — free tier).

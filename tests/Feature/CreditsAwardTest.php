@@ -59,8 +59,13 @@ class CreditsAwardTest extends TestCase
         $key = $overrides['_key'] ?? $this->hmacKey;
         $responseHash = $overrides['response_hash'] ?? hash('sha256', '{"result":"ok"}');
 
-        // Canonical string matches CreditsController::award() — includes response_hash (W-031)
-        $canonical = implode(':', [$taskId, (string) $tokens, $parent ?? '', $session ?? '', $nonce, $responseHash]);
+        // #490 — canonical string includes querying_node_id when present (prevents spoofing).
+        $queryingNodeId = $overrides['querying_node_id'] ?? null;
+        $canonicalParts = [$taskId, (string) $tokens, $parent ?? '', $session ?? '', $nonce, $responseHash];
+        if ($queryingNodeId !== null) {
+            $canonicalParts[] = $queryingNodeId;
+        }
+        $canonical = implode(':', $canonicalParts);
         $sig = hash_hmac('sha256', $canonical, $key);
 
         return array_merge([
@@ -201,6 +206,8 @@ class CreditsAwardTest extends TestCase
         $this->assertSame('task-event-test', $event->payload['task_id']);
         $this->assertSame(800, $event->payload['tokens_used']);
         $this->assertSame(0.5, (float) $event->payload['amount']);
+        $this->assertSame('legacy_unattributed', $event->payload['attribution']);
+        $this->assertSame(0.0, (float) $event->payload['trust_weight']);
     }
 
     // Spec §10.3: reject replayed nonce (IICP-E027)
@@ -308,5 +315,231 @@ class CreditsAwardTest extends TestCase
             ->assertStatus(200);
 
         $this->assertEqualsWithDelta(5.0, (float) Cache::get($hourKey, 0), 0.001);
+    }
+
+    // #488 — self-query neutrality: same operator_pubkey → award excluded, not an error.
+    public function test_award_excluded_when_querying_node_shares_operator_pubkey(): void
+    {
+        $operatorPubkey = 'ed25519:'.bin2hex(random_bytes(32));
+        $this->node->update(['operator_pubkey' => $operatorPubkey]);
+
+        // Querying node has the SAME operator — self-query scenario.
+        $queryingNode = Node::create([
+            'id' => '550e8400-e29b-41d4-a716-446655440099',
+            'endpoint' => 'https://querying.example.com',
+            'region' => 'eu-central',
+            'node_token_hash' => password_hash('querying-token-40-characters-exactly!', PASSWORD_BCRYPT),
+            'node_hmac_key' => bin2hex(random_bytes(32)),
+            'max_concurrent' => 2,
+            'tokens_per_min' => 5000,
+            'available' => true,
+            'last_seen' => now(),
+            'observed_source_ip' => '127.0.0.2',
+            'operator_pubkey' => $operatorPubkey,
+        ]);
+
+        $payload = $this->validReceipt(['querying_node_id' => $queryingNode->id]);
+        $response = $this->withToken($this->plainToken)
+            ->postJson('/api/v1/credits/award', $payload);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('excluded', true)
+            ->assertJsonPath('reason', 'self_query_excluded')
+            ->assertJsonPath('attribution', 'self_operator')
+            ->assertJsonPath('trust_weight', 0)
+            ->assertJsonPath('awarded', 0);
+
+        // Balance must not change.
+        $this->assertEqualsWithDelta(0.0, Credit::where('node_id', $this->node->id)->value('balance'), 0.001);
+        $this->assertDatabaseMissing('node_events', [
+            'event_type' => 'CREDIT_AWARD',
+            'node_id' => $this->node->id,
+        ]);
+    }
+
+    // WQ-098 — exact same serving/querying node is excluded even without operator identity.
+    public function test_award_excluded_when_querying_node_is_serving_node(): void
+    {
+        $payload = $this->validReceipt(['querying_node_id' => $this->node->id]);
+        $response = $this->withToken($this->plainToken)
+            ->postJson('/api/v1/credits/award', $payload);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('excluded', true)
+            ->assertJsonPath('reason', 'self_query_excluded')
+            ->assertJsonPath('attribution', 'self_node')
+            ->assertJsonPath('trust_weight', 0)
+            ->assertJsonPath('awarded', 0);
+
+        $this->assertEqualsWithDelta(0.0, Credit::where('node_id', $this->node->id)->value('balance'), 0.001);
+    }
+
+    // #488 — different operator_pubkey → award proceeds normally.
+    public function test_award_proceeds_when_querying_node_has_different_operator(): void
+    {
+        $this->node->update(['operator_pubkey' => 'ed25519:aaaa']);
+
+        $queryingNode = Node::create([
+            'id' => '550e8400-e29b-41d4-a716-446655440098',
+            'endpoint' => 'https://foreign.example.com',
+            'region' => 'us-west',
+            'node_token_hash' => password_hash('foreign-token-40-characters-exactly!!', PASSWORD_BCRYPT),
+            'node_hmac_key' => bin2hex(random_bytes(32)),
+            'max_concurrent' => 2,
+            'tokens_per_min' => 5000,
+            'available' => true,
+            'last_seen' => now(),
+            'observed_source_ip' => '127.0.0.3',
+            'operator_pubkey' => 'ed25519:bbbb',  // different operator
+        ]);
+
+        $payload = $this->validReceipt(['querying_node_id' => $queryingNode->id]);
+        $response = $this->withToken($this->plainToken)
+            ->postJson('/api/v1/credits/award', $payload);
+
+        $response->assertStatus(200)
+            ->assertJsonMissing(['excluded'])
+            ->assertJsonPath('awarded', 0.5)
+            ->assertJsonPath('attribution', 'attributed_cross_operator')
+            ->assertJsonPath('trust_weight', 1);
+    }
+
+    // #488 — absent querying_node_id → normal award path (backwards compatible).
+    public function test_award_without_querying_node_id_proceeds_normally(): void
+    {
+        $this->node->update(['operator_pubkey' => 'ed25519:aaaa']);
+
+        $payload = $this->validReceipt();  // no querying_node_id
+        $response = $this->withToken($this->plainToken)
+            ->postJson('/api/v1/credits/award', $payload);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('awarded', 0.5)
+            ->assertJsonPath('attribution', 'legacy_unattributed')
+            ->assertJsonPath('trust_weight', 0);
+    }
+
+    // WQ-098 — a signed but unknown querying_node_id is rejected, not treated as attributable.
+    public function test_award_rejects_unknown_querying_node_id_even_when_signed(): void
+    {
+        $payload = $this->validReceipt(['querying_node_id' => '550e8400-e29b-41d4-a716-44665544dead']);
+
+        $this->withToken($this->plainToken)
+            ->postJson('/api/v1/credits/award', $payload)
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'IICP-E027')
+            ->assertJsonPath('error.message', 'querying_node_id does not identify a registered node');
+    }
+
+    // #490 — spend: querying node balance debited on award when different operator.
+    public function test_award_debits_querying_node_when_different_operator(): void
+    {
+        $this->node->update(['operator_pubkey' => 'ed25519:serve-op']);
+
+        $queryingNode = Node::create([
+            'id' => '550e8400-e29b-41d4-a716-446655440099',
+            'endpoint' => 'https://querying.example.com',
+            'region' => 'us-east',
+            'node_token_hash' => password_hash('querying-token-40-characters-exact!!', PASSWORD_BCRYPT),
+            'node_hmac_key' => bin2hex(random_bytes(32)),
+            'max_concurrent' => 2,
+            'tokens_per_min' => 5000,
+            'available' => true,
+            'last_seen' => now(),
+            'observed_source_ip' => '127.0.0.4',
+            'operator_pubkey' => 'ed25519:query-op',  // different operator
+            'credit_balance' => 10.0,
+        ]);
+        // Seed querying node's ledger so debit has a record to decrement.
+        Credit::create(['node_id' => $queryingNode->id, 'balance' => 10.0]);
+
+        $payload = $this->validReceipt([
+            'querying_node_id' => $queryingNode->id,
+            'amount' => 0.5,
+            'tokens_used' => 500,
+        ]);
+        $response = $this->withToken($this->plainToken)
+            ->postJson('/api/v1/credits/award', $payload);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('awarded', 0.5)
+            ->assertJsonPath('spent', 0.5);
+
+        // Querying node balance reduced by the award amount.
+        $queryingBalance = Credit::where('node_id', $queryingNode->id)->value('balance');
+        $this->assertEqualsWithDelta(9.5, (float) $queryingBalance, 0.001,
+            'querying node balance must be debited by award amount');
+    }
+
+    // #490 — spend: award still succeeds when querying node has insufficient balance (best-effort).
+    public function test_award_succeeds_when_querying_node_has_insufficient_balance(): void
+    {
+        $this->node->update(['operator_pubkey' => 'ed25519:serve-op']);
+
+        $queryingNode = Node::create([
+            'id' => '550e8400-e29b-41d4-a716-44665544009a',
+            'endpoint' => 'https://broke.example.com',
+            'region' => 'us-east',
+            'node_token_hash' => password_hash('broke-token-40-characters-exactly!!!!', PASSWORD_BCRYPT),
+            'node_hmac_key' => bin2hex(random_bytes(32)),
+            'max_concurrent' => 2,
+            'tokens_per_min' => 5000,
+            'available' => true,
+            'last_seen' => now(),
+            'observed_source_ip' => '127.0.0.5',
+            'operator_pubkey' => 'ed25519:broke-op',
+            'credit_balance' => 0.0,
+        ]);
+        // No credit record for querying node (insufficient balance case).
+
+        $payload = $this->validReceipt([
+            'querying_node_id' => $queryingNode->id,
+            'amount' => 0.5,
+            'tokens_used' => 500,
+        ]);
+        $response = $this->withToken($this->plainToken)
+            ->postJson('/api/v1/credits/award', $payload);
+
+        // Server still gets credited — spend is best-effort.
+        $response->assertStatus(200)
+            ->assertJsonPath('awarded', 0.5)
+            ->assertJsonPath('spend_scope', 'operator_wallet')
+            ->assertJsonPath('spend_reason', 'insufficient_operator_wallet_balance');
+        $this->assertEqualsWithDelta(0.0, $response->json('spent'), 0.001);
+
+        $serverBalance = Credit::where('node_id', $this->node->id)->value('balance');
+        $this->assertEqualsWithDelta(0.5, (float) $serverBalance, 0.001,
+            'serving node must still be credited even when querying node has insufficient balance');
+    }
+
+    // #490 — HMAC includes querying_node_id to prevent spoofing: wrong QNI fails verification.
+    public function test_award_rejects_fabricated_querying_node_id(): void
+    {
+        // Sign WITHOUT querying_node_id in canonical, then send WITH querying_node_id.
+        // This simulates an attacker adding querying_node_id after signing.
+        $nonce = bin2hex(random_bytes(16));
+        $responseHash = hash('sha256', '{"result":"ok"}');
+        $taskId = 'task-spoof-test';
+        $tokens = 500;
+
+        // Sign with old formula (no querying_node_id) — canonical mismatch.
+        $canonicalOld = implode(':', [$taskId, (string) $tokens, '', '', $nonce, $responseHash]);
+        $sigOld = hash_hmac('sha256', $canonicalOld, $this->hmacKey);
+
+        $response = $this->withToken($this->plainToken)
+            ->postJson('/api/v1/credits/award', [
+                'node_id' => $this->node->id,
+                'task_id' => $taskId,
+                'tokens_used' => $tokens,
+                'nonce' => $nonce,
+                'expires_at' => now()->addSeconds(60)->toISOString(),
+                'signature' => $sigOld,
+                'response_hash' => $responseHash,
+                'amount' => 0.5,
+                'querying_node_id' => 'some-foreign-node-id',  // injected after signing
+            ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('error.code', 'IICP-E027');
     }
 }

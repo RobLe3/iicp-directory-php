@@ -53,6 +53,45 @@ class ReplicaEventApplierTest extends TestCase
         $this->assertTrue((bool) $node->available);
     }
 
+    public function test_register_applies_capabilities_for_replica_discover(): void
+    {
+        // #438 — a REGISTER event carrying capabilities must create capability rows on
+        // the replica, so /v1/discover (which INNER JOINs capabilities on the intent)
+        // returns the node. Without this, nodes registered after a replica's bootstrap
+        // snapshot are invisible on the replica.
+        $nodeId = '550e8400-e29b-41d4-a716-446655440005';
+        $r = $this->applier->apply($this->event('REGISTER', $nodeId, [
+            'endpoint' => 'https://node-cap.test',
+            'region' => 'eu-central',
+            'capabilities' => [
+                ['intent' => 'urn:iicp:intent:llm:chat:v1', 'models' => ['llama-3-8b'], 'max_tokens' => 4096, 'input_modalities' => ['text']],
+                ['intent' => 'urn:iicp:intent:audio:transcribe:v1', 'models' => ['whisper-1'], 'max_tokens' => 1],
+            ],
+        ]));
+
+        $this->assertSame(ReplicaEventApplier::RESULT_APPLIED, $r['status']);
+        $node = Node::find($nodeId);
+        $caps = $node->capabilities()->get();
+        $this->assertCount(2, $caps);
+        $chat = $caps->firstWhere('intent', 'urn:iicp:intent:llm:chat:v1');
+        $this->assertNotNull($chat, 'chat capability must exist for discover');
+        $this->assertEquals(['llama-3-8b'], $chat->models);
+        $this->assertEquals(['text'], $chat->input_modalities); // #408 default applied
+    }
+
+    public function test_register_capabilities_replace_idempotently(): void
+    {
+        // Re-applying REGISTER (or a changed capability set) replaces, never duplicates.
+        $nodeId = '550e8400-e29b-41d4-a716-446655440006';
+        $ev1 = $this->event('REGISTER', $nodeId, [
+            'endpoint' => 'https://n.test', 'region' => 'eu',
+            'capabilities' => [['intent' => 'urn:iicp:intent:llm:chat:v1', 'models' => ['m1'], 'max_tokens' => 1]],
+        ]);
+        $this->applier->apply($ev1);
+        $this->applier->apply($ev1); // idempotent
+        $this->assertSame(1, Node::find($nodeId)->capabilities()->count());
+    }
+
     public function test_register_is_idempotent(): void
     {
         $ev = $this->event('REGISTER', '550e8400-e29b-41d4-a716-446655440002', [

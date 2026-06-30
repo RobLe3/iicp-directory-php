@@ -3,9 +3,11 @@
 namespace Tests\Feature;
 
 use App\Models\Node;
+use App\Services\NodeRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class PricingDeclarationTest extends TestCase
@@ -196,5 +198,64 @@ class PricingDeclarationTest extends TestCase
         $node->refresh();
         $this->assertTrue((bool) $node->attested);
         $this->assertEquals(1.8, $node->credit_cost_multiplier);
+    }
+
+    // #489 — classifyModelTier: verify parameter-count parsing and tier boundaries.
+    #[DataProvider('modelTierProvider')]
+    public function test_classify_model_tier(array $models, string $expectedTier): void
+    {
+        $this->assertEquals(
+            $expectedTier,
+            NodeRegistry::classifyModelTier($models)
+        );
+    }
+
+    public static function modelTierProvider(): array
+    {
+        return [
+            'sub_1b: qwen0.5b' => [['qwen2.5:0.5b'], 'sub_1b'],
+            '7b: tinyllama-1b' => [['tinyllama:1b-instruct'], '7b'],  // 1.0 is not < 1 → 7b default
+            '7b: llama3-8b' => [['llama3.1:8b'], '7b'],
+            '7b: mistral-7b' => [['mistral:7b'], '7b'],
+            '13b: codellama-13b' => [['codellama:13b'], '13b'],
+            '7b: mixtral-8x7b' => [['mixtral:8x7b'], '7b'],  // "8" extracted → 7b (first match wins)
+            '70b: llama-70b' => [['llama3.1:70b'], '70b'],
+            '70b: qwen72b' => [['qwen:72b'], '70b'],
+            '100b+: llama-175b' => [['llama:175b'], '100b_plus'],
+            'no_match → 7b' => [['gpt-4o'], '7b'],
+            'multi: pick max' => [['qwen2.5:0.5b', 'llama3.1:70b'], '70b'],
+        ];
+    }
+
+    // #489 — compute ceiling: a 0.5B node declaring multiplier=100 is clamped to 0.05*3=0.15.
+    public function test_register_clamps_multiplier_to_tier_ceiling(): void
+    {
+        Http::fake(['*' => Http::response('', 200)]);
+
+        $payload = $this->basePayload;
+        $payload['capabilities'][0]['models'] = ['qwen2.5:0.5b'];
+        $payload['pricing'] = ['credit_cost_multiplier' => 100.0, 'pricing_model' => 'per_token'];
+
+        $response = $this->postJson('/api/v1/register', $payload);
+        $response->assertSuccessful();
+
+        $node = Node::first();
+        // sub_1b tier: 0.05 * 3 = 0.15
+        $this->assertEqualsWithDelta(0.15, (float) $node->credit_cost_multiplier, 0.001);
+    }
+
+    // #489 — a legitimate 7B multiplier (=2.5) is within the 1.0*3=3.0 ceiling → no clamp.
+    public function test_register_allows_multiplier_within_tier_ceiling(): void
+    {
+        Http::fake(['*' => Http::response('', 200)]);
+
+        $payload = $this->basePayload;
+        $payload['pricing'] = ['credit_cost_multiplier' => 2.5, 'pricing_model' => 'per_token'];
+
+        $response = $this->postJson('/api/v1/register', $payload);
+        $response->assertSuccessful();
+
+        $node = Node::first();
+        $this->assertEqualsWithDelta(2.5, (float) $node->credit_cost_multiplier, 0.001);
     }
 }

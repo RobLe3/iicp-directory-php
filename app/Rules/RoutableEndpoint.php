@@ -65,6 +65,33 @@ class RoutableEndpoint implements ValidationRule
      */
     public function __construct(private array $allowedSchemes = ['http', 'https']) {}
 
+    /**
+     * True if $ip is in a private, reserved, loopback, link-local (cloud-metadata),
+     * or CGNAT range — i.e. never a safe target for a directory-initiated probe.
+     *
+     * This is the resolved-IP counterpart to the literal-host checks below: the
+     * liveness-probe SSRF guard (IICP-E035, #535) resolves a DNS endpoint and runs
+     * every resolved address through this predicate before dialing, closing the
+     * "name that resolves to 169.254.169.254 / 127.0.0.1 / an RFC1918 host" gap.
+     */
+    public static function ipIsBlocked(string $ip): bool
+    {
+        // Reject anything that is not a valid PUBLIC IP. FILTER_FLAG_NO_PRIV_RANGE
+        // covers 10/8, 172.16/12, 192.168/16; NO_RES_RANGE covers 127/8, 0/8,
+        // 169.254/16 (link-local incl. 169.254.169.254 metadata), 240/4, ::1,
+        // fc00::/7, fe80::/10 and other reserved blocks.
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+            return true;
+        }
+        // CGNAT 100.64.0.0/10 (RFC 6598) is NOT flagged by NO_RES_RANGE — check explicitly.
+        $long = ip2long($ip);
+        if ($long !== false && ($long & 0xFFC00000) === (ip2long('100.64.0.0') & 0xFFC00000)) {
+            return true;
+        }
+
+        return false;
+    }
+
     public function validate(string $attribute, mixed $value, Closure $fail): void
     {
         if (config('app.env') === 'local' || config('app.env') === 'testing') {

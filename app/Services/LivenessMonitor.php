@@ -31,20 +31,49 @@ class LivenessMonitor
 {
     private const EXPIRY_SECONDS = 90;
 
+    public function __construct(private NodeEventLogger $eventLogger) {}
+
     public function expireStaleNodes(): int
     {
         $cutoff = Carbon::now()->subSeconds(self::EXPIRY_SECONDS);
+        $dormantSince = Carbon::now();
 
-        return Node::query()
+        // Fetch the nodes we're about to evict BEFORE updating so their last_seen
+        // values are captured for the EVICT event payload (uptime tracking #508).
+        $expiring = Node::query()
             ->where('status', 'active')
             ->where(function ($q) use ($cutoff) {
                 $q->whereNull('last_seen')
                     ->orWhere('last_seen', '<', $cutoff);
             })
+            ->get(['id', 'last_seen']);
+
+        if ($expiring->isEmpty()) {
+            return 0;
+        }
+
+        // Bulk update all matching nodes in one query (same cardinality as before).
+        Node::whereIn('id', $expiring->pluck('id'))
             ->update([
                 'available' => false,
                 'status' => 'dormant',
-                'dormant_since' => Carbon::now(),
+                'dormant_since' => $dormantSince,
             ]);
+
+        // Emit one EVICT event per expired node so UptimeService can close the
+        // session and compute cumulative uptime from the signed event log.
+        $dormantSinceMs = $dormantSince->timestamp * 1000;
+        foreach ($expiring as $node) {
+            $lastSeenMs = $node->last_seen
+                ? $node->last_seen->timestamp * 1000
+                : null;
+            $this->eventLogger->log('EVICT', $node->id, [
+                'reason' => 'heartbeat_expiry',
+                'last_seen_ms' => $lastSeenMs,
+                'dormant_since_ms' => $dormantSinceMs,
+            ]);
+        }
+
+        return $expiring->count();
     }
 }

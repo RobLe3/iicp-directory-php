@@ -22,6 +22,8 @@ class Node extends Model
         'available',
         'relay_capable',         // ADR-022: node can forward tasks to peers on behalf of consumers
         'backend',               // detected backend server flavor: ollama/lmstudio/vllm/llamacpp/anthropic/custom
+        'health_models',         // #494: runtime model list from last heartbeat; null=not reported yet
+        'backend_stability',      // #561: provider-local backend/model readiness; separate from network reachability
         'last_seen',
         'node_token_hash',
         'proxy_token_hash',      // #114: separate token for proxy telemetry auth
@@ -79,13 +81,23 @@ class Node extends Model
         'transport_endpoint',
         // #326 — separates externally-reachable from internal-only
         'public_reachable',
+        // #536 — confirmed-dead listed endpoint; default discover excludes until a probe clears it
+        'endpoint_verified_dead_at',
         // SDK identification — free-form so future languages can self-tag
         'sdk_language',
         'sdk_version',
+        // #521 follow-up — optional updater evidence from provider heartbeats
+        'auto_update_enabled',
+        'auto_update_interval_s',
+        'sdk_latest_seen',
+        'sdk_update_last_checked_at',
+        'sdk_update_error_class',
         // ADR-043 §9 — 8-category network exposure classification
         'exposure_mode',
         // IICP-CX S.16 §3.1 — X25519 public key for E2E payload confidentiality (#360)
         'cx_public_key',
+        // #495 iicp-dir.md §3.6 — Ed25519 gossip signing key for PEER_EXCHANGE auth
+        'gossip_public_key',
         // RT-01b (#381) — per-node hourly reputation velocity ceiling
         'rep_hourly_gain',
         'rep_hourly_window_start',
@@ -94,6 +106,7 @@ class Node extends Model
     protected $casts = [
         'available' => 'boolean',
         'public_reachable' => 'boolean',
+        'endpoint_verified_dead_at' => 'datetime',
         'relay_capable' => 'boolean',
         'allow_remote_inference' => 'boolean',
         'allow_tool_execution' => 'boolean',
@@ -122,10 +135,17 @@ class Node extends Model
         'tasks_failed_recent' => 'integer',
         'avg_latency_ms_recent' => 'float',
         'recent_window_start' => 'datetime',
+        // #494 — runtime health model list (null = not reported; [] = no models live)
+        'health_models' => 'array',
+        // #561 — redacted backend stability report from SDK observers
+        'backend_stability' => 'array',
         // #331 Phase A.1 / ADR-041 — NAT-traversal observability
         'transport_metadata' => 'array',
         // IICP-CX S.16 §3.1 — X25519 public key advertisement (#360)
         'cx_public_key' => 'array',
+        'auto_update_enabled' => 'boolean',
+        'auto_update_interval_s' => 'integer',
+        'sdk_update_last_checked_at' => 'datetime',
         // RT-01b (#381) — per-node hourly reputation velocity ceiling
         'rep_hourly_gain' => 'float',
         'rep_hourly_window_start' => 'datetime',

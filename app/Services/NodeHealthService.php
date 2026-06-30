@@ -27,27 +27,30 @@ use Illuminate\Support\Collection;
  */
 class NodeHealthService
 {
+    public function __construct(private ?UptimeService $uptime = null)
+    {
+        $this->uptime ??= new UptimeService;
+    }
+
     /** A heartbeat older than this means the node is offline (gate → score 0, excluded from mesh). */
     private const HEARTBEAT_TTL_SECONDS = 90;
 
     /** Below this many active nodes, a single mesh number is not meaningful. */
     private const MIN_MESH_SAMPLE = 3;
 
-    // Component weights — sum to 1.0. Reachability leads because an unreachable
-    // node cannot serve regardless of how good its other signals look.
-    private const W_REACHABILITY = 0.30;
+    // Component weights — sum to 1.0. Reachability dominates because an unreachable
+    // node cannot serve regardless of latency. Reputation is intentionally absent:
+    // health reflects operational liveness, not earned task history (#492 / ADR-044).
+    private const W_REACHABILITY = 0.70;
 
-    private const W_LATENCY = 0.25;
-
-    private const W_SUCCESS = 0.25;
-
-    private const W_REPUTATION = 0.20;
+    private const W_LATENCY = 0.30;
 
     /**
      * Per-node health vector. Returns score (0–100), label, the component
      * sub-scores, and `observed` — true when at least one component is backed
-     * by an independent signal (proxy-observed latency) rather than the node's
-     * own self-report.
+     * by a directory-observed operational signal rather than self-attested route
+     * metadata. Task/inference latency is intentionally not part of operational
+     * health; it is exposed separately as a performance/QoS signal (#560).
      */
     public function forNode(Node $node): array
     {
@@ -56,38 +59,52 @@ class NodeHealthService
                 'score' => 0,
                 'label' => 'offline',
                 'observed' => false,
+                'confidence' => 'none',
+                'evidence_level' => 'missing',
+                'latency_ms_basis' => 'none',
                 'components' => [
                     'liveness' => 0.0,
                     'reachability' => null,
                     'latency' => null,
-                    'success_rate' => null,
-                    'reputation' => null,
+                    'uptime' => null,
+                    'stability' => null,
+                    'freshness' => 0.0,
                 ],
                 'evaluated_at' => now()->toIso8601String(),
             ];
         }
 
-        $reach = $this->reachabilityScore($node);
-        [$lat, $latObserved] = $this->latencyScore($node);
-        $succ = $this->successScore($node);
-        $rep = $this->reputationScore($node);
+        [$reach, $reachBasis] = $this->reachabilityScore($node);
+        [$lat, $latObserved, $latBasis] = $this->latencyScore($node);
+        $observed = $latObserved || $reachBasis === 'directory_observed';
 
         $score01 = self::W_REACHABILITY * $reach
-            + self::W_LATENCY * $lat
-            + self::W_SUCCESS * $succ
-            + self::W_REPUTATION * $rep;
+            + self::W_LATENCY * $lat;
         $score = (int) round($score01 * 100);
+        if ($latBasis === 'none' && $score >= 85) {
+            // No observed/self-reported latency is insufficient evidence for a
+            // full "healthy" label. Keep the node reachable, but cap it below
+            // the healthy threshold until latency evidence arrives.
+            $score = 84;
+        }
+        $evidence = $this->evidenceLevel($reachBasis, $latBasis);
 
         return [
             'score' => $score,
             'label' => $this->label($score),
-            'observed' => $latObserved,
+            'observed' => $observed,
+            'confidence' => $this->confidence($evidence, $latBasis),
+            'evidence_level' => $evidence,
+            'latency_ms_basis' => $latBasis,
             'components' => [
                 'liveness' => 1.0,
                 'reachability' => round($reach, 3),
                 'latency' => round($lat, 3),
-                'success_rate' => round($succ, 3),
-                'reputation' => round($rep, 3),
+                // Verified lifecycle evidence: null means no signed lifecycle
+                // evidence exists yet, which is more honest than a fabricated score.
+                'uptime' => $this->uptime->uptimeScoreForNode($node->id),
+                'stability' => $this->uptime->stabilityScoreForNode($node->id),
+                'freshness' => 1.0,
             ],
             'evaluated_at' => now()->toIso8601String(),
         ];
@@ -143,7 +160,13 @@ class NodeHealthService
     {
         return Node::with('reputation')
             ->where('available', true)
+            ->where('status', 'active')
+            ->whereNull('endpoint_verified_dead_at')
             ->where('last_seen', '>=', now()->subSeconds(self::HEARTBEAT_TTL_SECONDS))
+            ->where(function ($q) {
+                $q->where('public_reachable', true)
+                    ->orWhereIn('exposure_mode', NodeScorer::RELAY_REACHABLE_EXPOSURE_MODES);
+            })
             ->get();
     }
 
@@ -163,7 +186,7 @@ class NodeHealthService
      * A probe is "recent" when it is within the last 10 minutes — matches the
      * every-5-minute probe cadence with a 2× safety margin.
      */
-    private function reachabilityScore(Node $node): float
+    private function reachabilityScore(Node $node): array
     {
         $recentProbe = TelemetryProbe::where('node_id', $node->id)
             ->where('probe_type', 'reachability')
@@ -172,41 +195,64 @@ class NodeHealthService
             ->first(['passed']);
 
         if ($recentProbe !== null) {
-            return $recentProbe->passed ? 1.0 : 0.0;
+            return [$recentProbe->passed ? 1.0 : 0.0, 'directory_observed'];
         }
 
-        // Phase A fallback: self-attested public_reachable flag.
-        if ($node->public_reachable) {
-            return 1.0;
+        // A confirmed-dead listed endpoint is stronger evidence than the
+        // node's self-attested exposure_mode/relay_capable flag.  Without this
+        // guard a dead Quick Tunnel or otherwise hidden endpoint can remain
+        // labelled "healthy" solely because it is still heartbeating to the
+        // directory.  The lifecycle/probe commands clear the flag after a
+        // successful probe, at which point normal self-attested fallback resumes.
+        if ($node->endpoint_verified_dead_at !== null) {
+            return [0.0, 'directory_observed'];
         }
 
-        return $node->relay_capable ? 0.5 : 0.0;
+        // Phase A fallback: self-attested signal.
+        //
+        // A node is "reachable" in Phase A when it self-attests a routable serving
+        // surface: dial-back-verified (public_reachable), relay-capable server
+        // (relay_capable), or any named ADR-043 exposure_mode (IPv6 direct, CGNAT,
+        // relay_required, tunnel, etc. — a null exposure_mode means internal/legacy).
+        //
+        // With W_REACHABILITY=0.70, the old 0.5 partial score made relay-tier and
+        // IPv6-behind-firewall nodes mathematically unable to reach "healthy"
+        // (0.70×0.5+0.30×1=0.65 < 0.85 threshold).  All three paths score 1.0 here
+        // because the node self-attests it can serve consumers (#492 follow-up).
+        if ($node->public_reachable || $node->relay_capable || $node->exposure_mode !== null) {
+            return [1.0, 'self_attested'];
+        }
+
+        return [0.0, 'missing'];
     }
 
     /**
-     * Prefer proxy-observed latency (independent) over the node's self-reported
-     * average; prefer the rolling recent window over lifetime. Returns
-     * [score, observed] where observed=true means an independent signal was used.
-     * ≤ 50ms → 1.0, ≥ 500ms → 0.0; no data → neutral 0.5.
+     * Operational latency is the directory-observed control/health surface
+     * latency, not model/task generation latency (#560).
+     *
+     * The task-latency columns (`reputations.observed_latency_ms`,
+     * `nodes.avg_latency_ms_recent`, `nodes.avg_latency_ms`) remain valuable
+     * performance/QoS signals, but using them here made busy nodes look less
+     * reachable than nodes with no traffic history. Health therefore uses:
+     *
+     * 1. recent directory reachability probe latency, when available
+     * 2. neutral 0.5 with low confidence, when no operational latency exists
+     *
+     * ≤ 50ms → 1.0, ≥ 500ms → 0.0; no operational data → neutral 0.5.
      */
     private function latencyScore(Node $node): array
     {
-        // observed_latency_ms (proxy-observed) is the independent signal. The
-        // self-reported columns default to 0.0 for a never-served node, so a
-        // value of 0 means "no measurement yet", not "0ms" — treat ≤0 as no data
-        // and prefer the rolling recent window over lifetime when it has data.
-        $observed = $node->reputation?->observed_latency_ms;
-        if ($observed !== null && $observed > 0) {
-            return [$this->latencyCurve((float) $observed), true];
+        $probeLatency = TelemetryProbe::where('node_id', $node->id)
+            ->where('probe_type', 'reachability')
+            ->whereNotNull('latency_ms')
+            ->where('probed_at', '>=', now()->subMinutes(10))
+            ->orderByDesc('probed_at')
+            ->value('latency_ms');
+        if ($probeLatency !== null && (float) $probeLatency > 0) {
+            return [$this->latencyCurve((float) $probeLatency), true, 'directory_probe'];
         }
 
-        foreach ([$node->avg_latency_ms_recent, $node->avg_latency_ms] as $self) {
-            if ($self !== null && $self > 0) {
-                return [$this->latencyCurve((float) $self), false];
-            }
-        }
-
-        return [0.5, false];
+        return [0.5, false, 'none'];
     }
 
     private function latencyCurve(float $ms): float
@@ -215,41 +261,12 @@ class NodeHealthService
     }
 
     /**
-     * Success ratio from the rolling recent window when present, else lifetime.
-     * 100% → 1.0, ≤ 70% → 0.0; no completed tasks yet → neutral 0.5.
+     * Public ADR-044 label mapping (0–100 int score → health label). Exposed so the
+     * federation resolver (ADR-048) buckets per-evaluator votes by the same vocabulary.
      */
-    private function successScore(Node $node): float
+    public function labelForScore(int $score): string
     {
-        [$total, $failed] = $this->taskCounts($node);
-
-        if ($total <= 0) {
-            return 0.5;
-        }
-
-        $pct = (($total - $failed) / $total) * 100.0;
-
-        return max(0.0, min(1.0, ($pct - 70.0) / 30.0));
-    }
-
-    /**
-     * Prefer the rolling recent window when it has any completed tasks, else
-     * lifetime totals. The recent columns default to 0 (not null), so we test
-     * for > 0 rather than for presence.
-     */
-    private function taskCounts(Node $node): array
-    {
-        if ((int) ($node->tasks_total_recent ?? 0) > 0) {
-            return [(int) $node->tasks_total_recent, (int) ($node->tasks_failed_recent ?? 0)];
-        }
-
-        return [(int) ($node->tasks_total ?? 0), (int) ($node->tasks_failed ?? 0)];
-    }
-
-    private function reputationScore(Node $node): float
-    {
-        $score = $node->reputation_score ?? $node->reputation?->score ?? 0.5;
-
-        return max(0.0, min(1.0, (float) $score));
+        return $this->label($score);
     }
 
     private function label(int $score): string
@@ -259,6 +276,33 @@ class NodeHealthService
             $score >= 65 => 'degraded',
             $score >= 40 => 'impaired',
             default => 'critical',
+        };
+    }
+
+    private function evidenceLevel(string $reachBasis, string $latBasis): string
+    {
+        $observed = in_array('directory_observed', [$reachBasis, $latBasis], true)
+            || in_array('directory_probe', [$reachBasis, $latBasis], true);
+        $self = in_array('self_attested', [$reachBasis, $latBasis], true)
+            || in_array('self_reported', [$reachBasis, $latBasis], true);
+
+        return match (true) {
+            $observed && $self => 'mixed',
+            $latBasis === 'proxy_observed' => 'proxy_observed',
+            $latBasis === 'directory_probe' => 'directory_observed',
+            $reachBasis === 'directory_observed' => 'directory_observed',
+            $self => 'self_attested',
+            default => 'missing',
+        };
+    }
+
+    private function confidence(string $evidenceLevel, string $latBasis): string
+    {
+        return match (true) {
+            $evidenceLevel === 'missing' => 'none',
+            $latBasis === 'none' => 'low',
+            $evidenceLevel === 'self_attested' => 'medium',
+            default => 'high',
         };
     }
 

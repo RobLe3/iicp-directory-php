@@ -39,10 +39,13 @@ class NodeTokenAuth
 
         // Phase 1 fallback: opaque node_token verified against bcrypt hash.
         // proxy_node_id is checked first for endpoints where node_id refers to a target node.
+        // X-Node-Id header is accepted as a convenience for CLI clients that can't easily
+        // inject a query-param into every authenticated GET request.
         if (! $node) {
             $nodeId = $request->route('id')
                 ?? $request->input('proxy_node_id')
-                ?? $request->input('node_id');
+                ?? $request->input('node_id')
+                ?? $request->header('X-Node-Id');
             if (! $nodeId) {
                 return response()->json([
                     'error' => ['code' => 'unauthorized', 'message' => 'node_id required for token auth'],

@@ -5,6 +5,7 @@
 namespace App\Services;
 
 use App\Models\Node;
+use App\Models\NodeHealthObservation;
 use App\Models\Replica;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
@@ -41,8 +42,13 @@ class ReplicaEventApplier
      *                                  (P6-1.3b-iv — required to reject tampered events; null means
      *                                  the replica is running in "trust-poll-source" mode, e.g. during
      *                                  bootstrap before the DID document is fetched).
+     * @param  string|null  $expectedPrevHash  #458: the prev_hash the event MUST carry to chain
+     *                                         onto the predecessor (= SHA256_hex of the last
+     *                                         applied signature). Null skips the continuity check
+     *                                         (e.g. the first event of a drain, where the
+     *                                         predecessor signature is unknown).
      */
-    public function apply(array $event, ?string $verifyKey = null): array
+    public function apply(array $event, ?string $verifyKey = null, ?string $expectedPrevHash = null): array
     {
         $type = $event['event_type'] ?? null;
         $nodeId = $event['node_id'] ?? null;
@@ -55,8 +61,17 @@ class ReplicaEventApplier
 
         if ($verifyKey !== null) {
             $sig = $event['sig'] ?? null;
-            if ($sig !== null && ! $this->verifySig($event, $verifyKey)) {
-                return $this->result(self::RESULT_REJECTED, 'Ed25519 signature verification failed', ['event_id' => $eventId]);
+            if ($sig !== null) {
+                // #458: hash-chain continuity — reject an event whose prev_hash does not link
+                // to the predecessor we just applied, even if its own signature is valid
+                // (defends against a seed deleting/inserting/reordering its log).
+                if ($expectedPrevHash !== null
+                    && (string) ($event['prev_hash'] ?? NodeEventLogger::GENESIS_ROOT) !== $expectedPrevHash) {
+                    return $this->result(self::RESULT_REJECTED, 'hash-chain continuity broken', ['event_id' => $eventId]);
+                }
+                if (! $this->verifySig($event, $verifyKey)) {
+                    return $this->result(self::RESULT_REJECTED, 'Ed25519 signature verification failed', ['event_id' => $eventId]);
+                }
             }
         }
 
@@ -67,6 +82,7 @@ class ReplicaEventApplier
             'REPLICA_REGISTERED' => $this->applyReplicaRegistered($nodeId, $payload, $eventId),
             'REPUTATION_DECAY' => $this->applyReputationDecay($nodeId, $payload, $eventId),
             'OPERATOR_OBSERVED' => $this->applyOperatorObserved($nodeId, $payload, $eventId),
+            'HEALTH' => $this->applyHealth($nodeId, $payload, $eventId),
             default => $this->result(self::RESULT_SKIPPED, "unsupported event_type: {$type}", $event),
         };
     }
@@ -93,6 +109,73 @@ class ReplicaEventApplier
         ]);
     }
 
+    /**
+     * HEALTH (ADR-048 / #374) — store the per-node, per-evaluator health snapshot so the
+     * federation-wide mesh_health read can resolve each node by majority-vote across
+     * evaluators. One row per (node_id, evaluator_did); the latest by `evaluated_at_ms`
+     * wins (staleness rule — an out-of-order replay of an older snapshot is a no-op).
+     *
+     * Record-only with respect to node state: HEALTH never mutates the Node row (the
+     * canonical aggregate is recomputed on read), mirroring OPERATOR_OBSERVED's discipline.
+     */
+    private function applyHealth(?string $nodeId, array $p, string $eventId): array
+    {
+        $evaluator = $p['evaluator_did'] ?? null;
+        if (! $nodeId || ! $evaluator || ! array_key_exists('score', $p)) {
+            return $this->result(self::RESULT_REJECTED, 'HEALTH missing node_id, evaluator_did, or score', ['event_id' => $eventId]);
+        }
+
+        $evaluatedAtMs = $this->healthEvaluatedAtMs($p);
+
+        $existing = NodeHealthObservation::where('node_id', $nodeId)
+            ->where('evaluator_did', $evaluator)
+            ->first();
+
+        // Staleness rule: never let an older snapshot overwrite a newer one.
+        if ($existing !== null && $existing->evaluated_at_ms >= $evaluatedAtMs) {
+            return $this->result(self::RESULT_SKIPPED, 'HEALTH older than stored snapshot', [
+                'event_id' => $eventId, 'node_id' => $nodeId, 'evaluator_did' => $evaluator,
+            ]);
+        }
+
+        NodeHealthObservation::updateOrCreate(
+            ['node_id' => $nodeId, 'evaluator_did' => $evaluator],
+            [
+                'score' => (float) $p['score'],
+                'label' => $p['label'] ?? null,
+                'components' => $p['components'] ?? null,
+                'evaluated_at_ms' => $evaluatedAtMs,
+                'event_id' => $eventId,
+            ]
+        );
+
+        return $this->result(self::RESULT_APPLIED, 'HEALTH applied', [
+            'event_id' => $eventId, 'node_id' => $nodeId, 'evaluator_did' => $evaluator,
+        ]);
+    }
+
+    /**
+     * Normalize the producer's evaluation time to unix ms. Accepts an explicit
+     * `evaluated_at_ms` (preferred — monotonic, no parse), or an ISO-8601
+     * `evaluated_at` string (the ADR-044 forNode vector shape). Falls back to 0 so a
+     * snapshot with no time is always treated as the oldest.
+     */
+    private function healthEvaluatedAtMs(array $p): int
+    {
+        if (isset($p['evaluated_at_ms']) && is_numeric($p['evaluated_at_ms'])) {
+            return (int) $p['evaluated_at_ms'];
+        }
+        if (! empty($p['evaluated_at'])) {
+            try {
+                return (int) (Carbon::parse($p['evaluated_at'])->valueOf());
+            } catch (\Throwable $e) {
+                return 0;
+            }
+        }
+
+        return 0;
+    }
+
     private function applyRegister(?string $nodeId, array $p, string $eventId): array
     {
         if (! $nodeId || empty($p['endpoint'])) {
@@ -116,11 +199,33 @@ class ReplicaEventApplier
             'credit_cost_multiplier' => $p['pricing']['credit_cost_multiplier'] ?? null,
             'pricing_model' => $p['pricing']['pricing_model'] ?? null,
             'attested' => $p['pricing']['attested'] ?? null,
+            // #439 — mirror reachability so the replica's /v1/discover surfaces the node
+            // (discover filters public_reachable=true OR exposure_mode in the relay set).
+            'public_reachable' => $p['public_reachable'] ?? null,
+            'exposure_mode' => $p['exposure_mode'] ?? null,
             'available' => true,
             'last_seen' => Carbon::now(),
         ], fn ($v) => $v !== null));
 
-        Node::updateOrCreate(['id' => $nodeId], $attrs);
+        $node = Node::updateOrCreate(['id' => $nodeId], $attrs);
+
+        // #438 — rebuild capability rows from the event so the replica can serve
+        // /v1/discover for this node (discover requires a capability matching the
+        // intent). Idempotent: the capability set is replaced wholesale per REGISTER.
+        if (! empty($p['capabilities']) && is_array($p['capabilities'])) {
+            $node->capabilities()->delete();
+            foreach ($p['capabilities'] as $cap) {
+                if (empty($cap['intent'])) {
+                    continue;
+                }
+                $node->capabilities()->create([
+                    'intent' => $cap['intent'],
+                    'models' => $cap['models'] ?? [],
+                    'max_tokens' => $cap['max_tokens'] ?? 1,
+                    'input_modalities' => $cap['input_modalities'] ?? ['text'],
+                ]);
+            }
+        }
 
         return $this->result(self::RESULT_APPLIED, 'REGISTER applied', ['event_id' => $eventId, 'node_id' => $nodeId]);
     }
@@ -199,12 +304,14 @@ class ReplicaEventApplier
     }
 
     /**
-     * Verify Ed25519 signature per S.13 §3.4. Signing input is:
-     *   SHA256_bin(event_id:event_type:seq:ts_ms:SHA256_hex(canonical_json(payload)))
+     * Verify Ed25519 signature per S.13 §3.4 (#458: prev_hash bound into the input). Input:
+     *   SHA256_bin(event_id:event_type:seq:ts_ms:SHA256_hex(canonical_json(payload)):prev_hash)
      * Sig is hex-encoded (128 chars). Returns true if valid, false otherwise.
      *
      * MUST match NodeEventLogger::sign() byte-for-byte — divergence here is a
-     * silent acceptance bug.
+     * silent acceptance bug. The event's own `prev_hash` field is used (legacy events
+     * without one fall back to GENESIS_ROOT); the in-order continuity check that the
+     * prev_hash actually links to the predecessor is enforced separately in apply().
      */
     private function verifySig(array $event, string $pubKey): bool
     {
@@ -219,6 +326,7 @@ class ReplicaEventApplier
             (string) ($event['seq'] ?? ''),
             (string) ($event['ts_ms'] ?? ''),
             $payloadHash,
+            (string) ($event['prev_hash'] ?? NodeEventLogger::GENESIS_ROOT),
         ]);
         $message = hash('sha256', $signingInput, true);
         try {
@@ -237,6 +345,10 @@ class ReplicaEventApplier
             }
         }
 
-        return json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
+        // NO JSON_PRESERVE_ZERO_FRACTION — must match NodeEventLogger::canonicalJson()
+        // byte-for-byte. The flag made a whole-number float sign as "1.0" but verify as
+        // "1" after the wire round-trip → verification failed (DIR-FED-01). See the note
+        // on NodeEventLogger::canonicalJson and NodeEventLoggerTest::test_signature_verifies_after_wire_roundtrip.
+        return json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 }

@@ -233,7 +233,9 @@ class ConformanceController extends Controller
             return null;
         }
         $decoded = base64_decode($encoded, true);
-        if ($decoded === false || strlen($decoded) !== SODIUM_CRYPTO_SIGN_SECRETKEYBYTES) {
+        // ed25519 secret key is 64 B (SODIUM_CRYPTO_SIGN_SECRETKEYBYTES) — hardcoded; that global is
+        // not reliably defined on the prod PHP (sodium polyfill) and 500s inside this namespace.
+        if ($decoded === false || strlen($decoded) !== 64) {
             return null;
         }
 

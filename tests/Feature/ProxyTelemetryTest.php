@@ -174,9 +174,13 @@ class ProxyTelemetryTest extends TestCase
         $this->assertDatabaseMissing('proxy_telemetry', ['node_id' => $target->id]);
     }
 
-    // Duplicate within same 60s time bucket is deduplicated
+    // Duplicate within same 60s time bucket is deduplicated. Clock frozen — without
+    // it the two POSTs can straddle a minute edge and land in different buckets
+    // (flake observed 2026-06-11); dedup must be exercised within ONE bucket.
     public function test_duplicate_within_time_bucket_deduplicated(): void
     {
+        $this->freezeTime();
+
         $proxy = $this->makeProxy();
         $target = $this->makeTargetNode();
 
@@ -511,6 +515,8 @@ class ProxyTelemetryTest extends TestCase
     // TRACE-22 (ADR-014): accepted report returns 202 with accepted=true; duplicate returns 200 with accepted=false
     public function test_trace22_duplicate_returns_200_not_202(): void
     {
+        $this->freezeTime(); // prevent time_bucket change mid-test (bucket = floor(now/60))
+
         $proxy = $this->makeProxy();
         $target = $this->makeTargetNode();
         $payload = $this->validPayload($target->id, $proxy->id);

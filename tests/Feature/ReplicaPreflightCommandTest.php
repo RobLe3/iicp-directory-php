@@ -48,7 +48,7 @@ class ReplicaPreflightCommandTest extends TestCase
 
         Http::fake([
             'https://replica.test/iicp/health' => Http::response('ok', 200),
-            'https://iicp.network/v1/events*' => Http::response(['genesis_hash' => 'abc'.str_repeat('0', 61)], 200),
+            'https://iicp.network/api/v1/events*' => Http::response(['genesis_hash' => 'abc'.str_repeat('0', 61)], 200),
             'https://replica.test/.well-known/did.json' => Http::response(['verificationMethod' => []], 200),
         ]);
 
@@ -68,7 +68,7 @@ class ReplicaPreflightCommandTest extends TestCase
         putenv('IICP_REPLICA_ED25519_SECRET_KEY='.bin2hex(sodium_crypto_sign_secretkey($kp)));
 
         Http::fake([
-            'https://iicp.network/v1/events*' => Http::response('upstream down', 503),
+            'https://iicp.network/api/v1/events*' => Http::response('upstream down', 503),
             'https://replica.test/iicp/health' => Http::response('ok', 200),
             'https://replica.test/.well-known/did.json' => Http::response(['verificationMethod' => []], 200),
         ]);
@@ -95,7 +95,7 @@ class ReplicaPreflightCommandTest extends TestCase
         $other_b64 = rtrim(strtr(base64_encode($other_pub), '+/', '-_'), '=');
 
         Http::fake([
-            'https://iicp.network/v1/events*' => Http::response(['genesis_hash' => 'abc'.str_repeat('0', 61)], 200),
+            'https://iicp.network/api/v1/events*' => Http::response(['genesis_hash' => 'abc'.str_repeat('0', 61)], 200),
             'https://replica.test/iicp/health' => Http::response('ok', 200),
             'https://replica.test/.well-known/did.json' => Http::response([
                 'verificationMethod' => [['publicKeyJwk' => ['kty' => 'OKP', 'crv' => 'Ed25519', 'x' => $other_b64]]],
@@ -122,7 +122,7 @@ class ReplicaPreflightCommandTest extends TestCase
         putenv('IICP_REPLICA_ED25519_SECRET_KEY='.bin2hex($secret));
 
         Http::fake([
-            'https://iicp.network/v1/events*' => Http::response([
+            'https://iicp.network/api/v1/events*' => Http::response([
                 'genesis_hash' => 'abc'.str_repeat('0', 61),
                 'events' => [],
             ], 200),
@@ -148,7 +148,7 @@ class ReplicaPreflightCommandTest extends TestCase
         putenv('IICP_REPLICA_ED25519_SECRET_KEY='.bin2hex(sodium_crypto_sign_secretkey($kp)));
 
         Http::fake([
-            'https://iicp.network/v1/events*' => Http::response(['genesis_hash' => 'x'], 200),
+            'https://iicp.network/api/v1/events*' => Http::response(['genesis_hash' => 'x'], 200),
         ]);
 
         $exit = $this->artisan('iicp:replica-preflight', [

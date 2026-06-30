@@ -78,6 +78,28 @@ class HeartbeatController extends Controller
             'pricing.declaration_signature' => ['sometimes', 'nullable', 'string', 'max:128'],
             // ADR-047 Part A (#411) — HMAC of the nonce issued in the previous response.
             'challenge_response' => ['sometimes', 'nullable', 'string', 'max:64'],
+            // #494 — runtime model list from the node's local backend (e.g. Ollama /api/tags).
+            // null/absent = SDK has not reported yet (backward compat, no filtering applied).
+            // [] = backend reports no models loaded right now.
+            // ['model:tag',...] = currently-live subset; discover filters to this intersection.
+            'health_models' => ['sometimes', 'nullable', 'array'],
+            'health_models.*' => ['string', 'max:128'],
+            // #561 — provider-local backend/model readiness, reported by SDK observers.
+            // This is deliberately separate from directory reachability health:
+            // a node can be network-reachable while its local backend is cold,
+            // loading, unstable, or draining. Store only the redacted public shape.
+            'backend_stability' => ['sometimes', 'nullable', 'array'],
+            'backend_stability.backend_state' => ['required_with:backend_stability', 'string', 'in:ok,degraded,draining'],
+            'backend_stability.reason_class' => ['required_with:backend_stability', 'string', 'in:ok,backend_cold,backend_loading,backend_unstable,observer_error'],
+            'backend_stability.retry_after_s' => ['sometimes', 'nullable', 'integer', 'min:0', 'max:86400'],
+            'backend_stability.drain_until' => ['sometimes', 'nullable', 'integer', 'min:0'],
+            // Optional updater evidence from SDKs. Advisory only; the directory
+            // still derives routing/compliance from observed version/key fields.
+            'auto_update_enabled' => ['sometimes', 'nullable', 'boolean'],
+            'auto_update_interval_s' => ['sometimes', 'nullable', 'integer', 'min:300', 'max:86400'],
+            'sdk_latest_seen' => ['sometimes', 'nullable', 'string', 'max:32'],
+            'sdk_update_last_checked_at' => ['sometimes', 'nullable', 'date'],
+            'sdk_update_error_class' => ['sometimes', 'nullable', 'string', 'max:64'],
         ]);
 
         $span = OtelTracer::startSpan($request, 'iicp.directory.heartbeat');
@@ -133,7 +155,42 @@ class HeartbeatController extends Controller
             $updates['attested'] = $pricing['attested'];
         }
 
+        // #494 — update health_models if the SDK reported them this beat.
+        // Explicit null means "clear" (operator reset); absent key = no change.
+        if (array_key_exists('health_models', $validated)) {
+            $updates['health_models'] = $validated['health_models'];
+        }
+        $updates += $this->backendStabilityUpdate($validated);
+        foreach ([
+            'auto_update_enabled',
+            'auto_update_interval_s',
+            'sdk_latest_seen',
+            'sdk_update_last_checked_at',
+            'sdk_update_error_class',
+        ] as $field) {
+            if (array_key_exists($field, $validated)) {
+                $updates[$field] = $validated[$field];
+            }
+        }
+
+        // Uptime tracking (#508): capture dormant state BEFORE the update clears it.
+        $wasDormant = $node->status === 'dormant';
+        $dormantSinceMs = ($wasDormant && $node->dormant_since)
+            ? $node->dormant_since->timestamp * 1000
+            : null;
+
         $node->update($updates);
+
+        // Emit REACTIVATE so UptimeService can open a new session in the signed log.
+        if ($wasDormant) {
+            $nowMs = (int) (microtime(true) * 1000);
+            $this->eventLogger->log('REACTIVATE', $node->id, [
+                'dormant_since_ms' => $dormantSinceMs,
+                'dormancy_duration_seconds' => $dormantSinceMs !== null
+                    ? (int) (($nowMs - $dormantSinceMs) / 1000)
+                    : null,
+            ]);
+        }
 
         $this->addressObserver->observe($node, $observedIp, 'heartbeat');
 
@@ -145,8 +202,12 @@ class HeartbeatController extends Controller
 
         if ($tasksSuccess > 0 || $tasksFailed > 0) {
             $this->reputation->upsert($node->id, $tasksSuccess, $tasksFailed, $avgLatencyMs);
-            // Accumulate lifetime jobs for bootstrap floor threshold
-            $node->increment('lifetime_jobs', $tasksSuccess + $tasksFailed);
+            // Accumulate lifetime jobs for bootstrap floor threshold. RT-01b
+            // (#525, G1a): clamp the advisory success contribution to a realistic
+            // per-heartbeat throughput ceiling so the tally can't be inflated
+            // toward the validation max (failures are not capped).
+            $countedSuccess = min($tasksSuccess, ReputationService::MAX_COUNTED_SUCCESS_PER_HEARTBEAT);
+            $node->increment('lifetime_jobs', $countedSuccess + $tasksFailed);
             // Reload reputation so the event carries the fresh post-upsert score.
             $node->load('reputation');
             $updatedScore = (float) ($node->reputation?->score ?? 0.5);
@@ -186,5 +247,40 @@ class HeartbeatController extends Controller
             // `challenge_response` next beat to prove liveness without dial-back.
             'challenge' => $nextChallenge,
         ]);
+    }
+
+    /** @param array<string,mixed> $validated @return array<string,mixed> */
+    private function backendStabilityUpdate(array $validated): array
+    {
+        return array_key_exists('backend_stability', $validated)
+            ? ['backend_stability' => $this->normalizeBackendStability($validated['backend_stability'])]
+            : [];
+    }
+
+    /**
+     * Keep only the public, SDK-standard backend stability fields.
+     *
+     * SDK observers may know local details (backend URLs, model names, exception
+     * messages). The directory stores none of those; it only keeps the coarse
+     * state/reason and optional timing hints needed for routing/admission.
+     */
+    private function normalizeBackendStability(?array $raw): ?array
+    {
+        if ($raw === null) {
+            return null;
+        }
+
+        $out = [
+            'backend_state' => (string) ($raw['backend_state'] ?? 'degraded'),
+            'reason_class' => (string) ($raw['reason_class'] ?? 'observer_error'),
+        ];
+
+        foreach (['retry_after_s', 'drain_until'] as $field) {
+            if (array_key_exists($field, $raw) && $raw[$field] !== null) {
+                $out[$field] = (int) $raw[$field];
+            }
+        }
+
+        return $out;
     }
 }

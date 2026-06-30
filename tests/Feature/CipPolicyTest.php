@@ -23,7 +23,7 @@ class CipPolicyTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        // DiscoverController caches results for 120s; flush so a prior test's cached
+        // DiscoverController caches results briefly; flush so a prior test's cached
         // discover for this intent can't bleed into this test's assertions (the local
         // array cache store survives RefreshDatabase). Keeps the discover test deterministic.
         Cache::flush();

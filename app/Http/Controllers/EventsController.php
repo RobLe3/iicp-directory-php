@@ -73,6 +73,7 @@ class EventsController extends Controller
                 'ts_ms' => $e->ts_ms,
                 'node_id' => $e->node_id,
                 'payload' => $e->payload,
+                'prev_hash' => $e->prev_hash,
                 'sig' => $e->signature,
                 'signer_did' => $signerDid,
             ])->all(),

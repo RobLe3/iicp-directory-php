@@ -3,6 +3,9 @@
 namespace Tests\Feature;
 
 use App\Models\Node;
+use App\Models\Operator;
+use App\Models\Reputation;
+use App\Models\TelemetryProbe;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -37,6 +40,40 @@ class DiscoverTest extends TestCase
         return $node;
     }
 
+    private function withReputation(Node $node, float $score = 0.5, int $completedTasks = 0): void
+    {
+        Reputation::create([
+            'node_id' => $node->id,
+            'score' => $score,
+            'tasks_total' => max(1, $completedTasks),
+            'tasks_failed' => 0,
+            'completed_tasks_count' => $completedTasks,
+            'avg_latency_ms' => 120.0,
+        ]);
+    }
+
+    public function test_discover_includes_operator_display_name_for_bound_nodes_never_the_key(): void
+    {
+        // #463 — a delegation-verified node surfaces its operator's public display_name in discover;
+        // an unbound node does not; the operator_pubkey is NEVER returned.
+        Operator::create(['operator_pubkey' => 'OPKEY', 'display_name' => 'ZeroKelvinMoralist']);
+        $this->createNode(['operator_pubkey' => 'OPKEY', 'operator_verified' => true], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1', 'models' => ['m'], 'max_tokens' => 4096,
+        ]]);
+        $this->createNode([], [[ // unbound node — no operator_display_name
+            'intent' => 'urn:iicp:intent:llm:chat:v1', 'models' => ['m'], 'max_tokens' => 4096,
+        ]]);
+
+        $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')->assertStatus(200);
+        $names = collect($resp->json('nodes'))->pluck('operator_display_name')->filter()->values()->all();
+        $fingerprints = collect($resp->json('nodes'))->pluck('operator_fingerprint')->filter()->values()->all();
+        $this->assertContains('ZeroKelvinMoralist', $names);
+        $this->assertCount(1, $names, 'only the bound node carries operator_display_name');
+        $this->assertContains(Operator::publicFingerprint('OPKEY'), $fingerprints);
+        $this->assertCount(1, $fingerprints, 'only the bound node carries operator_fingerprint');
+        $this->assertStringNotContainsString('OPKEY', $resp->getContent(), 'operator_pubkey must never be served');
+    }
+
     public function test_discovers_node_matching_intent(): void
     {
         $this->createNode([], [[
@@ -50,6 +87,135 @@ class DiscoverTest extends TestCase
         $response->assertStatus(200)
             ->assertJsonPath('count', 1)
             ->assertJsonStructure(['nodes' => [['node_id', 'endpoint', 'score', 'available', 'region']]]);
+    }
+
+    public function test_discover_includes_capability_summary_without_changing_default_score(): void
+    {
+        $this->createNode([], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['llama3:latest', 'qwen2.5:0.5b'],
+            'max_tokens' => 4096,
+            'input_modalities' => ['text'],
+        ]]);
+
+        $response = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1');
+
+        $response->assertStatus(200)
+            ->assertJsonStructure(['nodes' => [[
+                'score',
+                'performance' => ['task_latency_ms', 'task_latency_ms_basis', 'health_impact'],
+                'capability_summary' => ['model_count_registered', 'model_count_live', 'model_family_count', 'modalities', 'quality_evidence'],
+            ]]])
+            ->assertJsonMissingPath('nodes.0.routing_score_v2')
+            ->assertJsonPath('nodes.0.capability_summary.model_count_registered', 2)
+            ->assertJsonPath('nodes.0.capability_summary.model_count_live', 2);
+    }
+
+    public function test_discover_surfaces_degraded_backend_stability_without_hiding_node(): void
+    {
+        $this->createNode([
+            'backend_stability' => [
+                'backend_state' => 'degraded',
+                'reason_class' => 'backend_cold',
+            ],
+        ], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['llama3:latest'],
+            'max_tokens' => 4096,
+        ]]);
+
+        $response = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&limit=9');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('count', 1)
+            ->assertJsonPath('nodes.0.backend_stability.backend_state', 'degraded')
+            ->assertJsonPath('nodes.0.backend_stability.routing_guard', 'observe_only');
+    }
+
+    public function test_discover_excludes_backend_draining_nodes_from_normal_admission(): void
+    {
+        $cap = [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['llama3:latest'],
+            'max_tokens' => 4096,
+        ]];
+        $this->createNode(['endpoint' => 'https://ok.example.com'], $cap);
+        $this->createNode([
+            'endpoint' => 'https://draining.example.com',
+            'backend_stability' => [
+                'backend_state' => 'draining',
+                'reason_class' => 'backend_loading',
+                'retry_after_s' => 120,
+            ],
+        ], $cap);
+
+        $response = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&limit=8');
+
+        $response->assertStatus(200)->assertJsonPath('count', 1);
+        $this->assertSame('https://ok.example.com', $response->json('nodes.0.endpoint'));
+    }
+
+    public function test_discover_v2_shadow_adds_routing_score_without_replacing_v1_score(): void
+    {
+        $node = $this->createNode(['load' => 0.0, 'active_jobs' => 0], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['llama3:latest'],
+            'max_tokens' => 4096,
+        ]]);
+        $this->withReputation($node, score: 0.8, completedTasks: 200);
+
+        $response = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&score_version=v2_shadow');
+
+        $response->assertStatus(200)
+            ->assertJsonStructure(['nodes' => [[
+                'score',
+                'routing_score_v2',
+                'routing_score_v2_components' => ['health', 'capability_fit', 'load_capacity', 'reputation', 'latency', 'uptime_stability', 'price', 'policy_fit'],
+            ]]]);
+        $this->assertIsFloat($response->json('nodes.0.score'));
+        $this->assertIsFloat($response->json('nodes.0.routing_score_v2'));
+    }
+
+    /** @test #528 — ?relay_capable=true returns only relay-capable nodes (was a no-op param) */
+    public function test_relay_capable_filter_returns_only_relay_nodes(): void
+    {
+        $cap = [['intent' => 'urn:iicp:intent:llm:chat:v1', 'models' => ['llama-3-8b'], 'max_tokens' => 4096]];
+        $this->createNode(['relay_capable' => false], $cap);
+        $relay = $this->createNode(['relay_capable' => true], $cap);
+
+        // Unfiltered: both nodes.
+        $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')
+            ->assertStatus(200)->assertJsonPath('count', 2);
+
+        // Filtered: only the relay-capable node.
+        $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&relay_capable=true')
+            ->assertStatus(200)->assertJsonPath('count', 1);
+        $this->assertSame($relay->id, $resp->json('nodes.0.node_id'));
+    }
+
+    /**
+     * #528 follow-up — regression guard for the historical relay-capable/no-op + default-limit gap:
+     * even when non-relay nodes fill the first page, relay filtering must still return only relay-capable rows.
+     */
+    public function test_relay_capable_filter_is_respected_under_default_limit(): void
+    {
+        $cap = [['intent' => 'urn:iicp:intent:llm:chat:v1', 'models' => ['llama-3-8b'], 'max_tokens' => 4096]];
+
+        // 12 strong non-relay nodes (higher score), then 1 weak relay node.
+        // If relay filter is a no-op and default limit is small, relay would be omitted.
+        for ($i = 0; $i < 12; $i++) {
+            $this->withReputation($this->createNode(['relay_capable' => false], $cap), score: 0.95, completedTasks: 500);
+        }
+
+        $relay = $this->createNode(['relay_capable' => true], $cap);
+        $this->withReputation($relay, score: 0.05, completedTasks: 0);
+
+        $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&relay_capable=true')
+            ->assertStatus(200);
+
+        $this->assertSame(1, count($resp->json('nodes')));
+        $this->assertSame($relay->id, $resp->json('nodes.0.node_id'));
+        $this->assertSame(true, (bool) $resp->json('nodes.0.relay_capable'));
     }
 
     public function test_excludes_stale_nodes(): void
@@ -271,19 +437,19 @@ class DiscoverTest extends TestCase
 
     // --- S.12 §5.1.1 reputation_tier tests (REP2) ---
 
-    public function test_reputation_tier_bronze_during_probation(): void
+    public function test_reputation_tier_stays_silver_during_low_observation_fast_score_jump(): void
     {
-        // Nodes with < 100 completed tasks are always bronze (probation).
+        // #554: probation (<100 completed tasks) still appears no higher than Silver,
+        // even if the score has jumped above the Gold threshold.
         $intent = 'urn:iicp:intent:llm:chat:v1';
         $cap = [['intent' => $intent, 'models' => ['m'], 'max_tokens' => 100]];
         $node = $this->createNode([], $cap);
-        // Even a high score is bronze during probation.
         $node->reputation()->create(['score' => 0.75, 'completed_tasks_count' => 50]);
 
         $response = $this->getJson("/api/v1/discover?intent={$intent}");
 
         $response->assertStatus(200);
-        $this->assertSame('bronze', $response->json('nodes.0.reputation_tier'));
+        $this->assertSame('silver', $response->json('nodes.0.reputation_tier'));
     }
 
     public function test_reputation_tier_bronze_for_score_below_silver(): void
@@ -344,11 +510,11 @@ class DiscoverTest extends TestCase
 
     public function test_reputation_tier_platinum_for_high_score_and_sufficient_age(): void
     {
-        // score ≥ 0.85 AND identity age ≥ 720h AND ≥ 100 tasks → platinum
+        // score ≥ 0.85 AND identity age ≥ 720h AND ≥ 1000 tasks → platinum
         $intent = 'urn:iicp:intent:llm:chat:v1';
         $cap = [['intent' => $intent, 'models' => ['m'], 'max_tokens' => 100]];
         $node = $this->createNode([], $cap);
-        $node->reputation()->create(['score' => 0.92, 'completed_tasks_count' => 100]);
+        $node->reputation()->create(['score' => 0.92, 'completed_tasks_count' => 1000]);
         $node->created_at = now()->subHours(800);
         $node->save();
 
@@ -360,8 +526,7 @@ class DiscoverTest extends TestCase
 
     public function test_reputation_tier_silver_is_default_when_no_reputation_record(): void
     {
-        // No reputation record → 0 completed tasks → bronze (probation).
-        // The silver default was removed when probation was introduced.
+        // No reputation record → default score 0.5 → silver tier (score-based, no probation gate).
         $intent = 'urn:iicp:intent:llm:chat:v1';
         $cap = [['intent' => $intent, 'models' => ['m'], 'max_tokens' => 100]];
         $this->createNode([], $cap);
@@ -369,14 +534,14 @@ class DiscoverTest extends TestCase
         $response = $this->getJson("/api/v1/discover?intent={$intent}");
 
         $response->assertStatus(200);
-        $this->assertSame('bronze', $response->json('nodes.0.reputation_tier'));
+        $this->assertSame('silver', $response->json('nodes.0.reputation_tier'));
     }
 
     public function test_discover_response_includes_public_cache_control_header(): void
     {
-        // Discover is public and unauthenticated — CDN caching must be enabled
-        // via Cache-Control: public, max-age=60, s-maxage=300, stale-while-revalidate=120
-        // (#324 v1.9.22 tuning; pairs with Laravel Cache::remember TTL 120s).
+        // Discover is public and unauthenticated, but it carries live serving
+        // URLs. Keep CDN staleness short so browser dispatch and relay election
+        // see Quick Tunnel rotations quickly.
         $intent = 'urn:iicp:intent:llm:chat:v1';
         $this->createNode([], [['intent' => $intent, 'models' => ['m'], 'max_tokens' => 100]]);
 
@@ -385,9 +550,9 @@ class DiscoverTest extends TestCase
         $response->assertStatus(200);
         $cacheControl = $response->headers->get('Cache-Control', '');
         $this->assertStringContainsString('public', $cacheControl);
-        $this->assertStringContainsString('max-age=60', $cacheControl);
-        $this->assertStringContainsString('s-maxage=300', $cacheControl);
-        $this->assertStringContainsString('stale-while-revalidate=120', $cacheControl);
+        $this->assertStringContainsString('max-age=5', $cacheControl);
+        $this->assertStringContainsString('s-maxage=10', $cacheControl);
+        $this->assertStringContainsString('stale-while-revalidate=5', $cacheControl);
     }
 
     public function test_cip_capable_filter_returns_only_cip_provider_nodes(): void
@@ -525,6 +690,10 @@ class DiscoverTest extends TestCase
         $response->assertStatus(200);
         $this->assertSame(1, $response->json('count'), 'heartbeating routable node must be discoverable via relay tier');
         $this->assertSame('relay', $response->json('nodes.0.reachability_tier'));
+        $this->assertNull($response->json('nodes.0.directory_observed_reachable'));
+        $this->assertSame('self_attested', $response->json('nodes.0.route_evidence'));
+        $this->assertSame('http_ipv6', $response->json('nodes.0.routing_hint'));
+        $this->assertFalse($response->json('nodes.0.browser_usable'));
     }
 
     public function test_direct_tier_when_dial_back_verified(): void
@@ -537,6 +706,55 @@ class DiscoverTest extends TestCase
         $response->assertStatus(200);
         $this->assertSame(1, $response->json('count'));
         $this->assertSame('direct', $response->json('nodes.0.reachability_tier'));
+        $this->assertNull($response->json('nodes.0.directory_observed_reachable'));
+        $this->assertSame('self_attested', $response->json('nodes.0.route_evidence'));
+        $this->assertSame('https_direct', $response->json('nodes.0.routing_hint'));
+        $this->assertTrue($response->json('nodes.0.browser_usable'));
+    }
+
+    public function test_relay_service_exposes_browser_usable_routing_signal(): void
+    {
+        $intent = 'urn:iicp:intent:llm:chat:v1';
+        $cap = [['intent' => $intent, 'models' => ['m'], 'max_tokens' => 100]];
+        $this->createNode([
+            'endpoint' => 'https://relay.example.com',
+            'relay_capable' => true,
+            'exposure_mode' => 'relay_required',
+        ], $cap);
+
+        $response = $this->getJson("/api/v1/discover?intent={$intent}&relay_capable=true");
+        $response->assertStatus(200);
+        $this->assertSame(1, $response->json('count'));
+        $this->assertSame('relay_service', $response->json('nodes.0.routing_hint'));
+        $this->assertTrue($response->json('nodes.0.browser_usable'));
+        $this->assertSame('self_attested', $response->json('nodes.0.route_evidence'));
+    }
+
+    public function test_recent_directory_probe_sets_observed_reachability_signal(): void
+    {
+        $intent = 'urn:iicp:intent:llm:chat:v1';
+        $cap = [['intent' => $intent, 'models' => ['m'], 'max_tokens' => 100]];
+        $node = $this->createNode(['endpoint' => 'https://observed.example.com'], $cap);
+        TelemetryProbe::create([
+            'probe_token_id' => null,
+            'node_id' => $node->id,
+            'run_id' => 'test-run',
+            'probe_id' => 'dir-node-reachability',
+            'probe_type' => 'reachability',
+            'test_id' => 'DIR-PROBE-NODE-01',
+            'level' => 'MUST',
+            'passed' => true,
+            'latency_ms' => 120,
+            'detail' => 'endpoint reachable',
+            'metadata' => [],
+            'probed_at' => now(),
+        ]);
+
+        $response = $this->getJson("/api/v1/discover?intent={$intent}");
+        $response->assertStatus(200);
+        $this->assertTrue($response->json('nodes.0.directory_observed_reachable'));
+        $this->assertSame('directory_observed', $response->json('nodes.0.route_evidence'));
+        $this->assertSame('https_direct', $response->json('nodes.0.routing_hint'));
     }
 
     public function test_internal_node_without_exposure_mode_stays_hidden(): void
@@ -593,7 +811,7 @@ class DiscoverTest extends TestCase
         $this->assertNull($response->json('nodes.0.latency_estimate_ms'));
     }
 
-    /** @test CX-01/CX-02 (#360): discover surfaces a CX node's advertised public_key */
+    /** @test CX-01/CX-02 (#360): discover surfaces the canonical CX key plus deprecated alias */
     public function test_discover_surfaces_cx_public_key(): void
     {
         $intent = 'urn:iicp:intent:llm:chat:v1';
@@ -612,11 +830,13 @@ class DiscoverTest extends TestCase
         $response = $this->getJson("/api/v1/discover?intent={$intent}");
 
         $response->assertStatus(200)
+            ->assertJsonPath('nodes.0.cx_public_key.algorithm', 'X25519')
+            ->assertJsonPath('nodes.0.cx_public_key.key_id', 'a1b2c3d4e5f60718')
             ->assertJsonPath('nodes.0.public_key.algorithm', 'X25519')
             ->assertJsonPath('nodes.0.public_key.key_id', 'a1b2c3d4e5f60718');
     }
 
-    /** @test #360: a node without CX support surfaces public_key as null in discover */
+    /** @test #360: a node without CX support surfaces both CX key aliases as null in discover */
     public function test_discover_public_key_null_for_non_cx_node(): void
     {
         $intent = 'urn:iicp:intent:llm:chat:v1';
@@ -628,5 +848,102 @@ class DiscoverTest extends TestCase
 
         $response->assertStatus(200);
         $this->assertNull($response->json('nodes.0.public_key'));
+        $this->assertNull($response->json('nodes.0.cx_public_key'));
+    }
+
+    public function test_relay_available_false_when_no_relay_capable_nodes(): void
+    {
+        // Behavior: relay_available=false when all discovered nodes have relay_capable=false.
+        $intent = 'urn:iicp:intent:llm:chat:v1';
+        $this->createNode(['relay_capable' => false], [[
+            'intent' => $intent, 'models' => ['m'], 'max_tokens' => 100,
+        ]]);
+
+        $response = $this->getJson("/api/v1/discover?intent={$intent}");
+
+        $response->assertStatus(200);
+        $this->assertFalse($response->json('relay_available'));
+    }
+
+    public function test_relay_available_true_when_relay_capable_node_present(): void
+    {
+        // Behavior: relay_available=true when ≥1 discovered node has relay_capable=true.
+        $intent = 'urn:iicp:intent:llm:chat:v1';
+        $this->createNode(['relay_capable' => true], [[
+            'intent' => $intent, 'models' => ['m'], 'max_tokens' => 100,
+        ]]);
+
+        $response = $this->getJson("/api/v1/discover?intent={$intent}");
+
+        $response->assertStatus(200);
+        $this->assertTrue($response->json('relay_available'));
+    }
+
+    // ── #494 — health_models reconciliation ──────────────────────────────────
+
+    public function test_health_models_null_uses_static_capabilities_backward_compat(): void
+    {
+        // Behavior: when health_models is null (SDK has not reported), discover
+        // returns the statically-registered model — no filtering applied (#494 compat).
+        $intent = 'urn:iicp:intent:llm:chat:v1';
+        $this->createNode(['health_models' => null], [[
+            'intent' => $intent, 'models' => ['qwen2.5:0.5b'], 'max_tokens' => 4096,
+        ]]);
+
+        $resp = $this->getJson("/api/v1/discover?intent={$intent}&model=qwen2.5:0.5b")
+            ->assertStatus(200);
+        $this->assertCount(1, $resp->json('nodes'), 'node must appear — health_models null = backward compat');
+        $this->assertContains('qwen2.5:0.5b', $resp->json('nodes.0.models'));
+    }
+
+    public function test_health_models_empty_excludes_node_from_model_filtered_discover(): void
+    {
+        // Behavior: a node with health_models=[] (runtime has no models loaded right now)
+        // must NOT appear in a model-filtered discover result — DIR-TRUST-01 fix (#494).
+        $intent = 'urn:iicp:intent:llm:chat:v1';
+        $this->createNode(['health_models' => []], [[
+            'intent' => $intent, 'models' => ['qwen2.5:0.5b'], 'max_tokens' => 4096,
+        ]]);
+
+        $resp = $this->getJson("/api/v1/discover?intent={$intent}&model=qwen2.5:0.5b")
+            ->assertStatus(200);
+        $this->assertCount(0, $resp->json('nodes'), 'node must be excluded — health_models=[] means runtime is empty');
+    }
+
+    public function test_health_models_empty_excludes_node_from_unfiltered_discover(): void
+    {
+        // Behavior: a node with health_models=[] must be excluded from discover even without
+        // ?model= filter — fixes DIR-TRUST-01 (#494). The REACH probe calls discover without
+        // ?model= and picks the first node; if that node has health_models=[] it fails.
+        $intent = 'urn:iicp:intent:llm:chat:v1';
+        $this->createNode(['health_models' => []], [[
+            'intent' => $intent, 'models' => ['qwen2.5:0.5b'], 'max_tokens' => 4096,
+        ]]);
+
+        $resp = $this->getJson("/api/v1/discover?intent={$intent}")
+            ->assertStatus(200);
+        $this->assertCount(0, $resp->json('nodes'), 'node must be excluded — health_models=[] means no models serving');
+    }
+
+    public function test_health_models_partial_list_only_live_models_in_response(): void
+    {
+        // Behavior: when health_models=['qwen2.5:0.5b'] (only one of two registered models
+        // is running), discover returns the intersection as the models array and only matches
+        // a ?model= query for the live model (#494).
+        $intent = 'urn:iicp:intent:llm:chat:v1';
+        $this->createNode(['health_models' => ['qwen2.5:0.5b']], [[
+            'intent' => $intent, 'models' => ['qwen2.5:0.5b', 'llama3:latest'], 'max_tokens' => 4096,
+        ]]);
+
+        // Querying for the live model → appears; models list shows only live model.
+        $resp = $this->getJson("/api/v1/discover?intent={$intent}&model=qwen2.5:0.5b")
+            ->assertStatus(200);
+        $this->assertCount(1, $resp->json('nodes'));
+        $this->assertSame(['qwen2.5:0.5b'], $resp->json('nodes.0.models'));
+
+        // Querying for the unloaded model → excluded.
+        $resp2 = $this->getJson("/api/v1/discover?intent={$intent}&model=llama3:latest")
+            ->assertStatus(200);
+        $this->assertCount(0, $resp2->json('nodes'), 'unloaded model must be excluded even if registered');
     }
 }

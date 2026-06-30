@@ -109,6 +109,50 @@ class HeartbeatTest extends TestCase
         $this->assertEquals(3, $this->node->active_jobs);
     }
 
+    public function test_heartbeat_absent_backend_stability_is_backward_compatible(): void
+    {
+        $this->withToken($this->plainToken)
+            ->postJson('/api/v1/heartbeat', ['node_id' => $this->node->id])
+            ->assertStatus(200);
+
+        $this->assertNull($this->node->fresh()->backend_stability);
+    }
+
+    public function test_heartbeat_stores_redacted_backend_stability(): void
+    {
+        $this->withToken($this->plainToken)
+            ->postJson('/api/v1/heartbeat', [
+                'node_id' => $this->node->id,
+                'backend_stability' => [
+                    'backend_state' => 'degraded',
+                    'reason_class' => 'backend_cold',
+                    'retry_after_s' => 30,
+                    // Must not be persisted: the public contract is redacted/coarse.
+                    'diagnostics' => 'local backend exception with private details',
+                ],
+            ])
+            ->assertStatus(200);
+
+        $stored = $this->node->fresh()->backend_stability;
+        $this->assertSame('degraded', $stored['backend_state']);
+        $this->assertSame('backend_cold', $stored['reason_class']);
+        $this->assertSame(30, $stored['retry_after_s']);
+        $this->assertArrayNotHasKey('diagnostics', $stored);
+    }
+
+    public function test_heartbeat_rejects_invalid_backend_stability_state(): void
+    {
+        $this->withToken($this->plainToken)
+            ->postJson('/api/v1/heartbeat', [
+                'node_id' => $this->node->id,
+                'backend_stability' => [
+                    'backend_state' => 'crashed',
+                    'reason_class' => 'backend_cold',
+                ],
+            ])
+            ->assertStatus(422);
+    }
+
     /**
      * Auto-recovery: a node that went dormant (LivenessMonitor flips available=false,
      * status=dormant after a >90s heartbeat gap — e.g. laptop sleep) must be fully
@@ -288,5 +332,76 @@ class HeartbeatTest extends TestCase
             ->first();
 
         $this->assertNull($event, 'REPUTATION_UPDATE must not be emitted when no metrics are reported');
+    }
+
+    // ── #494 — health_models tracking ────────────────────────────────────────
+
+    public function test_heartbeat_stores_health_models_when_reported(): void
+    {
+        // Behavior: when SDK reports health_models in the heartbeat body, the directory
+        // stores them on the node row so discover can filter by runtime availability (#494).
+        $this->withToken($this->plainToken)
+            ->postJson('/api/v1/heartbeat', [
+                'node_id' => $this->node->id,
+                'health_models' => ['qwen2.5:0.5b', 'llama3:latest'],
+            ])
+            ->assertStatus(200);
+
+        $this->assertSame(
+            ['qwen2.5:0.5b', 'llama3:latest'],
+            $this->node->fresh()->health_models
+        );
+    }
+
+    public function test_heartbeat_stores_empty_health_models(): void
+    {
+        // Behavior: health_models=[] (runtime has no models loaded) must be stored — not
+        // treated as "not reported". An empty list means the SDK checked and found nothing.
+        $this->withToken($this->plainToken)
+            ->postJson('/api/v1/heartbeat', [
+                'node_id' => $this->node->id,
+                'health_models' => [],
+            ])
+            ->assertStatus(200);
+
+        $fresh = $this->node->fresh();
+        $this->assertNotNull($fresh->health_models, 'empty array must be stored as JSON [], not null');
+        $this->assertSame([], $fresh->health_models);
+    }
+
+    public function test_heartbeat_without_health_models_leaves_existing_value_unchanged(): void
+    {
+        // Behavior: a heartbeat that omits health_models entirely must NOT clear an
+        // existing value — backward compat for SDKs that don't send the field yet.
+        $this->node->update(['health_models' => ['qwen2.5:0.5b']]);
+
+        $this->withToken($this->plainToken)
+            ->postJson('/api/v1/heartbeat', ['node_id' => $this->node->id])
+            ->assertStatus(200);
+
+        $this->assertSame(['qwen2.5:0.5b'], $this->node->fresh()->health_models);
+    }
+
+    public function test_heartbeat_stores_auto_update_evidence_when_reported(): void
+    {
+        $checkedAt = now()->subMinute()->toIso8601String();
+
+        $this->withToken($this->plainToken)
+            ->postJson('/api/v1/heartbeat', [
+                'node_id' => $this->node->id,
+                'auto_update_enabled' => true,
+                'auto_update_interval_s' => 3600,
+                'sdk_latest_seen' => '0.7.68',
+                'sdk_update_last_checked_at' => $checkedAt,
+                'sdk_update_error_class' => null,
+            ])
+            ->assertStatus(200);
+
+        $fresh = $this->node->fresh();
+        $this->assertTrue((bool) $fresh->auto_update_enabled);
+        $this->assertSame(3600, $fresh->auto_update_interval_s);
+        $this->assertSame('0.7.68', $fresh->sdk_latest_seen);
+        $this->assertNotNull($fresh->sdk_update_last_checked_at);
+        $this->assertNull($fresh->sdk_update_error_class);
     }
 }

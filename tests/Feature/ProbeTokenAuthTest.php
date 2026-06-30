@@ -62,6 +62,39 @@ class ProbeTokenAuthTest extends TestCase
         $response->assertStatus(202);
     }
 
+    // #373 — a probe result may attribute to a specific node (node_id), else null.
+    public function test_probe_result_node_id_persisted_when_provided(): void
+    {
+        $this->makeToken();
+        $nodeId = (string) Str::uuid();
+        $payload = $this->validPayload;
+        $payload['results'][0]['node_id'] = $nodeId;
+
+        $this->postJson('/api/v1/telemetry/probe', $payload, [
+            'Authorization' => 'Bearer '.self::RAW_TOKEN,
+        ])->assertStatus(202);
+
+        $this->assertDatabaseHas('iicp_telemetry_probes', [
+            'test_id' => 'REACH-01',
+            'node_id' => $nodeId,
+        ]);
+    }
+
+    public function test_probe_result_node_id_null_for_infra_probe(): void
+    {
+        $this->makeToken();
+
+        // validPayload has no node_id → directory-infra probe → node_id stays null.
+        $this->postJson('/api/v1/telemetry/probe', $this->validPayload, [
+            'Authorization' => 'Bearer '.self::RAW_TOKEN,
+        ])->assertStatus(202);
+
+        $this->assertDatabaseHas('iicp_telemetry_probes', [
+            'test_id' => 'REACH-01',
+            'node_id' => null,
+        ]);
+    }
+
     // -------------------------------------------------------------------------
     // 2. Missing Authorization header → 401
     // -------------------------------------------------------------------------
