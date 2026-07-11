@@ -13,6 +13,7 @@ jobs:
         with:
           php-version: '8.3'
           extensions: mbstring, pdo_mysql, sqlite3
+      - run: mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
       - run: composer install --no-interaction --prefer-dist
       - run: php artisan test --compact
       - run: python3 scripts/check_seed_parity.py --php-dir . --contract parity/contract-v1.10.69.json --strict
