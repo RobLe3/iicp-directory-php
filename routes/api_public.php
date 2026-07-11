@@ -6,6 +6,7 @@ use App\Http\Controllers\ConformanceController;
 use App\Http\Controllers\EventsController;
 use App\Http\Controllers\LeaderboardController;
 use App\Http\Controllers\OperatorController;
+use App\Http\Controllers\OperatorSelfServiceController;
 use App\Http\Controllers\ProbeController;
 use App\Http\Controllers\RegistryController;
 use App\Http\Controllers\ReplicasController;
@@ -23,6 +24,16 @@ Route::prefix('v1')->group(function () {
     // lives here (not api_protocol) to keep the protocol route file under the fan-out limit.
     Route::post('/operator/rename', [OperatorController::class, 'rename'])
         ->middleware('throttle:60,1');
+
+    Route::post('/operator/challenge', [OperatorSelfServiceController::class, 'challenge'])
+        ->middleware('throttle:10,1');
+    Route::post('/operator/acceptance', [OperatorSelfServiceController::class, 'accept'])
+        ->middleware('throttle:5,1');
+    Route::prefix('operator/dsr')->middleware('throttle:5,1')->group(function () {
+        Route::post('/export', [OperatorSelfServiceController::class, 'export']);
+        Route::post('/restrict', [OperatorSelfServiceController::class, 'restrict']);
+        Route::post('/anonymize', [OperatorSelfServiceController::class, 'anonymize']);
+    });
 
     // #310/#463 — public recognition leaderboards (spec iicp-recognition §6). Anonymous,
     // cacheable; serves the public display_name + recognition state, never operator_pubkey.

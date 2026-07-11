@@ -117,6 +117,25 @@ class RegistryTest extends TestCase
         $this->assertEquals(1, $coverage['urn:iicp:intent:llm:completion:v1']);
     }
 
+    public function test_registry_detail_surfaces_node_policy_manifest(): void
+    {
+        $node = $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
+        $node->update([
+            'policy_manifest' => [
+                'version' => '2026-07-02',
+                'jurisdiction' => 'DE',
+                'remote_executor_can_read_prompt' => true,
+                'training_use' => 'none',
+                'retention' => ['task_payload' => 'none', 'logs_days' => 1],
+            ],
+        ]);
+
+        $this->getJson('/api/v1/registry/nodes/'.substr($node->id, 0, 8))
+            ->assertStatus(200)
+            ->assertJsonPath('node_policy_manifest.jurisdiction', 'DE')
+            ->assertJsonPath('node_policy_manifest.evidence', 'self_attested');
+    }
+
     // -------------------------------------------------------------------------
     // GET /v1/registry/intents
     // -------------------------------------------------------------------------
@@ -141,20 +160,23 @@ class RegistryTest extends TestCase
 
     public function test_registry_nodes_returns_public_fields_without_private_data(): void
     {
-        $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
+        $node = $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
+        $node->update(['public_reachable' => true]);
 
         $response = $this->getJson('/api/v1/registry/nodes');
 
         $response->assertStatus(200)
-            ->assertJsonStructure(['total', 'page', 'limit', 'nodes' => [[
+            ->assertJsonStructure(['total', 'page', 'limit', 'resilience', 'nodes' => [[
                 'node_id_prefix', 'region', 'intents',
                 'directory_observed_reachable', 'route_evidence', 'routing_hint', 'browser_usable',
+                'recovery_state', 'route_recovery_hint',
                 'backend_stability' => ['backend_state', 'reason_class', 'routing_guard', 'evidence'],
                 'performance' => ['task_latency_ms', 'task_latency_ms_basis', 'health_impact'],
                 'health_summary' => ['score', 'label', 'confidence', 'evidence_level', 'latency_ms_basis', 'components'],
                 'active', 'trust_progress' => ['completed_tasks', 'tasks_until_gold', 'probation'],
                 'status_summary' => [
                     'state', 'headline', 'description', 'reasons', 'evidence_gaps',
+                    'recovery_state', 'route_recovery_hint',
                     'evidence_last_refreshed_at', 'evidence_source', 'health_basis',
                     'trust_progress' => ['completed_tasks', 'tasks_until_gold', 'probation'],
                 ],
@@ -168,7 +190,35 @@ class RegistryTest extends TestCase
         $this->assertEquals(8, strlen($node['node_id_prefix']));  // prefix only
         $this->assertSame('https_direct', $node['routing_hint']);
         $this->assertTrue($node['browser_usable']);
+        $this->assertSame('stable', $node['recovery_state']);
+        $this->assertSame('none', $node['route_recovery_hint']);
         $this->assertSame('unknown', $node['backend_stability']['backend_state']);
+    }
+
+    public function test_registry_list_and_detail_do_not_leak_route_endpoints_or_full_uuid(): void
+    {
+        $node = $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
+        $node->update([
+            'endpoint' => 'https://associated-green-levy-lesser.trycloudflare.com',
+            'transport_endpoint' => 'iicpsec://associated-green-levy-lesser.trycloudflare.com',
+            'transport_method' => 'external_tunnel',
+            'transport_metadata' => ['detection_log_tail' => ['rung 5: quick tunnel']],
+            'public_reachable' => true,
+        ]);
+        $prefix = substr($node->id, 0, 8);
+
+        $list = $this->getJson('/api/v1/registry/nodes')->assertOk();
+        $detail = $this->getJson("/api/v1/registry/nodes/{$prefix}")->assertOk();
+
+        foreach ([$list->getContent(), $detail->getContent()] as $content) {
+            $this->assertStringContainsString($prefix, $content);
+            $this->assertStringNotContainsString($node->id, $content);
+            $this->assertStringNotContainsString('associated-green-levy-lesser.trycloudflare.com', $content);
+            $this->assertStringNotContainsString('iicpsec://', $content);
+            $this->assertStringNotContainsString('endpoint', $content);
+            $this->assertStringNotContainsString('transport_endpoint', $content);
+            $this->assertStringNotContainsString('transport_metadata', $content);
+        }
     }
 
     public function test_registry_nodes_status_summary_distinguishes_limited_reach_from_public_routable(): void
@@ -188,7 +238,27 @@ class RegistryTest extends TestCase
         $this->assertTrue($node['active']);
         $this->assertSame('limited_reach', $node['status_summary']['state']);
         $this->assertFalse($node['status_summary']['public_routable']);
+        $this->assertSame('unknown', $node['recovery_state']);
+        $this->assertSame('route_not_advertised', $node['route_recovery_hint']);
         $this->assertContains('limited_or_unverified_reach', $node['status_summary']['reasons']);
+    }
+
+    public function test_registry_nodes_marks_confirmed_dead_route_as_cooldown(): void
+    {
+        $node = $this->createActiveNode('eu-central', ['urn:iicp:intent:llm:chat:v1']);
+        $node->update([
+            'public_reachable' => true,
+            'relay_capable' => true,
+            'endpoint_verified_dead_at' => now()->subMinute(),
+            'exposure_mode' => 'relay_required',
+        ]);
+
+        $response = $this->getJson('/api/v1/registry/nodes')->assertOk();
+
+        $this->assertSame('cooldown', $response->json('nodes.0.recovery_state'));
+        $this->assertSame('route_cooldown', $response->json('nodes.0.route_recovery_hint'));
+        $this->assertSame('cooldown', $response->json('nodes.0.status_summary.recovery_state'));
+        $this->assertTrue($response->json('resilience.recovery_window'));
     }
 
     public function test_registry_nodes_explains_high_score_probation_gate(): void
@@ -359,10 +429,13 @@ class RegistryTest extends TestCase
                 'route_evidence',
                 'routing_hint',
                 'browser_usable',
+                'recovery_state',
+                'route_recovery_hint',
                 'performance' => ['task_latency_ms', 'task_latency_ms_basis', 'health_impact'],
                 'trust_progress' => ['completed_tasks', 'tasks_until_gold', 'probation'],
                 'status_summary' => [
                     'state', 'headline', 'description', 'reasons', 'evidence_gaps',
+                    'recovery_state', 'route_recovery_hint',
                     'evidence_last_refreshed_at', 'evidence_source', 'health_basis',
                     'trust_progress' => ['completed_tasks', 'tasks_until_gold', 'probation'],
                 ],
@@ -437,8 +510,11 @@ class RegistryTest extends TestCase
 
         $this->assertSame('direct_unverified', $response->json('status_summary.state'));
         $this->assertSame('http_ipv6', $response->json('routing_hint'));
+        $this->assertSame('recovering', $response->json('recovery_state'));
+        $this->assertSame('direct_route_unverified', $response->json('route_recovery_hint'));
         $this->assertNull($response->json('directory_observed_reachable'));
         $this->assertTrue($response->json('status_summary.public_routable'));
+        $this->assertSame('recovering', $response->json('status_summary.recovery_state'));
         $this->assertSame('ipv6_not_directory_verified', $response->json('status_summary.evidence_gaps.1.code'));
     }
 

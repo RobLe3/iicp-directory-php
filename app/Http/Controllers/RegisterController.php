@@ -27,13 +27,16 @@ namespace App\Http\Controllers;
 use App\Models\Node;
 use App\Rules\RoutableEndpoint;
 use App\Services\CreditService;
+use App\Services\IntentPolicyGuard;
 use App\Services\NodeAddressObserver;
 use App\Services\NodeEventLogger;
+use App\Services\NodePolicyManifestVerifier;
 use App\Services\NodeRegistry;
 use App\Services\OtelTracer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Validation\ValidationException;
 
 class RegisterController extends Controller
 {
@@ -80,6 +83,7 @@ class RegisterController extends Controller
         private NodeAddressObserver $addressObserver,
         private NodeEventLogger $eventLogger,
         private CreditService $credits,
+        private IntentPolicyGuard $intentPolicy,
     ) {}
 
     /**
@@ -158,6 +162,37 @@ class RegisterController extends Controller
             'policy.allow_tool_execution' => ['sometimes', 'boolean'],
             'policy.allow_file_access' => ['sometimes', 'boolean'],
             'policy.pricing_credits_per_1000' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:1000'],
+            // Phase-1 compliance manifest: self-attested public policy facts.
+            // The directory stores and echoes this small, safe, machine-readable
+            // declaration; clients may later enforce it before sending prompts.
+            'policy_manifest' => ['sometimes', 'nullable', 'array'],
+            'policy_manifest.version' => ['sometimes', 'nullable', 'string', 'max:32'],
+            'policy_manifest.jurisdiction' => ['sometimes', 'nullable', 'string', 'max:64', 'regex:/^[a-zA-Z0-9][a-zA-Z0-9 ._:-]*$/'],
+            'policy_manifest.policy_url' => ['sometimes', 'nullable', 'url', 'max:256'],
+            'policy_manifest.contact_url' => ['sometimes', 'nullable', 'url', 'max:256'],
+            'policy_manifest.remote_executor_can_read_prompt' => ['sometimes', 'boolean'],
+            'policy_manifest.training_use' => ['sometimes', 'nullable', 'string', 'in:none,opt_in,provider_defined'],
+            'policy_manifest.retention' => ['sometimes', 'nullable', 'array'],
+            'policy_manifest.retention.task_payload' => ['sometimes', 'nullable', 'string', 'in:none,transient,provider_defined'],
+            'policy_manifest.retention.logs_days' => ['sometimes', 'nullable', 'integer', 'min:0', 'max:3650'],
+            'policy_manifest.subprocessors' => ['sometimes', 'nullable', 'array', 'max:20'],
+            'policy_manifest.subprocessors.*' => ['string', 'max:80', 'regex:/^[^\x00-\x1f\x7f<>]*$/'],
+            'policy_manifest.unsupported_intents' => ['sometimes', 'nullable', 'array', 'max:100'],
+            'policy_manifest.unsupported_intents.*' => ['string', 'max:255', 'regex:/^urn:iicp:intent:[a-z0-9_:.\\/-]+$/'],
+            'policy_manifest.signed_statement' => ['sometimes', 'nullable', 'string', 'max:1024'],
+            'policy_manifest.signature' => ['sometimes', 'nullable', 'array'],
+            'policy_manifest.signature.algorithm' => ['required_with:policy_manifest.signature', 'string', 'in:Ed25519'],
+            'policy_manifest.signature.key_id' => ['sometimes', 'nullable', 'string', 'max:64', 'regex:/^[a-zA-Z0-9._:-]+$/'],
+            'policy_manifest.signature.public_key' => ['required_with:policy_manifest.signature', 'string', 'max:128'],
+            'policy_manifest.signature.signature' => ['required_with:policy_manifest.signature', 'string', 'max:128'],
+            'policy_manifest.signature.signed_at' => ['sometimes', 'nullable', 'date'],
+            'policy_manifest.signature.expires_at' => ['sometimes', 'nullable', 'date'],
+            // #602 — safe policy-signing-key lifecycle hints. These fields are
+            // part of the signed manifest payload (canonicalized by the verifier)
+            // and are public-safe only after redaction/class normalization.
+            'policy_manifest.signature.rotation_epoch' => ['sometimes', 'nullable', 'integer', 'min:0', 'max:2147483647'],
+            'policy_manifest.signature.revoked_at' => ['sometimes', 'nullable', 'date'],
+            'policy_manifest.signature.revocation_reason_class' => ['sometimes', 'nullable', 'string', 'max:64', 'regex:/^[a-z0-9_-]+$/'],
             'availability' => ['sometimes', 'array'],
             'availability.*.start' => ['required_with:availability', 'date_format:H:i'],
             'availability.*.end' => ['required_with:availability', 'date_format:H:i'],
@@ -206,6 +241,29 @@ class RegisterController extends Controller
             'cx_public_key.not_after' => ['sometimes', 'nullable', 'date'],
             'cx_public_key.hybrid_pq' => ['sometimes', 'nullable'],
         ]);
+
+        foreach (($validated['capabilities'] ?? []) as $idx => $capability) {
+            $intent = (string) ($capability['intent'] ?? '');
+            if ($message = $this->intentPolicy->refusalMessage($intent)) {
+                throw ValidationException::withMessages(["capabilities.$idx.intent" => [$message]]);
+            }
+        }
+
+        if (isset($validated['policy_manifest']) && is_array($validated['policy_manifest'])) {
+            $verification = NodePolicyManifestVerifier::verify($validated['policy_manifest']);
+            if (in_array($verification['status'], [
+                NodePolicyManifestVerifier::STATUS_SIGNED_INVALID,
+                NodePolicyManifestVerifier::STATUS_SIGNED_EXPIRED,
+                NodePolicyManifestVerifier::STATUS_SIGNED_REVOKED,
+                NodePolicyManifestVerifier::STATUS_SIGNED_SUPERSEDED,
+            ], true)) {
+                throw ValidationException::withMessages([
+                    'policy_manifest.signature' => [
+                        'Invalid node policy manifest signature: '.$verification['status'],
+                    ],
+                ]);
+            }
+        }
 
         // #331 Phase A.1: fold transport_candidates + relay_endpoint into the
         // single transport_metadata column to keep the schema small.
@@ -266,6 +324,7 @@ class RegisterController extends Controller
                 'pricing_model' => $node->pricing_model ?? 'per_token',
                 'pricing_credits_per_1000' => $node->pricing_credits_per_1000 ?? null,
             ],
+            'policy_manifest' => $node->policy_manifest,
             // #438 — carry the node's capabilities so a replica can serve /v1/discover
             // for nodes registered AFTER its snapshot (the event log was otherwise
             // capability-less → post-bootstrap nodes invisible on replicas). Only the

@@ -5,19 +5,19 @@
 namespace App\Services;
 
 /**
- * Issues and verifies Ed25519-signed relay bind tickets (#510 / DIR-RELAY-03).
+ * Issues and verifies Ed25519-signed dispatch route tickets (#612 / DIR-DISPATCH-01).
  *
  * Token format: <b64url_payload>.<sig_hex>
- * Signing message: "iicp:relay-bind-ticket:v1\n" + b64url_payload
+ * Signing message: "iicp:dispatch-route-ticket:v1\n" + b64url_payload
  * Key: IICP_GENESIS_ED25519_SECRET_KEY (same directory signing key advertised by
- * /v1/directory-key). Tickets are short-lived and scoped to one worker node_id
- * plus an optional relay audience.
+ * /v1/directory-key). Tickets are short-lived and scoped to one node, one intent,
+ * and this directory audience. They never contain task prompts or payloads.
  */
-class RelayBindTicketService
+class DispatchRouteTicketService
 {
-    private const DOMAIN = "iicp:relay-bind-ticket:v1\n";
+    private const DOMAIN = "iicp:dispatch-route-ticket:v1\n";
 
-    private const TTL_SECONDS = 120; // short bind window; worker can retry
+    private const TTL_SECONDS = 120;
 
     public function publicKeyHex(): ?string
     {
@@ -25,12 +25,16 @@ class RelayBindTicketService
         if ($secretKey === null) {
             return null;
         }
+
         $sk = sodium_hex2bin($secretKey);
 
         return bin2hex(substr($sk, 32, 32));
     }
 
-    public function issue(string $workerNodeId, string $relayAudience = '*'): ?array
+    /**
+     * @return array{token: string, expires_at: int, ticket_id: string}|null
+     */
+    public function issue(string $nodeId, string $intent, string $audience = 'iicp.directory.dispatch'): ?array
     {
         $secretKey = $this->secretKey();
         if ($secretKey === null) {
@@ -39,15 +43,15 @@ class RelayBindTicketService
 
         $now = time();
         $exp = $now + self::TTL_SECONDS;
+        $ticketId = bin2hex(random_bytes(12));
         $payloadJson = json_encode([
             'v' => 1,
-            'typ' => 'relay-bind-ticket',
-            // Unique ticket identifier for relay-side one-use/replay caches.
-            // This contains no node secret and is covered by the signature.
-            'jti' => bin2hex(random_bytes(16)),
+            'typ' => 'dispatch-route-ticket',
             'iss' => config('app.url'),
-            'sub' => $workerNodeId,
-            'aud' => $relayAudience ?: '*',
+            'aud' => $audience,
+            'jti' => $ticketId,
+            'node_id' => $nodeId,
+            'intent' => $intent,
             'iat' => $now,
             'exp' => $exp,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
@@ -59,17 +63,28 @@ class RelayBindTicketService
         return [
             'token' => "{$b64Payload}.{$sigHex}",
             'expires_at' => $exp,
+            'ticket_id' => $ticketId,
         ];
     }
 
-    public function verify(string $token, string $workerNodeId, string $relayAudience = '*'): ?array
+    public function verify(string $token, string $nodeId, string $intent, string $audience = 'iicp.directory.dispatch'): ?array
     {
         $payload = $this->verifiedPayload($token);
         if ($payload === null) {
             return null;
         }
 
-        return $this->ticketMatches($payload, $workerNodeId, $relayAudience) ? $payload : null;
+        if (($payload['typ'] ?? null) !== 'dispatch-route-ticket') {
+            return null;
+        }
+        if (($payload['node_id'] ?? null) !== $nodeId || ($payload['intent'] ?? null) !== $intent) {
+            return null;
+        }
+        if (($payload['aud'] ?? null) !== $audience || time() > (int) ($payload['exp'] ?? 0)) {
+            return null;
+        }
+
+        return $payload;
     }
 
     private function verifiedPayload(string $token): ?array
@@ -105,22 +120,6 @@ class RelayBindTicketService
         } catch (\SodiumException) {
             return false;
         }
-    }
-
-    private function ticketMatches(array $payload, string $workerNodeId, string $relayAudience): bool
-    {
-        if (! is_array($payload) || ($payload['typ'] ?? null) !== 'relay-bind-ticket') {
-            return false;
-        }
-        if (! is_string($payload['jti'] ?? null) || preg_match('/^[0-9a-f]{32}$/', $payload['jti']) !== 1) {
-            return false;
-        }
-        if (($payload['sub'] ?? null) !== $workerNodeId || time() > (int) ($payload['exp'] ?? 0)) {
-            return false;
-        }
-        $aud = (string) ($payload['aud'] ?? '');
-
-        return $aud === '*' || $aud === $relayAudience;
     }
 
     private function secretKey(): ?string

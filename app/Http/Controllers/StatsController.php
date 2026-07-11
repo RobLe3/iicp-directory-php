@@ -7,7 +7,9 @@ namespace App\Http\Controllers;
 use App\Models\Node;
 use App\Models\ProbeToken;
 use App\Models\TelemetryProbe;
+use App\Services\DispatchUsageCounter;
 use App\Services\FederatedMeshHealthResolver;
+use App\Services\MeshResilienceSummary;
 use App\Services\NodeHealthService;
 use App\Services\NodeScorer;
 use Illuminate\Http\JsonResponse;
@@ -16,6 +18,14 @@ use Illuminate\Support\Facades\DB;
 
 class StatsController extends Controller
 {
+    public const PUBLIC_STATS_CACHE_KEY = 'stats.public';
+
+    public const PUBLIC_STATS_CACHE_SECONDS = 60;
+
+    public const PUBLIC_STATS_WARM_CACHE_SECONDS = 90;
+
+    public const PUBLIC_STATS_EMPTY_CACHE_SECONDS = 5;
+
     public function __construct(
         private NodeHealthService $health,
         private FederatedMeshHealthResolver $federatedHealth,
@@ -42,9 +52,45 @@ class StatsController extends Controller
 
     public function index(): JsonResponse
     {
-        $stats = Cache::remember('stats.public', 60, fn () => $this->build());
+        $stats = $this->cachedPublicStats(self::PUBLIC_STATS_CACHE_SECONDS);
 
         return response()->json($stats);
+    }
+
+    /**
+     * Return the public stats document with a deliberately short cache TTL for
+     * empty public-serving-set snapshots. A momentary DB/cache/probe gap should
+     * not make the website show "0 nodes" for a full warm-cache interval when
+     * heartbeats resume seconds later (#598).
+     */
+    public function cachedPublicStats(int $nonEmptyTtlSeconds = self::PUBLIC_STATS_CACHE_SECONDS): array
+    {
+        $cached = Cache::get(self::PUBLIC_STATS_CACHE_KEY);
+
+        if (is_array($cached)) {
+            return $cached;
+        }
+
+        $stats = $this->build();
+        Cache::put(self::PUBLIC_STATS_CACHE_KEY, $stats, $this->publicStatsTtl($stats, $nonEmptyTtlSeconds));
+
+        return $stats;
+    }
+
+    public function warmPublicStatsCache(): int
+    {
+        $stats = $this->build();
+        $ttl = $this->publicStatsTtl($stats, self::PUBLIC_STATS_WARM_CACHE_SECONDS);
+        Cache::put(self::PUBLIC_STATS_CACHE_KEY, $stats, $ttl);
+
+        return $ttl;
+    }
+
+    public function publicStatsTtl(array $stats, int $nonEmptyTtlSeconds): int
+    {
+        $publicRoutable = (int) ($stats['server']['public_routable_nodes'] ?? $stats['server']['active_nodes'] ?? 0);
+
+        return $publicRoutable > 0 ? $nonEmptyTtlSeconds : self::PUBLIC_STATS_EMPTY_CACHE_SECONDS;
     }
 
     /**
@@ -72,11 +118,19 @@ class StatsController extends Controller
             // so the single-directory mesh_health above stays the unconditional figure.
             'mesh_health_federated' => $this->federatedMeshHealthOrNull(),
             'directory_health' => $this->directoryHealth($probes),
+            // Public visibility/recovery summary. This is additive and does
+            // not change discovery: it prevents short tunnel/relay/cache
+            // recovery windows from looking like a permanent empty mesh on
+            // public dashboards.
+            'resilience' => app(MeshResilienceSummary::class)->build(),
             // DIR-MIG-01 / #531 — adoption telemetry: the sdk_version + sdk_language
             // distribution of active nodes. Read-only; this is the objective signal
             // the capability-migration framework (iicp-dir §6.1) uses to decide when
             // an adoption-gated hard-enforcement stage is safe to start.
             'sdk_adoption' => $this->sdkAdoption(),
+            // Anonymous aggregate migration evidence. No caller, route, ticket,
+            // endpoint or payload data is stored in these counters.
+            'dispatch_discovery_adoption' => app(DispatchUsageCounter::class)->summary(),
         ];
     }
 

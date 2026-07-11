@@ -1,0 +1,18 @@
+name: Control-plane parity
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  php-control-plane:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, pdo_mysql, sqlite3
+      - run: composer install --no-interaction --prefer-dist
+      - run: php artisan test --compact
+      - run: python3 scripts/check_seed_parity.py --php-dir . --contract parity/contract-v1.10.69.json --strict

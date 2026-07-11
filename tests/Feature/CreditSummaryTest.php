@@ -7,8 +7,8 @@ namespace Tests\Feature;
 use App\Models\Credit;
 use App\Models\CreditTransaction;
 use App\Models\Node;
-use App\Services\JwtService;
 use App\Services\CreditService;
+use App\Services\JwtService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 

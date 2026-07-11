@@ -222,6 +222,7 @@ class NodeRegistry
             'sdk_update_last_checked_at' => $data['sdk_update_last_checked_at'] ?? $node->sdk_update_last_checked_at,
             'sdk_update_error_class' => $data['sdk_update_error_class'] ?? $node->sdk_update_error_class,
             'backend' => $data['backend'] ?? $node->backend,
+            'policy_manifest' => $data['policy_manifest'] ?? $node->policy_manifest,
             'exposure_mode' => $data['exposure_mode'] ?? $node->exposure_mode,
             'cx_public_key' => $incomingCxKey ?? $storedCxKey,
             // #495 §3.6 — gossip Ed25519 signing key; preserve existing if not re-supplied
@@ -264,6 +265,7 @@ class NodeRegistry
             'sdk_update_last_checked_at' => $data['sdk_update_last_checked_at'] ?? null,
             'sdk_update_error_class' => $data['sdk_update_error_class'] ?? null,
             'backend' => $data['backend'] ?? null,
+            'policy_manifest' => $data['policy_manifest'] ?? null,
             'exposure_mode' => $data['exposure_mode'] ?? null,
             'cx_public_key' => $data['cx_public_key'] ?? null,
             // #495 §3.6 — gossip Ed25519 signing key registered by adapter

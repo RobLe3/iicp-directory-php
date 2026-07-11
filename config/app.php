@@ -123,7 +123,7 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
-    'iicp_version' => 'v1.10.55',
+    'iicp_version' => 'v1.10.69',
 
     // #373 Phase B: whether the directory origin has IPv6 egress. DomainFactory
     // shared hosting does NOT — probing IPv6-literal node endpoints from there only
@@ -135,6 +135,34 @@ return [
     // instant. Maintainer-ratified 2026-06-06 = 1780704000000 (2026-06-06T00:00:00Z).
     // PERMANENT once founders are minted — never change it (it would re-tier immutable slots).
     'iicp_genesis_ms' => (int) env('IICP_GENESIS_MS', 1780704000000),
+
+    // Production DB hygiene (#604): raw probe rows are operational evidence, not
+    // permanent ledger state. Keep a bounded hot window and preserve long-term
+    // signals through aggregate rows / reputation state instead of unbounded table growth.
+    'iicp_telemetry_retention' => [
+        'probe_days' => (int) env('IICP_TELEMETRY_PROBE_RETENTION_DAYS', 14),
+        'aggregate_days' => (int) env('IICP_TELEMETRY_AGGREGATE_RETENTION_DAYS', 30),
+        'proxy_days' => (int) env('IICP_PROXY_TELEMETRY_RETENTION_DAYS', 30),
+        'dispatch_days' => (int) env('IICP_DISPATCH_USAGE_RETENTION_DAYS', 30),
+        'heartbeat_event_days' => (int) env('IICP_HEARTBEAT_EVENT_RETENTION_DAYS', 1),
+        'batch_size' => (int) env('IICP_TELEMETRY_PRUNE_BATCH', 1000),
+        'max_batches' => (int) env('IICP_TELEMETRY_PRUNE_MAX_BATCHES', 5),
+    ],
+
+    // #612 — adoption evidence is meaningful only after operational/read-only
+    // callers have moved to `view=public`. Set this to the first UTC date after
+    // that release is deployed; older aggregate rows remain retained but are
+    // excluded from cutover decisions.
+    'iicp_dispatch_adoption_valid_from' => env('IICP_DISPATCH_ADOPTION_VALID_FROM'),
+    'iicp_dispatch_cutover_min_requests' => (int) env('IICP_DISPATCH_CUTOVER_MIN_REQUESTS', 100),
+    'iicp_dispatch_cutover_min_share' => (float) env('IICP_DISPATCH_CUTOVER_MIN_SHARE', 0.90),
+    'iicp_dispatch_cutover_sustained_days' => (int) env('IICP_DISPATCH_CUTOVER_SUSTAINED_DAYS', 14),
+
+    // #609 — current governance-acceptance versions for `known_operator`.
+    // These are routing-policy hints only; acceptance records are not legal
+    // certification and do not make public mesh nodes processors by default.
+    'iicp_operator_terms_version' => env('IICP_OPERATOR_TERMS_VERSION', '2026-07-09'),
+    'iicp_operator_dpa_version' => env('IICP_OPERATOR_DPA_VERSION', '2026-07-09'),
 
     // The founder's operator public key (ed25519, base64) — ordinal #1, reserved for the
     // maintainer by directive 2026-06-06. The cryptographic operator_pubkey is the unique

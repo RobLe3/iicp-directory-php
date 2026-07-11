@@ -6,6 +6,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Node;
 use App\Models\Operator;
+use App\Services\MeshResilienceSummary;
 use App\Services\NodeHealthService;
 use App\Services\NodeScorer;
 use Illuminate\Http\JsonResponse;
@@ -115,9 +116,11 @@ class RegistryController extends Controller
                 'cip_enabled' => (bool) ($n->allow_remote_inference ?? false),
                 'public_listing' => (bool) ($n->public_listing ?? false),
                 ...NodeScorer::routingSignals($n, $health),
+                ...NodeScorer::recoverySignals($n, $health),
                 'health_summary' => NodeScorer::healthSummary($health),
                 ...NodeScorer::complianceSignals($n),
                 'backend_stability' => NodeScorer::backendStability($n),
+                'node_policy_manifest' => NodeScorer::policyManifest($n),
                 'status_summary' => NodeScorer::statusSummary($n, $health),
             ];
             // ADR-017 REG-01: operator_url only exposed when operator has opted into public listing
@@ -132,6 +135,7 @@ class RegistryController extends Controller
             'total' => $total,
             'page' => $page,
             'limit' => $limit,
+            'resilience' => app(MeshResilienceSummary::class)->build(),
             'nodes' => $nodes,
         ]);
     }
@@ -182,8 +186,10 @@ class RegistryController extends Controller
             'health' => $health,
             'health_summary' => NodeScorer::healthSummary($health),
             ...NodeScorer::routingSignals($node, $health),
+            ...NodeScorer::recoverySignals($node, $health),
             ...NodeScorer::complianceSignals($node),
             'backend_stability' => NodeScorer::backendStability($node),
+            'node_policy_manifest' => NodeScorer::policyManifest($node),
             'status_summary' => NodeScorer::statusSummary($node, $health),
             'capability_summary' => $scorer->capabilitySummary($node),
             // #397 — transport protocols the node speaks (http/https/iicp-native),

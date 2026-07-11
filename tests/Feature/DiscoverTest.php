@@ -6,7 +6,9 @@ use App\Models\Node;
 use App\Models\Operator;
 use App\Models\Reputation;
 use App\Models\TelemetryProbe;
+use App\Services\NodePolicyManifestVerifier;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -72,6 +74,218 @@ class DiscoverTest extends TestCase
         $this->assertContains(Operator::publicFingerprint('OPKEY'), $fingerprints);
         $this->assertCount(1, $fingerprints, 'only the bound node carries operator_fingerprint');
         $this->assertStringNotContainsString('OPKEY', $resp->getContent(), 'operator_pubkey must never be served');
+    }
+
+    public function test_discover_surfaces_self_attested_node_policy_manifest(): void
+    {
+        $this->createNode([
+            'policy_manifest' => [
+                'version' => '2026-07-02',
+                'jurisdiction' => 'DE',
+                'remote_executor_can_read_prompt' => true,
+                'training_use' => 'none',
+                'retention' => ['task_payload' => 'none', 'logs_days' => 3],
+                'subprocessors' => ['self-hosted'],
+            ],
+        ], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['m'],
+            'max_tokens' => 4096,
+        ]]);
+
+        $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')->assertStatus(200);
+
+        $resp->assertJsonPath('nodes.0.node_policy_manifest.jurisdiction', 'DE');
+        $resp->assertJsonPath('nodes.0.node_policy_manifest.training_use', 'none');
+        $resp->assertJsonPath('nodes.0.node_policy_manifest.evidence', 'self_attested');
+    }
+
+    public function test_discover_surfaces_signed_verified_node_policy_manifest(): void
+    {
+        $this->createNode([
+            'policy_manifest' => $this->signedPolicyManifest(),
+        ], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['m'],
+            'max_tokens' => 4096,
+        ]]);
+
+        $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')->assertStatus(200);
+
+        $resp->assertJsonPath('nodes.0.node_policy_manifest.evidence', 'signed_verified');
+        $resp->assertJsonPath('nodes.0.node_policy_manifest.verification.status', 'signed_valid');
+        $resp->assertJsonPath('nodes.0.node_policy_manifest.verification.key_id', 'policy-key-1');
+        $resp->assertJsonPath('nodes.0.node_policy_manifest.manifest_identity_level', 'signed_valid');
+        $this->assertNotNull($resp->json('nodes.0.node_policy_manifest.policy_key_fingerprint'));
+    }
+
+    public function test_discover_surfaces_operator_bound_policy_manifest_without_raw_operator_key(): void
+    {
+        [$manifest, $operatorPubkey] = $this->signedPolicyManifestWithOperatorKey();
+        $this->createNode([
+            'operator_pubkey' => $operatorPubkey,
+            'operator_verified' => true,
+            'operator_trust_tier' => 'did_key',
+            'policy_manifest' => $manifest,
+        ], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['m'],
+            'max_tokens' => 4096,
+        ]]);
+
+        $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')->assertStatus(200);
+
+        $resp->assertJsonPath('nodes.0.node_policy_manifest.manifest_identity_level', 'operator_bound');
+        $resp->assertJsonPath(
+            'nodes.0.node_policy_manifest.operator_fingerprint',
+            Operator::publicFingerprint($operatorPubkey),
+        );
+        $this->assertStringNotContainsString($operatorPubkey, $resp->getContent());
+    }
+
+    public function test_discover_refuses_prohibited_intent_before_scoring(): void
+    {
+        $this->createNode([], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['m'],
+            'max_tokens' => 4096,
+        ]]);
+
+        $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:social-scoring:score:v1');
+
+        $resp->assertStatus(422);
+        $this->assertStringContainsString('IICP directory policy', $resp->getContent());
+    }
+
+    public function test_discover_refuses_high_risk_intent_before_scoring(): void
+    {
+        $this->createNode([], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['m'],
+            'max_tokens' => 4096,
+        ]]);
+
+        $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:employment:hiring-decision:v1');
+
+        $resp->assertStatus(422);
+        $this->assertStringContainsString('high_risk', $resp->getContent());
+    }
+
+    public function test_discover_rejects_prompt_payload_fields(): void
+    {
+        $this->createNode([], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['m'],
+            'max_tokens' => 4096,
+        ]]);
+
+        $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&prompt=GDPR_CANARY_PROMPT_DO_NOT_LOG_20260701');
+
+        $resp->assertStatus(422)
+            ->assertJsonPath('error.code', 'validation_error')
+            ->assertJsonPath('error.fields.prompt.0', 'Discovery is control-plane only; send task payloads directly to the selected node.');
+        $this->assertStringContainsString('Discovery is control-plane only', $resp->getContent());
+    }
+
+    public function test_discover_public_view_redacts_route_endpoints_and_full_node_ids(): void
+    {
+        Cache::flush();
+        $node = $this->createNode([
+            'endpoint' => 'https://associated-green-levy-lesser.trycloudflare.com',
+            'transport_endpoint' => 'iicpsec://associated-green-levy-lesser.trycloudflare.com',
+            'transport_method' => 'external_tunnel',
+            'nat_type' => 'unknown',
+            'transport_metadata' => ['detection_log_tail' => ['rung 5: quick tunnel']],
+            'cx_public_key' => ['algorithm' => 'X25519', 'key' => 'abc'],
+            'relay_capable' => true,
+        ], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['qwen2.5:0.5b'],
+            'max_tokens' => 4096,
+        ]]);
+
+        $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&view=public')
+            ->assertStatus(200)
+            ->assertHeader('X-IICP-Discover-Data-Class', 'public_presentation')
+            ->assertJsonPath('view', 'public')
+            ->assertJsonPath('data_class', 'public_presentation')
+            ->assertJsonPath('route_fields_present', false)
+            ->assertJsonPath('nodes.0.node_id_prefix', substr($node->id, 0, 8))
+            ->assertJsonPath('nodes.0.route_class', 'external_tunnel')
+            ->assertJsonPath('nodes.0.key_ready', true);
+
+        $publicNode = $resp->json('nodes.0');
+        $this->assertArrayNotHasKey('node_id', $publicNode);
+        $this->assertArrayNotHasKey('endpoint', $publicNode);
+        $this->assertArrayNotHasKey('transport_endpoint', $publicNode);
+        $this->assertArrayNotHasKey('transport_metadata', $publicNode);
+        $this->assertArrayNotHasKey('cx_public_key', $publicNode);
+        $this->assertArrayNotHasKey('public_key', $publicNode);
+
+        $content = $resp->getContent();
+        $this->assertStringNotContainsString($node->id, $content);
+        $this->assertStringNotContainsString('associated-green-levy-lesser.trycloudflare.com', $content);
+        $this->assertStringNotContainsString('iicpsec://', $content);
+    }
+
+    public function test_discover_default_dispatch_view_keeps_route_fields_for_client_compatibility(): void
+    {
+        Cache::flush();
+        $node = $this->createNode([
+            'endpoint' => 'https://dispatch-route.example.com',
+            'transport_endpoint' => 'iicpsec://dispatch-route.example.com',
+            'transport_method' => 'external_tunnel',
+        ], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['qwen2.5:0.5b'],
+            'max_tokens' => 4096,
+        ]]);
+
+        $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')
+            ->assertStatus(200)
+            ->assertHeader('X-IICP-Discover-Data-Class', 'route_dispatch')
+            ->assertJsonPath('view', 'dispatch')
+            ->assertJsonPath('data_class', 'route_dispatch')
+            ->assertJsonPath('route_fields_present', true)
+            ->assertJsonPath('nodes.0.node_id', $node->id)
+            ->assertJsonPath('nodes.0.endpoint', 'https://dispatch-route.example.com')
+            ->assertJsonPath('nodes.0.transport_endpoint', 'iicpsec://dispatch-route.example.com');
+    }
+
+    private function signedPolicyManifest(): array
+    {
+        return $this->signedPolicyManifestWithOperatorKey()[0];
+    }
+
+    /** @return array{0: array<string,mixed>, 1: string} */
+    private function signedPolicyManifestWithOperatorKey(): array
+    {
+        $keypair = sodium_crypto_sign_keypair();
+        $publicKey = sodium_crypto_sign_publickey($keypair);
+        $secretKey = sodium_crypto_sign_secretkey($keypair);
+        $publicKeyB64 = base64_encode($publicKey);
+        $manifest = [
+            'version' => '2026-07-02',
+            'jurisdiction' => 'DE',
+            'remote_executor_can_read_prompt' => true,
+            'training_use' => 'none',
+            'retention' => ['task_payload' => 'none', 'logs_days' => 3],
+            'subprocessors' => ['self-hosted'],
+            'unsupported_intents' => [],
+        ];
+        $manifest['signature'] = [
+            'algorithm' => 'Ed25519',
+            'key_id' => 'policy-key-1',
+            'public_key' => $publicKeyB64,
+            'signed_at' => now()->subMinute()->toIso8601String(),
+            'expires_at' => now()->addDay()->toIso8601String(),
+        ];
+        $manifest['signature']['signature'] = base64_encode(sodium_crypto_sign_detached(
+            NodePolicyManifestVerifier::canonicalPayload($manifest),
+            $secretKey,
+        ));
+
+        return [$manifest, $publicKeyB64];
     }
 
     public function test_discovers_node_matching_intent(): void
@@ -811,7 +1025,7 @@ class DiscoverTest extends TestCase
         $this->assertNull($response->json('nodes.0.latency_estimate_ms'));
     }
 
-    /** @test CX-01/CX-02 (#360): discover surfaces the canonical CX key plus deprecated alias */
+    /** @test CX-01/CX-02/#557: discover surfaces only the canonical CX key */
     public function test_discover_surfaces_cx_public_key(): void
     {
         $intent = 'urn:iicp:intent:llm:chat:v1';
@@ -831,12 +1045,11 @@ class DiscoverTest extends TestCase
 
         $response->assertStatus(200)
             ->assertJsonPath('nodes.0.cx_public_key.algorithm', 'X25519')
-            ->assertJsonPath('nodes.0.cx_public_key.key_id', 'a1b2c3d4e5f60718')
-            ->assertJsonPath('nodes.0.public_key.algorithm', 'X25519')
-            ->assertJsonPath('nodes.0.public_key.key_id', 'a1b2c3d4e5f60718');
+            ->assertJsonPath('nodes.0.cx_public_key.key_id', 'a1b2c3d4e5f60718');
+        $this->assertArrayNotHasKey('public_key', $response->json('nodes.0'));
     }
 
-    /** @test #360: a node without CX support surfaces both CX key aliases as null in discover */
+    /** @test #360/#557: a node without CX support surfaces only canonical null */
     public function test_discover_public_key_null_for_non_cx_node(): void
     {
         $intent = 'urn:iicp:intent:llm:chat:v1';
@@ -847,8 +1060,8 @@ class DiscoverTest extends TestCase
         $response = $this->getJson("/api/v1/discover?intent={$intent}");
 
         $response->assertStatus(200);
-        $this->assertNull($response->json('nodes.0.public_key'));
         $this->assertNull($response->json('nodes.0.cx_public_key'));
+        $this->assertArrayNotHasKey('public_key', $response->json('nodes.0'));
     }
 
     public function test_relay_available_false_when_no_relay_capable_nodes(): void

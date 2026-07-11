@@ -26,16 +26,24 @@ class Operator extends Model
         'tier',
         'badge',
         'provenance',
+        'terms_version',
+        'terms_accepted_at',
+        'dpa_version',
+        'dpa_accepted_at',
+        'acceptance_method',
+        'acceptance_nonce_sha256',
     ];
 
     protected $casts = [
         'first_seen_ms' => 'integer',
         'ordinal' => 'integer',
         'provenance' => 'array',
+        'terms_accepted_at' => 'datetime',
+        'dpa_accepted_at' => 'datetime',
     ];
 
     /** operator_pubkey is a shared secret-ish identity key — keep it out of array/JSON casts. */
-    protected $hidden = ['operator_pubkey'];
+    protected $hidden = ['operator_pubkey', 'acceptance_nonce_sha256'];
 
     /**
      * Public, non-secret operator key fingerprint for display-name disambiguation.

@@ -10,6 +10,12 @@
  * deterministic ranking. The directory NEVER sees task payloads — only the
  * intent URN and optional QoS / region / model hints (ADR-001 hard rule).
  *
+ * Default discovery is route-dispatch data: clients need node_id + endpoint
+ * to submit directly to the selected provider. Presentation surfaces that do
+ * not need to dispatch can request `view=public` to receive the same scored
+ * candidates with full node IDs, endpoint URLs and transport endpoint details
+ * removed (#611).
+ *
  * Implements:
  *   - ADR-008 — Phase 1 scoring formula (latency × load × reputation × match)
  *   - ADR-012 — Phase 5 CIP weights kick in per-request when ?model= is set
@@ -23,11 +29,14 @@ namespace App\Http\Controllers;
 
 use App\Models\Node;
 use App\Models\Operator;
+use App\Services\DispatchUsageCounter;
+use App\Services\IntentPolicyGuard;
 use App\Services\NodeScorer;
 use App\Services\OtelTracer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Validation\ValidationException;
 
 class DiscoverController extends Controller
 {
@@ -51,7 +60,11 @@ class DiscoverController extends Controller
 
     private const EDGE_STALE_REVALIDATE_SECONDS = 5;
 
-    public function __construct(private NodeScorer $scorer) {}
+    public function __construct(
+        private NodeScorer $scorer,
+        private IntentPolicyGuard $intentPolicy,
+        private DispatchUsageCounter $usage,
+    ) {}
 
     /**
      * Compute a discover() result and stamp it with a query-time signal.
@@ -80,6 +93,19 @@ class DiscoverController extends Controller
             $request->merge(['relay_capable' => filter_var($request->input('relay_capable'), FILTER_VALIDATE_BOOLEAN)]);
         }
 
+        // IICP-DIR privacy invariant: discovery is control-plane only. Task
+        // payloads/prompts MUST go directly to the selected node, never to the
+        // directory. Reject common payload-like fields instead of silently
+        // accepting accidental prompt leakage from a client integration.
+        $payloadLikeFields = ['prompt', 'messages', 'payload', 'input', 'chat', 'content', 'response'];
+        foreach ($payloadLikeFields as $field) {
+            if ($request->has($field)) {
+                throw ValidationException::withMessages([
+                    $field => ['Discovery is control-plane only; send task payloads directly to the selected node.'],
+                ]);
+            }
+        }
+
         $validated = $request->validate([
             'intent' => ['required', 'string', 'max:255'],
             'qos' => ['sometimes', 'string', 'in:realtime,interactive,batch,best-effort'],
@@ -103,7 +129,14 @@ class DiscoverController extends Controller
             'modality' => ['sometimes', 'string', 'in:text,image,audio,video'],
             // #548 — additive shadow score; normal discover ordering remains v1.
             'score_version' => ['sometimes', 'string', 'in:v2_shadow'],
+            // #611 — safe presentation view for dashboards/research. Default
+            // remains route-bearing dispatch data for current client compatibility.
+            'view' => ['sometimes', 'string', 'in:dispatch,public'],
         ]);
+
+        if ($message = $this->intentPolicy->refusalMessage($validated['intent'])) {
+            throw ValidationException::withMessages(['intent' => [$message]]);
+        }
 
         $span = OtelTracer::startSpan($request, 'iicp.directory.discover');
         $start = microtime(true);
@@ -150,12 +183,41 @@ class DiscoverController extends Controller
         // so SDK auto-election (peer_manager::elect_relay) can warn operators up-front when
         // no relay peer exists, without a second round-trip to the directory.
         $relayAvailable = ! empty(array_filter($nodes, fn ($n) => ($n['relay_capable'] ?? false) === true));
+        $view = $validated['view'] ?? 'dispatch';
+        $responseNodes = $view === 'public' ? $this->publicDiscoverNodes($nodes) : $nodes;
+        $dataClass = $view === 'public' ? 'public_presentation' : 'route_dispatch';
+        $this->usage->record($view === 'public'
+            ? DispatchUsageCounter::PUBLIC_VIEW
+            : DispatchUsageCounter::LEGACY_DISPATCH);
 
         return response()->json([
-            'nodes' => $nodes,
+            'nodes' => $responseNodes,
             'count' => count($nodes),
             'relay_available' => $relayAvailable,
             'query_ms' => $queryMs,
+            // #611 — makes the public/dispatch split machine-visible. Public
+            // pages should use registry endpoints or view=public; route-dispatch
+            // consumers use the default view because they need serving URLs.
+            'view' => $view,
+            'data_class' => $dataClass,
+            'route_fields_present' => $view === 'dispatch',
+            // #612 — staged route-hardening migration. New clients can request
+            // one concrete, short-lived dispatch route via POST before sending a
+            // task, while older clients continue using default dispatch discover.
+            'dispatch_ticket_endpoint' => '/api/v1/dispatch/ticket',
+            'ticketed_dispatch_available' => true,
+            'redaction' => $view === 'public'
+                ? [
+                    'node_id' => 'node_id_prefix_only',
+                    'endpoint' => 'omitted',
+                    'transport_endpoint' => 'omitted',
+                    'transport_metadata' => 'omitted',
+                    'cx_public_key' => 'key_ready_boolean_only',
+                ]
+                : [
+                    'dispatch_route' => 'present',
+                    'public_presentation' => 'use view=public or /api/v1/registry/*',
+                ],
         ])->header(
             'Cache-Control',
             sprintf(
@@ -165,7 +227,104 @@ class DiscoverController extends Controller
                 self::EDGE_STALE_REVALIDATE_SECONDS,
             )
         )
+            ->header('X-IICP-Discover-Data-Class', $dataClass)
             ->header('Vary', 'Accept-Encoding');
+    }
+
+    /**
+     * Return a presentation-safe projection of discover results.
+     *
+     * This intentionally keeps ranking, usability and trust fields while
+     * removing fields that identify or dial the node (`node_id`, `endpoint`,
+     * `transport_endpoint`, raw transport metadata and CX key material). It is
+     * for dashboards, audits and educational examples; clients that actually
+     * dispatch tasks must use route-dispatch discovery.
+     *
+     * @param  array<int,array<string,mixed>>  $nodes
+     * @return array<int,array<string,mixed>>
+     */
+    private function publicDiscoverNodes(array $nodes): array
+    {
+        return array_map(fn (array $node) => $this->publicDiscoverNode($node), $nodes);
+    }
+
+    /**
+     * @param  array<string,mixed>  $node
+     * @return array<string,mixed>
+     */
+    private function publicDiscoverNode(array $node): array
+    {
+        return array_filter([
+            'node_id_prefix' => $this->publicNodePrefix($node['node_id'] ?? null),
+            'region' => $node['region'] ?? null,
+            'score' => $node['score'] ?? null,
+            'available' => $node['available'] ?? null,
+            'relay_capable' => (bool) ($node['relay_capable'] ?? false),
+            'route_class' => $this->publicRouteClass($node),
+            'transport_method' => $node['transport_method'] ?? null,
+            'nat_type' => $node['nat_type'] ?? null,
+            'address_family' => $node['address_family'] ?? null,
+            'transport' => $node['transport'] ?? null,
+            'reachability_tier' => $node['reachability_tier'] ?? null,
+            'directory_observed_reachable' => $node['directory_observed_reachable'] ?? null,
+            'route_evidence' => $node['route_evidence'] ?? null,
+            'routing_hint' => $node['routing_hint'] ?? null,
+            'browser_usable' => $node['browser_usable'] ?? null,
+            'exposure_mode' => $node['exposure_mode'] ?? null,
+            'key_ready' => (bool) ($node['key_ready'] ?? (($node['cx_public_key'] ?? null) !== null)),
+            'privacy_routing_status' => $node['privacy_routing_status'] ?? null,
+            'sdk_language' => $node['sdk_language'] ?? null,
+            'sdk_version' => $node['sdk_version'] ?? null,
+            'sdk_status' => $node['sdk_status'] ?? null,
+            'sdk_baseline_version' => $node['sdk_baseline_version'] ?? null,
+            'upgrade_required' => $node['upgrade_required'] ?? null,
+            'health_label' => $node['health_label'] ?? null,
+            'health_confidence' => $node['health_confidence'] ?? null,
+            'performance' => $node['performance'] ?? null,
+            'backend_stability' => $node['backend_stability'] ?? null,
+            'reputation_score' => $node['reputation_score'] ?? null,
+            'reputation_tier' => $node['reputation_tier'] ?? null,
+            'trust_progress' => $node['trust_progress'] ?? null,
+            'probation' => $node['probation'] ?? null,
+            'models' => $node['models'] ?? null,
+            'capability_summary' => $node['capability_summary'] ?? null,
+            'input_modalities' => $node['input_modalities'] ?? null,
+            'quantization' => $node['quantization'] ?? null,
+            'inference_engine' => $node['inference_engine'] ?? null,
+            'backend' => $node['backend'] ?? null,
+            'cip_policy' => $node['cip_policy'] ?? null,
+            'cip_conformance_level' => $node['cip_conformance_level'] ?? null,
+            'pricing' => $node['pricing'] ?? null,
+            'operator_display_name' => $node['operator_display_name'] ?? null,
+            'operator_fingerprint' => $node['operator_fingerprint'] ?? null,
+            'node_policy_manifest' => $node['node_policy_manifest'] ?? null,
+        ], fn ($value) => $value !== null);
+    }
+
+    private function publicNodePrefix(mixed $nodeId): ?string
+    {
+        if (! is_string($nodeId) || $nodeId === '') {
+            return null;
+        }
+
+        $isUuid = preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $nodeId);
+
+        return $isUuid ? substr($nodeId, 0, 8) : substr($nodeId, 0, 36);
+    }
+
+    /**
+     * @param  array<string,mixed>  $node
+     */
+    private function publicRouteClass(array $node): string
+    {
+        foreach (['transport_method', 'routing_hint', 'reachability_tier', 'exposure_mode'] as $field) {
+            $value = $node[$field] ?? null;
+            if (is_string($value) && $value !== '') {
+                return $value;
+            }
+        }
+
+        return 'unknown';
     }
 
     /**

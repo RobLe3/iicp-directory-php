@@ -1,7 +1,7 @@
 openapi: "3.1.0"
 info:
   title: IICP Directory Service
-  version: "1.5.0"
+  version: "1.6.0"
   description: >
     IICP directory service — node registration, heartbeat, discovery, and
     node detail. Traffic NEVER routes through the directory; it is
@@ -21,6 +21,8 @@ tags:
     description: Node self-registration and liveness
   - name: discovery
     description: Client node discovery
+  - name: operator
+    description: Operator-key authenticated self-service
 
 paths:
   /register:
@@ -107,7 +109,12 @@ paths:
         Returns nodes pre-scored and pre-sorted by the directory using
         the ADR-008 composite formula. Nodes are filtered by availability
         window and last_seen within 90 seconds. Score < 0.1 nodes are
-        excluded. Clients MUST NOT re-score results.
+        excluded. Clients MUST NOT re-score results. Default responses are
+        route-dispatch data and include node_id + serving endpoint fields so
+        clients can submit tasks directly to the selected node. Use
+        view=public for a presentation-safe response that redacts full node IDs,
+        endpoint URLs, native transport URLs, opaque transport metadata and raw
+        CX key material.
       parameters:
         - name: intent
           in: query
@@ -137,6 +144,18 @@ paths:
             minimum: 1
             maximum: 50
             default: 10
+        - name: view
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [dispatch, public]
+            default: dispatch
+          description: >
+            dispatch returns route-bearing data for task submission. public
+            returns a presentation-safe projection without full node IDs,
+            endpoint URLs, native transport URLs, transport metadata or raw CX
+            public keys.
       responses:
         "200":
           description: Scored node list
@@ -146,6 +165,129 @@ paths:
                 $ref: "../spec/schemas/nodelist.json"
         "400":
           $ref: "#/components/responses/BadRequest"
+
+  /dispatch/ticket:
+    post:
+      operationId: issueDispatchRouteTicket
+      tags: [discovery]
+      summary: Request one short-lived route-bearing dispatch ticket
+      description: >
+        Control-plane-only route selection. Task prompts and payloads are
+        rejected. Clients may exclude previously failed node ID prefixes when
+        requesting the next candidate. Full tickets and route URLs must not be
+        logged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [intent]
+              additionalProperties: false
+              properties:
+                intent: { type: string }
+                region: { type: string }
+                min_reputation: { type: number, minimum: 0, maximum: 1 }
+                node_id: { type: string }
+                node_id_prefix: { type: string, minLength: 4, maxLength: 36 }
+                exclude_node_id_prefixes:
+                  type: array
+                  maxItems: 10
+                  uniqueItems: true
+                  items: { type: string, minLength: 4, maxLength: 36 }
+      responses:
+        "201":
+          description: Ticketed concrete route; Cache-Control is no-store
+        "404":
+          description: No eligible route
+        "409":
+          description: Ambiguous node prefix
+        "422":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          description: Directory ticket signing is not configured
+
+  /operator/challenge:
+    post:
+      operationId: createOperatorChallenge
+      tags: [operator]
+      summary: Create a one-time operator-key challenge
+      description: >
+        Returns a five-minute single-use nonce for a known operator. The
+        response contains only a short fingerprint and current acceptance
+        versions; it never exposes the stored operator key or private records.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operator_pub]
+              additionalProperties: false
+              properties:
+                operator_pub: { type: string, maxLength: 64 }
+      responses:
+        "200": { description: One-time challenge; Cache-Control is no-store }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /operator/acceptance:
+    post:
+      operationId: acceptOperatorTerms
+      tags: [operator]
+      summary: Record current terms and DPA acceptance
+      description: >
+        Requires an Ed25519 signature over the canonical operator self-service
+        envelope and a fresh challenge. Acceptance is evidence of key control
+        and version acknowledgement, not legal certification.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/OperatorSignedRequest"
+                - type: object
+                  required: [terms_version, dpa_version]
+                  properties:
+                    terms_version: { type: string, maxLength: 64 }
+                    dpa_version: { type: string, maxLength: 64 }
+      responses:
+        "200": { description: Redacted acceptance receipt; Cache-Control is no-store }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: Acceptance version is no longer current }
+
+  /operator/dsr/{action}:
+    post:
+      operationId: operatorDataSubjectRequest
+      tags: [operator]
+      summary: Export, restrict or anonymize operator-linked records
+      description: >
+        Operator-key authenticated self-service. action is export, restrict or
+        anonymize. Mutating actions require confirm=true. The authenticated
+        operator key is always the selector, preventing cross-operator access.
+        Results are no-store and redacted: they never include prompts, node or
+        proxy tokens, HMAC keys, raw endpoint secrets, or a full operator key.
+      parameters:
+        - name: action
+          in: path
+          required: true
+          schema: { type: string, enum: [export, restrict, anonymize] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/OperatorSignedRequest"
+                - type: object
+                  properties:
+                    tracking_id: { type: string, maxLength: 64 }
+                    confirm: { type: boolean }
+      responses:
+        "200": { description: Redacted DSR result; Cache-Control is no-store }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
 
   /node/{id}:
     get:
@@ -177,6 +319,14 @@ components:
       description: node_token issued at registration (Phase 1). JWT in Phase 2+.
 
   schemas:
+    OperatorSignedRequest:
+      type: object
+      required: [operator_pub, nonce, ts, sig]
+      properties:
+        operator_pub: { type: string, maxLength: 64 }
+        nonce: { type: string, minLength: 16, maxLength: 64 }
+        ts: { type: integer, description: Unix timestamp within plus or minus 300 seconds }
+        sig: { type: string, maxLength: 128, description: Base64 Ed25519 signature }
     NodeRegistration:
       type: object
       required: [endpoint, region, capabilities, limits]

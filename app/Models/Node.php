@@ -24,6 +24,7 @@ class Node extends Model
         'backend',               // detected backend server flavor: ollama/lmstudio/vllm/llamacpp/anthropic/custom
         'health_models',         // #494: runtime model list from last heartbeat; null=not reported yet
         'backend_stability',      // #561: provider-local backend/model readiness; separate from network reachability
+        'policy_manifest',        // EU/GDPR: public node policy manifest; unsigned self-attested or signed-valid
         'last_seen',
         'node_token_hash',
         'proxy_token_hash',      // #114: separate token for proxy telemetry auth
@@ -139,6 +140,8 @@ class Node extends Model
         'health_models' => 'array',
         // #561 — redacted backend stability report from SDK observers
         'backend_stability' => 'array',
+        // EU/GDPR phase-1 — public self-attested operator policy manifest.
+        'policy_manifest' => 'array',
         // #331 Phase A.1 / ADR-041 — NAT-traversal observability
         'transport_metadata' => 'array',
         // IICP-CX S.16 §3.1 — X25519 public key advertisement (#360)

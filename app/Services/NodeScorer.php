@@ -5,6 +5,7 @@
 namespace App\Services;
 
 use App\Models\Node;
+use App\Models\Operator;
 use Carbon\Carbon;
 
 /**
@@ -266,10 +267,6 @@ class NodeScorer
                 // payloads E2E to the node (#360). null = node does not support CX and
                 // MUST NOT receive CX-encrypted payloads.
                 'cx_public_key' => $node->cx_public_key,
-                // Deprecated compatibility alias: older discover/NODELIST text exposed
-                // this CX key as `public_key`. Keep it until the planned field unification
-                // cutover; fixed Rust clients tolerate both names and prefer cx_public_key.
-                'public_key' => $node->cx_public_key,
                 // Address-family signal — 'ipv4' / 'ipv6' / 'dual' / 'unknown'.
                 // Derived from endpoint + transport_endpoint hosts so dashboards
                 // can render an IPv4/IPv6 badge per maintainer directive 2026-05-27.
@@ -329,6 +326,7 @@ class NodeScorer
                 'inference_engine' => $node->capabilities->pluck('inference_engine')->filter()->unique()->values()->all(),
                 'backend' => $node->backend,
                 'backend_stability' => self::backendStability($node),
+                'node_policy_manifest' => self::policyManifest($node),
                 // CIP-D1: Provider opt-in policy block (spec S.12 §2.1)
                 'cip_policy' => [
                     'allow_remote_inference' => (bool) $node->allow_remote_inference,
@@ -433,6 +431,72 @@ class NodeScorer
         ];
     }
 
+    /**
+     * Public route-recovery hints for dashboards.
+     *
+     * These fields are deliberately advisory. They explain why a node may be
+     * alive but not fully stable from the directory/browser point of view
+     * without changing the actual discovery predicate or leaking endpoints.
+     *
+     * @return array{recovery_state:string,route_recovery_hint:string}
+     */
+    public static function recoverySignals(Node $node, ?array $health = null): array
+    {
+        $routing = self::routingSignals($node, $health);
+        $heartbeating = self::isHeartbeating($node);
+        $publicRoutable = self::publicRoutable($node);
+
+        if (! $heartbeating) {
+            return [
+                'recovery_state' => 'unavailable',
+                'route_recovery_hint' => 'no_recent_heartbeat',
+            ];
+        }
+
+        if ($node->endpoint_verified_dead_at !== null) {
+            return [
+                'recovery_state' => 'cooldown',
+                'route_recovery_hint' => 'route_cooldown',
+            ];
+        }
+
+        if (! $publicRoutable) {
+            return [
+                'recovery_state' => self::selfAttestsRoute($node) ? 'recovering' : 'unknown',
+                'route_recovery_hint' => self::selfAttestsRoute($node) ? 'route_recovering' : 'route_not_advertised',
+            ];
+        }
+
+        if (($routing['routing_hint'] ?? null) === 'http_ipv6'
+            && ($routing['route_evidence'] ?? null) !== 'directory_observed') {
+            return [
+                'recovery_state' => 'recovering',
+                'route_recovery_hint' => 'direct_route_unverified',
+            ];
+        }
+
+        if ((bool) $node->relay_capable && ! (bool) $node->public_reachable) {
+            return [
+                'recovery_state' => 'recovering',
+                'route_recovery_hint' => 'relay_route_waiting',
+            ];
+        }
+
+        if (in_array($node->exposure_mode, ['relay_required', 'tunnel_required', 'outbound_only'], true)
+            && ! (bool) $node->public_reachable
+            && ($routing['route_evidence'] ?? null) !== 'directory_observed') {
+            return [
+                'recovery_state' => 'recovering',
+                'route_recovery_hint' => 'tunnel_recovering',
+            ];
+        }
+
+        return [
+            'recovery_state' => 'stable',
+            'route_recovery_hint' => 'none',
+        ];
+    }
+
     public static function complianceSignals(Node $node): array
     {
         $sdkStatus = self::sdkStatus($node->sdk_version);
@@ -453,6 +517,113 @@ class NodeScorer
                 'evidence' => $node->auto_update_enabled === null ? 'unknown' : 'self_reported',
             ],
         ];
+    }
+
+    /**
+     * Public node policy manifest.
+     *
+     * Unsigned manifests remain backward-compatible self-attestations. Signed
+     * manifests add tamper-evidence that strict clients can require before
+     * prompt dispatch. The signature is not a complete legal/KYC proof.
+     *
+     * @return array<string,mixed>|null
+     */
+    public static function policyManifest(Node $node): ?array
+    {
+        $manifest = is_array($node->policy_manifest) ? $node->policy_manifest : null;
+        if ($manifest === null || $manifest === []) {
+            return null;
+        }
+        $operator = $node->operator_pubkey
+            ? Operator::where('operator_pubkey', $node->operator_pubkey)->first()
+            : null;
+        $verification = NodePolicyManifestVerifier::verify($manifest, [
+            'operator_pubkey' => $node->operator_pubkey,
+            'operator_verified' => (bool) ($node->operator_verified ?? false),
+            'operator_trust_tier' => $node->operator_trust_tier,
+            'operator_known' => self::operatorGovernanceAccepted($operator),
+        ]);
+        $governance = self::operatorGovernanceSignals($operator);
+
+        return [
+            'version' => $manifest['version'] ?? null,
+            'jurisdiction' => $manifest['jurisdiction'] ?? null,
+            'policy_url' => $manifest['policy_url'] ?? null,
+            'contact_url' => $manifest['contact_url'] ?? null,
+            'remote_executor_can_read_prompt' => $manifest['remote_executor_can_read_prompt'] ?? true,
+            'training_use' => $manifest['training_use'] ?? 'provider_defined',
+            'retention' => [
+                'task_payload' => $manifest['retention']['task_payload'] ?? 'provider_defined',
+                'logs_days' => $manifest['retention']['logs_days'] ?? null,
+            ],
+            'subprocessors' => array_values($manifest['subprocessors'] ?? []),
+            'unsupported_intents' => array_values($manifest['unsupported_intents'] ?? []),
+            'signed_statement' => $manifest['signed_statement'] ?? null,
+            // #602 — safe identity/accountability layer. These are display and
+            // routing-policy hints only: signature validity, operator binding and
+            // revocation state are not legal/DPA compliance proof.
+            'manifest_identity_level' => $verification['manifest_identity_level'],
+            'operator_fingerprint' => $verification['operator_fingerprint'],
+            'policy_key_fingerprint' => $verification['policy_key_fingerprint'],
+            'revoked_at' => $verification['revoked_at'],
+            'rotation_epoch' => $verification['rotation_epoch'],
+            'revocation_reason_class' => $verification['revocation_reason_class'],
+            'operator_governance' => $governance,
+            'verification' => [
+                'status' => $verification['status'],
+                'algorithm' => $verification['algorithm'],
+                'key_id' => $verification['key_id'],
+                'signed_at' => $verification['signed_at'],
+                'expires_at' => $verification['expires_at'],
+                'canonical_sha256' => $verification['canonical_sha256'],
+                'public_key_sha256' => $verification['public_key_sha256'],
+                'error' => $verification['error'],
+            ],
+            'evidence' => $verification['evidence'],
+        ];
+    }
+
+    private static function operatorGovernanceAccepted(?Operator $operator): bool
+    {
+        if ($operator === null) {
+            return false;
+        }
+
+        $requiredTerms = (string) config('app.iicp_operator_terms_version', '2026-07-09');
+        $requiredDpa = (string) config('app.iicp_operator_dpa_version', '2026-07-09');
+
+        return $operator->terms_accepted_at !== null
+            && $operator->dpa_accepted_at !== null
+            && $operator->terms_version === $requiredTerms
+            && $operator->dpa_version === $requiredDpa;
+    }
+
+    /** @return array<string,mixed> */
+    private static function operatorGovernanceSignals(?Operator $operator): array
+    {
+        if ($operator === null) {
+            return [
+                'known_operator' => false,
+                'terms_status' => 'missing',
+                'dpa_status' => 'missing',
+                'evidence' => 'none',
+            ];
+        }
+
+        $requiredTerms = (string) config('app.iicp_operator_terms_version', '2026-07-09');
+        $requiredDpa = (string) config('app.iicp_operator_dpa_version', '2026-07-09');
+        $termsCurrent = $operator->terms_accepted_at !== null && $operator->terms_version === $requiredTerms;
+        $dpaCurrent = $operator->dpa_accepted_at !== null && $operator->dpa_version === $requiredDpa;
+
+        return array_filter([
+            'known_operator' => $termsCurrent && $dpaCurrent,
+            'terms_status' => $termsCurrent ? 'current' : ($operator->terms_accepted_at ? 'outdated' : 'missing'),
+            'terms_version' => $operator->terms_version,
+            'dpa_status' => $dpaCurrent ? 'current' : ($operator->dpa_accepted_at ? 'outdated' : 'missing'),
+            'dpa_version' => $operator->dpa_version,
+            'acceptance_method' => $operator->acceptance_method,
+            'evidence' => ($termsCurrent && $dpaCurrent) ? 'operator_key_challenge_record' : 'incomplete_or_outdated',
+        ], fn ($value) => $value !== null);
     }
 
     /**
@@ -696,6 +867,7 @@ class NodeScorer
         $trustProgress = self::trustProgress($node);
         $heartbeating = self::isHeartbeating($node);
         $publicRoutable = self::publicRoutable($node);
+        $recovery = self::recoverySignals($node, $health);
         $reasons = self::statusSummaryReasons($node, $compliance, $heartbeating, $publicRoutable, $health);
         $posture = self::statusPosture($routing, $compliance, $heartbeating, $publicRoutable, $health);
 
@@ -709,6 +881,8 @@ class NodeScorer
             'browser_usable' => (bool) ($routing['browser_usable'] ?? false),
             'key_ready' => (bool) $compliance['key_ready'],
             'client_current' => $compliance['sdk_status'] === 'current',
+            'recovery_state' => $recovery['recovery_state'],
+            'route_recovery_hint' => $recovery['route_recovery_hint'],
             'backend_stability' => $backend,
             'trust_progress' => $trustProgress,
             'evidence_last_refreshed_at' => $health['evaluated_at'] ?? $node->last_seen?->toIso8601String(),

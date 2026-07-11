@@ -35,11 +35,17 @@ class AggregateProbeMetricsJob implements ShouldQueue
      */
     private const LATENCY_VALID_FROM = '2026-06-11 11:25:00';
 
+    private ?string $computedAtBucket = null;
+
     public function handle(): void
     {
+        $this->computedAtBucket = $this->aggregateBucket();
+
         foreach (self::WINDOWS as $label => $cutoff) {
             $this->aggregateWindow($label, $cutoff);
         }
+
+        $this->computedAtBucket = null;
     }
 
     private function aggregateWindow(string $window, string $cutoff): void
@@ -152,12 +158,28 @@ class AggregateProbeMetricsJob implements ShouldQueue
 
     private function writeAggregate(string $window, string $metric, ?float $value, int $samples = 0): void
     {
-        DB::table('iicp_telemetry_aggregates')->insert([
-            'window' => $window,
-            'metric' => $metric,
-            'value' => $value,
-            'sample_count' => $samples,
-            'computed_at' => now(),
-        ]);
+        // Keep aggregate signal dense but bounded. The scheduled job and the
+        // stochastic ingestion dispatch can both run inside the same 5-minute
+        // cadence; upserting into the current bucket avoids duplicate rows for
+        // identical window+metric snapshots while retention handles old buckets.
+        DB::table('iicp_telemetry_aggregates')->updateOrInsert(
+            [
+                'window' => $window,
+                'metric' => $metric,
+                'computed_at' => $this->computedAtBucket ?? $this->aggregateBucket(),
+            ],
+            [
+                'value' => $value,
+                'sample_count' => $samples,
+            ],
+        );
+    }
+
+    private function aggregateBucket(): string
+    {
+        $now = now()->utc();
+        $minute = intdiv((int) $now->minute, 5) * 5;
+
+        return $now->copy()->setTime((int) $now->hour, $minute, 0)->format('Y-m-d H:i:s');
     }
 }

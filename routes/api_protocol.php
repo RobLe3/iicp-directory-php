@@ -30,6 +30,8 @@ Route::prefix('v1')->group(function () {
     Route::get('/discover', DiscoverController::class)
         ->middleware([LoadRedirect::class, 'throttle:60,1']);
 
+    require __DIR__.'/api_protocol_dispatch.php';
+
     Route::get('/node/{id}', [NodeController::class, 'show'])
         ->middleware([LoadRedirect::class, 'throttle:60,1']);
 

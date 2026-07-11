@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Node;
 use App\Models\NodeEvent;
+use App\Services\NodePolicyManifestVerifier;
 use App\Services\OperatorDelegationVerifier;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -107,6 +108,103 @@ class RegisterTest extends TestCase
         $this->postJson('/api/v1/register', $payload)->assertStatus(422);
     }
 
+    public function test_register_stores_public_node_policy_manifest(): void
+    {
+        $nodeId = (string) Str::uuid();
+        $payload = array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'policy_manifest' => [
+                'version' => '2026-07-02',
+                'jurisdiction' => 'DE',
+                'policy_url' => 'https://node.example.com/policy',
+                'remote_executor_can_read_prompt' => true,
+                'training_use' => 'none',
+                'retention' => ['task_payload' => 'none', 'logs_days' => 7],
+                'subprocessors' => ['self-hosted'],
+                'unsupported_intents' => ['urn:iicp:intent:biometric:protected-trait:v1'],
+            ],
+        ]);
+
+        $this->postJson('/api/v1/register', $payload)->assertStatus(201);
+
+        $node = Node::findOrFail($nodeId);
+        $this->assertSame('DE', $node->policy_manifest['jurisdiction']);
+        $this->assertSame('none', $node->policy_manifest['training_use']);
+        $event = NodeEvent::where('node_id', $nodeId)->where('event_type', 'REGISTER')->latest('seq')->first();
+        $this->assertSame('DE', $event->payload['policy_manifest']['jurisdiction']);
+    }
+
+    public function test_register_accepts_signed_node_policy_manifest(): void
+    {
+        $nodeId = (string) Str::uuid();
+        $manifest = $this->signedPolicyManifest();
+        $payload = array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'policy_manifest' => $manifest,
+        ]);
+
+        $this->postJson('/api/v1/register', $payload)->assertStatus(201);
+
+        $node = Node::findOrFail($nodeId);
+        $verification = NodePolicyManifestVerifier::verify($node->policy_manifest);
+        $this->assertSame(NodePolicyManifestVerifier::STATUS_SIGNED_VALID, $verification['status']);
+        $this->assertSame('policy-key-1', $verification['key_id']);
+    }
+
+    public function test_register_rejects_invalid_signed_node_policy_manifest(): void
+    {
+        $manifest = $this->signedPolicyManifest();
+        $manifest['jurisdiction'] = 'US'; // mutate after signing
+        $payload = array_merge($this->validPayload, ['policy_manifest' => $manifest]);
+
+        $response = $this->postJson('/api/v1/register', $payload);
+
+        $response->assertStatus(422);
+        $this->assertStringContainsString('Invalid node policy manifest signature', $response->getContent());
+        $this->assertDatabaseCount('nodes', 0);
+    }
+
+    public function test_register_rejects_mutated_policy_manifest_signature_expiry(): void
+    {
+        $manifest = $this->signedPolicyManifest();
+        $manifest['signature']['expires_at'] = now()->addYear()->toIso8601String(); // mutate signed metadata
+        $payload = array_merge($this->validPayload, ['policy_manifest' => $manifest]);
+
+        $response = $this->postJson('/api/v1/register', $payload);
+
+        $response->assertStatus(422);
+        $this->assertStringContainsString('Invalid node policy manifest signature', $response->getContent());
+        $this->assertDatabaseCount('nodes', 0);
+    }
+
+    public function test_register_rejects_expired_signed_node_policy_manifest(): void
+    {
+        $manifest = $this->signedPolicyManifest(expiresAt: now()->subMinute()->toIso8601String());
+        $payload = array_merge($this->validPayload, ['policy_manifest' => $manifest]);
+
+        $response = $this->postJson('/api/v1/register', $payload);
+
+        $response->assertStatus(422);
+        $this->assertStringContainsString('signed_expired', $response->getContent());
+        $this->assertDatabaseCount('nodes', 0);
+    }
+
+    public function test_register_rejects_revoked_signed_node_policy_manifest(): void
+    {
+        $manifest = $this->signedPolicyManifest(signatureOverrides: [
+            'revoked_at' => now()->subMinute()->toIso8601String(),
+            'revocation_reason_class' => 'operator_request',
+            'rotation_epoch' => 2,
+        ]);
+        $payload = array_merge($this->validPayload, ['policy_manifest' => $manifest]);
+
+        $response = $this->postJson('/api/v1/register', $payload);
+
+        $response->assertStatus(422);
+        $this->assertStringContainsString('signed_revoked', $response->getContent());
+        $this->assertDatabaseCount('nodes', 0);
+    }
+
     public function test_registers_node_and_returns_token(): void
     {
         $response = $this->postJson('/api/v1/register', $this->validPayload);
@@ -120,6 +218,36 @@ class RegisterTest extends TestCase
 
         $this->assertDatabaseHas('nodes', ['endpoint' => 'https://node.example.com']);
         $this->assertDatabaseHas('capabilities', ['intent' => 'urn:iicp:intent:llm:chat:v1']);
+    }
+
+    private function signedPolicyManifest(?string $expiresAt = null, array $signatureOverrides = []): array
+    {
+        $keypair = sodium_crypto_sign_keypair();
+        $publicKey = sodium_crypto_sign_publickey($keypair);
+        $secretKey = sodium_crypto_sign_secretkey($keypair);
+        $manifest = [
+            'version' => '2026-07-02',
+            'jurisdiction' => 'DE',
+            'policy_url' => 'https://node.example.com/policy',
+            'remote_executor_can_read_prompt' => true,
+            'training_use' => 'none',
+            'retention' => ['task_payload' => 'none', 'logs_days' => 7],
+            'subprocessors' => ['self-hosted'],
+            'unsupported_intents' => [],
+        ];
+        $manifest['signature'] = array_merge([
+            'algorithm' => 'Ed25519',
+            'key_id' => 'policy-key-1',
+            'public_key' => base64_encode($publicKey),
+            'signed_at' => now()->subMinute()->toIso8601String(),
+            'expires_at' => $expiresAt ?? now()->addDay()->toIso8601String(),
+        ], $signatureOverrides);
+        $manifest['signature']['signature'] = base64_encode(sodium_crypto_sign_detached(
+            NodePolicyManifestVerifier::canonicalPayload($manifest),
+            $secretKey,
+        ));
+
+        return $manifest;
     }
 
     public function test_returns_node_id_when_provided(): void
@@ -154,6 +282,29 @@ class RegisterTest extends TestCase
         $payload['capabilities'][0]['intent'] = 'invalid-intent';
 
         $this->postJson('/api/v1/register', $payload)->assertStatus(422);
+    }
+
+    public function test_rejects_prohibited_capability_intent(): void
+    {
+        $payload = $this->validPayload;
+        $payload['capabilities'][0]['intent'] = 'urn:iicp:intent:emotion:workplace-monitoring:v1';
+
+        $response = $this->postJson('/api/v1/register', $payload);
+
+        $response->assertStatus(422);
+        $this->assertStringContainsString('IICP directory policy', $response->getContent());
+        $this->assertDatabaseCount('nodes', 0);
+    }
+
+    public function test_rejects_high_risk_capability_intent_on_public_mesh(): void
+    {
+        $payload = $this->validPayload;
+        $payload['capabilities'][0]['intent'] = 'urn:iicp:intent:credit:decision:v1';
+
+        $response = $this->postJson('/api/v1/register', $payload);
+
+        $response->assertStatus(422);
+        $this->assertStringContainsString('high_risk', $response->getContent());
     }
 
     // Custom intent URN namespace — x.<vendor> prefix (#244)

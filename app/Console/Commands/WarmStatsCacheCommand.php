@@ -6,7 +6,6 @@ namespace App\Console\Commands;
 
 use App\Http\Controllers\StatsController;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Cache;
 
 /**
  * #508 — pre-warm the /v1/stats aggregate every minute.
@@ -27,8 +26,12 @@ class WarmStatsCacheCommand extends Command
     public function handle(StatsController $stats): int
     {
         $start = microtime(true);
-        Cache::put('stats.public', $stats->build(), 90);
-        $this->info(sprintf('stats.public warmed in %dms', (int) ((microtime(true) - $start) * 1000)));
+        $ttl = $stats->warmPublicStatsCache();
+        $this->info(sprintf(
+            'stats.public warmed in %dms (ttl=%ds)',
+            (int) ((microtime(true) - $start) * 1000),
+            $ttl,
+        ));
 
         return Command::SUCCESS;
     }

@@ -76,10 +76,18 @@ class RelayBindTicketTest extends TestCase
 
         $this->assertIsArray($payload);
         $this->assertSame('relay-bind-ticket', $payload['typ']);
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $payload['jti']);
         $this->assertSame($workerId, $payload['sub']);
         $this->assertSame('relay-1', $payload['aud']);
         $this->assertGreaterThan(time(), $payload['exp']);
         $this->assertNull(app(RelayBindTicketService::class)->verify($resp->json('ticket'), 'attacker', 'relay-1'));
         $this->assertNull(app(RelayBindTicketService::class)->verify($resp->json('ticket'), $workerId, 'other-relay'));
+
+        $second = $this->withToken($token)
+            ->postJson('/api/v1/relay/ticket', ['relay_node_id' => 'relay-1'])
+            ->assertStatus(201);
+        $secondPayload = app(RelayBindTicketService::class)
+            ->verify($second->json('ticket'), $workerId, 'relay-1');
+        $this->assertNotSame($payload['jti'], $secondPayload['jti']);
     }
 }

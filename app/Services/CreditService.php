@@ -10,6 +10,7 @@ use App\Models\CreditTransaction;
 use App\Models\Node;
 use App\Models\Operator;
 use Carbon\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -427,9 +428,9 @@ class CreditService
     }
 
     /**
-     * @return \Illuminate\Support\Collection<int, Node>
+     * @return Collection<int, Node>
      */
-    private function operatorSpendableNodes(string $operatorPubkey): \Illuminate\Support\Collection
+    private function operatorSpendableNodes(string $operatorPubkey): Collection
     {
         $nodes = Node::query()
             ->where('operator_pubkey', $operatorPubkey)

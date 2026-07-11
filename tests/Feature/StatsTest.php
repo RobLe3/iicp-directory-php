@@ -36,7 +36,18 @@ class StatsTest extends TestCase
         $response = $this->getJson('/api/v1/stats');
 
         $response->assertStatus(200)
-            ->assertJsonStructure(['server', 'probes']);
+            ->assertJsonStructure([
+                'server', 'probes', 'resilience',
+                'dispatch_discovery_adoption' => [
+                    'basis', 'window_days', 'ticketed_requests',
+                    'legacy_route_discovery_requests', 'public_view_requests',
+                    'ticketed_share', 'retention_days', 'contains_caller_identifiers',
+                    'measurement_valid_since', 'measurement_days_observed',
+                    'measurement_window_complete', 'minimum_sample_requests',
+                    'sample_eligible', 'cutover_share_threshold',
+                    'cutover_sustained_days', 'cutover_eligible', 'measurement_limits',
+                ],
+            ]);
     }
 
     public function test_stats_includes_credit_schedule_field(): void
@@ -131,7 +142,98 @@ class StatsTest extends TestCase
                     'stale_active_nodes',
                     'uptime_seconds',
                 ],
+                'resilience' => [
+                    'active_window_s',
+                    'recent_window_s',
+                    'visible_nodes_now',
+                    'heartbeating_nodes_now',
+                    'recovering_nodes_now',
+                    'relay_available_now',
+                    'relay_capable_nodes_now',
+                    'last_relay_seen_at',
+                    'recovery_window',
+                ],
             ]);
+    }
+
+    public function test_stats_public_document_does_not_leak_route_endpoints_or_full_uuid(): void
+    {
+        $node = Node::create([
+            'id' => (string) Str::uuid(),
+            'endpoint' => 'https://associated-green-levy-lesser.trycloudflare.com',
+            'transport_endpoint' => 'iicpsec://associated-green-levy-lesser.trycloudflare.com',
+            'transport_method' => 'external_tunnel',
+            'transport_metadata' => ['detection_log_tail' => ['rung 5: quick tunnel']],
+            'region' => 'eu-central',
+            'node_token_hash' => password_hash('token', PASSWORD_BCRYPT),
+            'max_concurrent' => 4,
+            'tokens_per_min' => 10000,
+            'available' => true,
+            'public_reachable' => true,
+            'status' => 'active',
+            'last_seen' => now(),
+            'sdk_language' => 'rust',
+            'sdk_version' => '0.7.82',
+        ]);
+
+        $content = $this->getJson('/api/v1/stats')->assertOk()->getContent();
+
+        $this->assertStringNotContainsString($node->id, $content);
+        $this->assertStringNotContainsString('associated-green-levy-lesser.trycloudflare.com', $content);
+        $this->assertStringNotContainsString('iicpsec://', $content);
+        $this->assertStringNotContainsString('transport_endpoint', $content);
+        $this->assertStringNotContainsString('transport_metadata', $content);
+    }
+
+    public function test_empty_public_stats_snapshot_expires_quickly_when_nodes_reappear(): void
+    {
+        $this->getJson('/api/v1/stats')
+            ->assertStatus(200)
+            ->assertJsonPath('server.active_nodes', 0);
+
+        $this->travel(6)->seconds();
+
+        Node::create([
+            'id' => (string) Str::uuid(),
+            'endpoint' => 'https://recovering-node.example.com',
+            'region' => 'eu-central',
+            'node_token_hash' => password_hash('token', PASSWORD_BCRYPT),
+            'max_concurrent' => 4,
+            'tokens_per_min' => 10000,
+            'available' => true,
+            'public_reachable' => true,
+            'status' => 'active',
+            'last_seen' => now(),
+        ]);
+
+        $this->getJson('/api/v1/stats')
+            ->assertStatus(200)
+            ->assertJsonPath('server.active_nodes', 1);
+    }
+
+    public function test_warm_stats_cache_does_not_pin_empty_mesh_for_full_warm_ttl(): void
+    {
+        $this->artisan('iicp:warm-stats-cache')
+            ->assertSuccessful();
+
+        $this->travel(6)->seconds();
+
+        Node::create([
+            'id' => (string) Str::uuid(),
+            'endpoint' => 'https://warm-recovering-node.example.com',
+            'region' => 'eu-central',
+            'node_token_hash' => password_hash('token', PASSWORD_BCRYPT),
+            'max_concurrent' => 4,
+            'tokens_per_min' => 10000,
+            'available' => true,
+            'public_reachable' => true,
+            'status' => 'active',
+            'last_seen' => now(),
+        ]);
+
+        $this->getJson('/api/v1/stats')
+            ->assertStatus(200)
+            ->assertJsonPath('server.active_nodes', 1);
     }
 
     /**
@@ -241,6 +343,61 @@ class StatsTest extends TestCase
         $this->assertSame(1, $response->json('server.downlevel_nodes'));
         $this->assertSame('heartbeating_nodes', $response->json('sdk_adoption.basis'));
         $this->assertSame(4, $response->json('sdk_adoption.total_heartbeating'));
+    }
+
+    public function test_stats_resilience_marks_recovery_window_without_hiding_limits(): void
+    {
+        Node::create([
+            'id' => (string) Str::uuid(),
+            'endpoint' => 'https://ready.example.com',
+            'region' => 'eu-central',
+            'node_token_hash' => password_hash('token', PASSWORD_BCRYPT),
+            'max_concurrent' => 4,
+            'tokens_per_min' => 10000,
+            'available' => true,
+            'public_reachable' => true,
+            'relay_capable' => false,
+            'status' => 'active',
+            'last_seen' => now(),
+        ]);
+        Node::create([
+            'id' => (string) Str::uuid(),
+            'endpoint' => 'https://cooldown.example.com',
+            'region' => 'eu-central',
+            'node_token_hash' => password_hash('token', PASSWORD_BCRYPT),
+            'max_concurrent' => 4,
+            'tokens_per_min' => 10000,
+            'available' => true,
+            'public_reachable' => true,
+            'relay_capable' => true,
+            'status' => 'active',
+            'last_seen' => now(),
+            'endpoint_verified_dead_at' => now()->subMinute(),
+        ]);
+        Node::create([
+            'id' => (string) Str::uuid(),
+            'endpoint' => 'https://recent-relay.example.com',
+            'region' => 'eu-central',
+            'node_token_hash' => password_hash('token', PASSWORD_BCRYPT),
+            'max_concurrent' => 4,
+            'tokens_per_min' => 10000,
+            'available' => true,
+            'public_reachable' => true,
+            'relay_capable' => true,
+            'status' => 'active',
+            'last_seen' => now()->subSeconds(150),
+        ]);
+
+        $response = $this->getJson('/api/v1/stats')->assertStatus(200);
+
+        $this->assertSame(1, $response->json('resilience.visible_nodes_now'));
+        $this->assertSame(2, $response->json('resilience.heartbeating_nodes_now'));
+        $this->assertSame(1, $response->json('resilience.limited_reach_nodes_now'));
+        $this->assertSame(3, $response->json('resilience.recent_nodes'));
+        $this->assertSame(2, $response->json('resilience.recovering_nodes_now'));
+        $this->assertFalse($response->json('resilience.relay_available_now'));
+        $this->assertTrue($response->json('resilience.recovery_window'));
+        $this->assertNotNull($response->json('resilience.last_relay_seen_at'));
     }
 
     /*
