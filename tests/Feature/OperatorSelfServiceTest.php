@@ -5,8 +5,11 @@
 namespace Tests\Feature;
 
 use App\Http\Controllers\OperatorSelfServiceController;
+use App\Models\Node;
 use App\Models\Operator;
+use App\Models\PolicyKeyLifecycleRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class OperatorSelfServiceTest extends TestCase
@@ -119,5 +122,104 @@ class OperatorSelfServiceTest extends TestCase
             ->assertOk()
             ->assertJsonPath('action', 'anonymize');
         $this->assertDatabaseMissing('operators', ['operator_pubkey' => $this->pub]);
+    }
+
+    public function test_dual_signed_rotation_preserves_node_and_recognition_continuity_without_exposing_keys(): void
+    {
+        $old = Operator::where('operator_pubkey', $this->pub)->firstOrFail();
+        $old->update(['ordinal' => 3, 'tier' => 'founder', 'badge' => 'early']);
+        $node = $this->nodeForOperator($this->pub, true);
+        $next = sodium_crypto_sign_keypair();
+        $nextPub = base64_encode(sodium_crypto_sign_publickey($next));
+        $nonce = $this->challenge();
+        $body = [
+            'operator_pub' => $this->pub,
+            'new_operator_pub' => $nextPub,
+            'nonce' => $nonce,
+            'ts' => time(),
+            'rotation_epoch' => 7,
+            'reason_class' => 'operator_rotation',
+        ];
+        $body['sig'] = base64_encode(sodium_crypto_sign_detached(
+            OperatorSelfServiceController::canonicalBytes('key_rotate', $body), $this->secret,
+        ));
+        $body['new_key_sig'] = base64_encode(sodium_crypto_sign_detached(
+            OperatorSelfServiceController::canonicalBytes('key_rotate_successor', [
+                'operator_pub' => $this->pub,
+                'new_operator_pub' => $nextPub,
+                'nonce' => $nonce,
+                'ts' => $body['ts'],
+                'rotation_epoch' => 7,
+            ]), sodium_crypto_sign_secretkey($next),
+        ));
+
+        $response = $this->postJson('/api/v1/operator/key/rotate', $body)
+            ->assertOk()
+            ->assertJsonPath('status', 'rotated')
+            ->assertJsonPath('linked_nodes', 1)
+            ->assertJsonPath('rotation_epoch', 7);
+        $this->assertStringNotContainsString($this->pub, $response->getContent());
+        $this->assertStringNotContainsString($nextPub, $response->getContent());
+
+        $this->assertSame(Operator::IDENTITY_ROTATED, $old->fresh()->identity_status);
+        $successor = Operator::where('operator_pubkey', $nextPub)->firstOrFail();
+        $this->assertSame(Operator::IDENTITY_ACTIVE, $successor->identity_status);
+        $this->assertSame(3, $successor->ordinal);
+        $this->assertSame($nextPub, $node->fresh()->operator_pubkey);
+        $this->assertTrue((bool) $node->fresh()->operator_verified);
+        $this->assertDatabaseHas('policy_key_lifecycle_records', [
+            'policy_key_sha256' => hash('sha256', base64_decode($this->pub, true)),
+            'status' => PolicyKeyLifecycleRecord::STATUS_SUPERSEDED,
+            'rotation_epoch' => 7,
+        ]);
+    }
+
+    public function test_revoke_fails_closed_for_node_bindings_and_policy_key_but_retains_node_record(): void
+    {
+        $node = $this->nodeForOperator($this->pub, true);
+        $body = $this->signedBody('key_revoke', ['confirm' => true, 'reason_class' => 'compromise']);
+        $response = $this->postJson('/api/v1/operator/key/revoke', $body)
+            ->assertOk()
+            ->assertJsonPath('status', 'revoked')
+            ->assertJsonPath('linked_nodes', 1);
+        $this->assertStringNotContainsString($this->pub, $response->getContent());
+        $this->assertSame(Operator::IDENTITY_REVOKED, Operator::where('operator_pubkey', $this->pub)->value('identity_status'));
+        $this->assertFalse((bool) $node->fresh()->operator_verified);
+        $this->assertSame(PolicyKeyLifecycleRecord::STATUS_REVOKED, PolicyKeyLifecycleRecord::query()
+            ->where('policy_key_sha256', hash('sha256', base64_decode($this->pub, true)))->value('status'));
+
+        $this->postJson('/api/v1/operator/challenge', ['operator_pub' => $this->pub])
+            ->assertStatus(409)->assertJsonPath('error.code', 'IICP-E063');
+    }
+
+    public function test_rotation_rejects_missing_successor_proof_without_creating_successor(): void
+    {
+        $next = sodium_crypto_sign_keypair();
+        $nextPub = base64_encode(sodium_crypto_sign_publickey($next));
+        $body = $this->signedBody('key_rotate', [
+            'new_operator_pub' => $nextPub,
+            'new_key_sig' => base64_encode(random_bytes(64)),
+        ]);
+        $this->postJson('/api/v1/operator/key/rotate', $body)
+            ->assertUnauthorized()->assertJsonPath('error.code', 'IICP-E064');
+        $this->assertDatabaseMissing('operators', ['operator_pubkey' => $nextPub]);
+        $this->assertSame(Operator::IDENTITY_ACTIVE, Operator::where('operator_pubkey', $this->pub)->value('identity_status'));
+    }
+
+    private function nodeForOperator(string $operatorPub, bool $verified): Node
+    {
+        return Node::create([
+            'id' => (string) Str::uuid(),
+            'endpoint' => 'https://node.example.test',
+            'region' => 'eu-central',
+            'node_token_hash' => password_hash('token', PASSWORD_BCRYPT),
+            'max_concurrent' => 1,
+            'tokens_per_min' => 1000,
+            'available' => true,
+            'status' => 'active',
+            'operator_pubkey' => $operatorPub,
+            'operator_verified' => $verified,
+            'operator_trust_tier' => $verified ? 'did_key' : null,
+        ]);
     }
 }

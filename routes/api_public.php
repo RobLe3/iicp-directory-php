@@ -29,6 +29,10 @@ Route::prefix('v1')->group(function () {
         ->middleware('throttle:10,1');
     Route::post('/operator/acceptance', [OperatorSelfServiceController::class, 'accept'])
         ->middleware('throttle:5,1');
+    Route::prefix('operator/key')->middleware('throttle:5,1')->group(function () {
+        Route::post('/rotate', [OperatorSelfServiceController::class, 'rotate']);
+        Route::post('/revoke', [OperatorSelfServiceController::class, 'revoke']);
+    });
     Route::prefix('operator/dsr')->middleware('throttle:5,1')->group(function () {
         Route::post('/export', [OperatorSelfServiceController::class, 'export']);
         Route::post('/restrict', [OperatorSelfServiceController::class, 'restrict']);

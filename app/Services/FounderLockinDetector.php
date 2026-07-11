@@ -53,6 +53,7 @@ class FounderLockinDetector
 
         $assigned = [];
         $candidates = Operator::query()
+            ->where('identity_status', Operator::IDENTITY_ACTIVE)
             ->whereNull('ordinal')
             ->whereNotNull('first_seen_ms')
             ->orderBy('first_seen_ms')
@@ -67,7 +68,7 @@ class FounderLockinDetector
                 continue;
             }
 
-            $priorLockinCount = Operator::whereNotNull('ordinal')->count();
+            $priorLockinCount = Operator::where('identity_status', Operator::IDENTITY_ACTIVE)->whereNotNull('ordinal')->count();
             $decision = FounderRecognition::decideLockin(
                 (int) $op->first_seen_ms,
                 $nowMs,
@@ -112,7 +113,9 @@ class FounderLockinDetector
         if ($founderOnePubkey === '') {
             return null;
         }
-        $dev = Operator::where('operator_pubkey', $founderOnePubkey)->first();
+        $dev = Operator::where('operator_pubkey', $founderOnePubkey)
+            ->where('identity_status', Operator::IDENTITY_ACTIVE)
+            ->first();
         if ($dev === null || $dev->ordinal !== null) {
             return null;
         }

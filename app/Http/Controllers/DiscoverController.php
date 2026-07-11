@@ -356,6 +356,7 @@ class DiscoverController extends Controller
 
         $nameByPub = Operator::query()
             ->whereIn('operator_pubkey', $pubByNode->unique()->values()->all())
+            ->where('identity_status', Operator::IDENTITY_ACTIVE)
             ->whereNotNull('display_name')
             ->pluck('display_name', 'operator_pubkey');
 

@@ -161,7 +161,7 @@
     },
     {
       "path": "app/Http/Controllers/DiscoverController.php",
-      "sha256": "f4cd9f8f030e585a9eb6b49519d6acc6153c4411ecec6c3f968a4577cd4a5e05"
+      "sha256": "7dedf96f426052450968ec8184cfb54bf0ad3e9c5f44ba7df4d13832325fa641"
     },
     {
       "path": "app/Http/Controllers/DispatchRouteTicketController.php",
@@ -177,7 +177,7 @@
     },
     {
       "path": "app/Http/Controllers/LeaderboardController.php",
-      "sha256": "3cba7adddd34cbb8c48a4d340dfd3618f7218031c70fb97e7374bc020a5fb967"
+      "sha256": "a0f5f326c243fe4e981a46ef7a29664f32ddf0b260a87e3f1e2e69fff1b37322"
     },
     {
       "path": "app/Http/Controllers/MeController.php",
@@ -193,11 +193,11 @@
     },
     {
       "path": "app/Http/Controllers/OperatorController.php",
-      "sha256": "51ede6d23a93a1edd891cfef5d6bf3fdf1acb2299cefb07178e6a8c50418858f"
+      "sha256": "43dbce4395df1c28dc1076dfcabe4443f486caece6a360a7e7f7ec1029d32650"
     },
     {
       "path": "app/Http/Controllers/OperatorSelfServiceController.php",
-      "sha256": "9d05560aef30945203401e63ba3d7e6720a9baa0cd321819c561bfb118beafb5"
+      "sha256": "342b4eb17663113be57a27f4910aea1411aa11cf256383c5401e2530c9baa497"
     },
     {
       "path": "app/Http/Controllers/PeersController.php",
@@ -309,7 +309,7 @@
     },
     {
       "path": "app/Models/Operator.php",
-      "sha256": "11b45c71a2b74288f61ac1c072d6fb15257c29800ca45dc8bc951071f9c1dd3d"
+      "sha256": "d985bde382512716e911e066dea32232fac617ab6ee96025dccc210719e572ca"
     },
     {
       "path": "app/Models/PolicyKeyLifecycleRecord.php",
@@ -381,7 +381,7 @@
     },
     {
       "path": "app/Services/FounderLockinDetector.php",
-      "sha256": "e2f2f8308015ce532c4a8c79b583e0d002bfe860f3c4da1a3b252846a4226faa"
+      "sha256": "09ddd0f77314e1822704415e89b3025486008398c9b672c7a752ba74d394da56"
     },
     {
       "path": "app/Services/FounderRecognition.php",
@@ -425,7 +425,7 @@
     },
     {
       "path": "app/Services/NodeRegistry.php",
-      "sha256": "7d43928d616d4fc1e3fba06c88e7a4c4fb75b33767c469c194840eb61d16fa41"
+      "sha256": "7a940e311d157e96f89150ccf8c5750f7a6612bdec74498b056e812ef1c79efc"
     },
     {
       "path": "app/Services/NodeScorer.php",
@@ -434,6 +434,10 @@
     {
       "path": "app/Services/OperatorDelegationVerifier.php",
       "sha256": "4b1b11b8de96a6dae78d49321f092244fa8abccc73fe1386674eb93170118638"
+    },
+    {
+      "path": "app/Services/OperatorIdentityLifecycleService.php",
+      "sha256": "dc9622179b6141d474b26838e2cffa5c1031ecf5b16a1771c1396ce6f80a9884"
     },
     {
       "path": "app/Services/OtelTracer.php",
@@ -808,6 +812,10 @@
       "sha256": "7ec841ec7353759f4b979550544ccb57d77623b4ddd9ee0861a4de740fdf2893"
     },
     {
+      "path": "database/migrations/2026_07_11_120000_add_identity_lifecycle_to_operators.php",
+      "sha256": "da36fdac6255cf926e93fdab0781b8a1fec5c5209e5ba69d8e8b6789c2a25e8b"
+    },
+    {
       "path": "database/seeders/DatabaseSeeder.php",
       "sha256": "cf8e4b6e48360218bb5534f66419c955288f78338eb8a3dba9d8ac3394ec3dbc"
     },
@@ -829,7 +837,11 @@
     },
     {
       "path": "parity/contract-v1.10.69.json",
-      "sha256": "f5beb6a37d32334083dcfd1c3d673d9ede8a2ec8d37eda6fbb0cfe4904690583"
+      "sha256": "e8ee778983ebd645d56d7ef4a4914d69d25378f4ccdd9784e1fdb2331e65a93b"
+    },
+    {
+      "path": "parity/dispatch-route-ticket-v1.json",
+      "sha256": "5d02ff21aab6af3f6a57c020443176aed9003b1d12c71cffea18089320d2d3ae"
     },
     {
       "path": "phpunit.xml",
@@ -889,7 +901,7 @@
     },
     {
       "path": "routes/api_public.php",
-      "sha256": "41e7a5241d5eb500111bac1349328a62786c763fe4fdeab4ec3f4c663c4228f3"
+      "sha256": "bb1604b570d5a46a0c739ffc1259a4a9d14951119772c6fd4132ab75881e0534"
     },
     {
       "path": "routes/console.php",
@@ -1081,7 +1093,7 @@
     },
     {
       "path": "tests/Feature/OperatorSelfServiceTest.php",
-      "sha256": "47649aa4f7b72f260bce3adf131308a5349a8639680379301ae26851db3ad613"
+      "sha256": "274fcafcc592ce5f2ccaa48f1f80be4ac78931e15b8e7d16aa9ec0f8b1d3016d"
     },
     {
       "path": "tests/Feature/PeersTest.php",

@@ -48,7 +48,7 @@ class LeaderboardController extends Controller
         // Explicit column projection — operator_pubkey is never selected or served.
         // (Visibility opt-out per §6 lands with the visibility column/endpoint; no operator
         // can opt out yet, so the exclusion is vacuously satisfied today.)
-        $rows = Operator::whereNotNull('ordinal')
+        $rows = Operator::where('identity_status', Operator::IDENTITY_ACTIVE)->whereNotNull('ordinal')
             ->orderBy('ordinal')
             ->limit(self::MAX_ENTRIES)
             ->get(['display_name', 'ordinal', 'tier', 'badge']);
@@ -65,7 +65,7 @@ class LeaderboardController extends Controller
             ];
         }
 
-        $pending = $this->pendingFounders((int) Operator::whereNotNull('ordinal')->count());
+        $pending = $this->pendingFounders((int) Operator::where('identity_status', Operator::IDENTITY_ACTIVE)->whereNotNull('ordinal')->count());
 
         return response()->json([
             'board_id' => 'founders',
@@ -92,7 +92,7 @@ class LeaderboardController extends Controller
     {
         $nowMs = (int) (microtime(true) * 1000);
 
-        $candidates = Operator::whereNull('ordinal')
+        $candidates = Operator::where('identity_status', Operator::IDENTITY_ACTIVE)->whereNull('ordinal')
             ->whereNotNull('first_seen_ms')
             ->orderBy('first_seen_ms')
             ->limit(self::MAX_PENDING * 2) // headroom: some fail the served-node gate

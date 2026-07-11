@@ -6,6 +6,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Operator;
 use App\Services\DataSubjectRightsService;
+use App\Services\OperatorIdentityLifecycleService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -24,6 +25,9 @@ class OperatorSelfServiceController extends Controller
         $operator = Operator::where('operator_pubkey', $validated['operator_pub'])->first();
         if ($operator === null) {
             return $this->error('IICP-E044', 'unknown operator (register a delegated node first)', 404);
+        }
+        if (($operator->identity_status ?? Operator::IDENTITY_ACTIVE) !== Operator::IDENTITY_ACTIVE) {
+            return $this->error('IICP-E063', 'operator identity is no longer active', 409);
         }
 
         $nonce = rtrim(strtr(base64_encode(random_bytes(24)), '+/', '-_'), '=');
@@ -91,6 +95,92 @@ class OperatorSelfServiceController extends Controller
         return $this->dsr($request, $dsr, 'anonymize');
     }
 
+    /**
+     * Rotate an accountless operator identity. Both the current and successor
+     * Ed25519 keys must sign the same one-use challenge before any continuity is
+     * moved. Policy manifests remain independently signed and therefore need to
+     * be re-issued by the successor rather than being silently rewritten.
+     */
+    public function rotate(Request $request, OperatorIdentityLifecycleService $lifecycle): JsonResponse
+    {
+        $validated = $this->validateSigned($request, 'key_rotate', [
+            'new_operator_pub' => ['required', 'string', 'max:64'],
+            'new_key_sig' => ['required', 'string', 'max:128'],
+            'rotation_epoch' => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'reason_class' => ['sometimes', 'nullable', 'string', 'regex:/^[a-z0-9_-]{1,64}$/'],
+        ]);
+        if ($validated instanceof JsonResponse) {
+            return $validated;
+        }
+
+        $newPubRaw = base64_decode($validated['new_operator_pub'], true);
+        $newSigRaw = base64_decode($validated['new_key_sig'], true);
+        if ($newPubRaw === false || strlen($newPubRaw) !== 32 || $newSigRaw === false || strlen($newSigRaw) !== 64) {
+            return $this->error('IICP-E064', 'malformed successor operator key or signature', 401);
+        }
+        $proof = self::canonicalBytes('key_rotate_successor', [
+            'operator_pub' => $validated['operator_pub'],
+            'new_operator_pub' => $validated['new_operator_pub'],
+            'nonce' => $validated['nonce'],
+            'ts' => $validated['ts'],
+            'rotation_epoch' => $validated['rotation_epoch'] ?? null,
+        ]);
+        try {
+            $successorProofValid = sodium_crypto_sign_verify_detached($newSigRaw, $proof, $newPubRaw);
+        } catch (\SodiumException) {
+            $successorProofValid = false;
+        }
+        if (! $successorProofValid) {
+            return $this->error('IICP-E064', 'successor operator signature verification failed', 401);
+        }
+
+        try {
+            $result = $lifecycle->rotate(
+                $validated['_operator'],
+                $validated['new_operator_pub'],
+                $validated['rotation_epoch'] ?? null,
+                $validated['reason_class'] ?? 'operator_rotation',
+            );
+        } catch (\InvalidArgumentException|\RuntimeException $e) {
+            return $this->error('IICP-E063', 'operator identity rotation cannot be completed', 409);
+        }
+
+        return response()->json([
+            'status' => 'rotated',
+            'operator_fingerprint' => Operator::publicFingerprint($result['operator']->operator_pubkey),
+            'linked_nodes' => $result['linked_nodes'],
+            'rotation_epoch' => $result['rotation_epoch'],
+            'receipt_id_prefix' => substr(hash('sha256', $validated['nonce'].$result['operator']->operator_pubkey), 0, 12),
+            'legal_certification' => false,
+        ])->header('Cache-Control', 'no-store');
+    }
+
+    /** Revoke the current operator key and fail closed for its node bindings. */
+    public function revoke(Request $request, OperatorIdentityLifecycleService $lifecycle): JsonResponse
+    {
+        $validated = $this->validateSigned($request, 'key_revoke', [
+            'confirm' => ['required', 'accepted'],
+            'reason_class' => ['sometimes', 'nullable', 'string', 'regex:/^[a-z0-9_-]{1,64}$/'],
+        ]);
+        if ($validated instanceof JsonResponse) {
+            return $validated;
+        }
+        try {
+            $result = $lifecycle->revoke($validated['_operator'], $validated['reason_class'] ?? 'operator_request');
+        } catch (\InvalidArgumentException|\RuntimeException $e) {
+            return $this->error('IICP-E063', 'operator identity revocation cannot be completed', 409);
+        }
+
+        return response()->json([
+            'status' => 'revoked',
+            'operator_fingerprint' => Operator::publicFingerprint($validated['operator_pub']),
+            'linked_nodes' => $result['linked_nodes'],
+            'revoked_at' => $result['revoked_at'],
+            'receipt_id_prefix' => substr(hash('sha256', $validated['nonce'].$validated['operator_pub']), 0, 12),
+            'legal_certification' => false,
+        ])->header('Cache-Control', 'no-store');
+    }
+
     private function dsr(Request $request, DataSubjectRightsService $dsr, string $action): JsonResponse
     {
         $extra = ['tracking_id' => ['sometimes', 'nullable', 'string', 'max:64']];
@@ -130,6 +220,9 @@ class OperatorSelfServiceController extends Controller
         if ($operator === null) {
             return $this->error('IICP-E044', 'unknown operator', 404);
         }
+        if (($operator->identity_status ?? Operator::IDENTITY_ACTIVE) !== Operator::IDENTITY_ACTIVE) {
+            return $this->error('IICP-E063', 'operator identity is no longer active', 409);
+        }
         $challengeKey = $this->challengeKey($validated['operator_pub'], $validated['nonce']);
         if (! Cache::pull($challengeKey)) {
             return $this->error('IICP-E062', 'challenge is missing, expired or already used', 401);
@@ -161,7 +254,7 @@ class OperatorSelfServiceController extends Controller
     /** @param array<string,mixed> $fields */
     public static function canonicalBytes(string $action, array $fields): string
     {
-        unset($fields['_operator'], $fields['sig']);
+        unset($fields['_operator'], $fields['sig'], $fields['new_key_sig']);
         $payload = ['action' => $action, ...$fields];
         ksort($payload);
 

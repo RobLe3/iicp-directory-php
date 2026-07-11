@@ -16,8 +16,19 @@ use Illuminate\Database\Eloquent\Model;
  */
 class Operator extends Model
 {
+    public const IDENTITY_ACTIVE = 'active';
+
+    public const IDENTITY_ROTATED = 'rotated';
+
+    public const IDENTITY_REVOKED = 'revoked';
+
     protected $fillable = [
         'operator_pubkey',
+        'identity_status',
+        'successor_operator_pubkey_sha256',
+        'rotation_epoch',
+        'identity_revoked_at',
+        'identity_reason_class',
         'display_name',
         'attested_created_at',
         'operator_integrity_hash',
@@ -40,10 +51,12 @@ class Operator extends Model
         'provenance' => 'array',
         'terms_accepted_at' => 'datetime',
         'dpa_accepted_at' => 'datetime',
+        'rotation_epoch' => 'integer',
+        'identity_revoked_at' => 'datetime',
     ];
 
     /** operator_pubkey is a shared secret-ish identity key — keep it out of array/JSON casts. */
-    protected $hidden = ['operator_pubkey', 'acceptance_nonce_sha256'];
+    protected $hidden = ['operator_pubkey', 'acceptance_nonce_sha256', 'successor_operator_pubkey_sha256'];
 
     /**
      * Public, non-secret operator key fingerprint for display-name disambiguation.

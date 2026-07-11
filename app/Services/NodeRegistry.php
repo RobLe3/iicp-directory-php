@@ -341,6 +341,12 @@ class NodeRegistry
             (string) $node->id,
             [$del['operator_pub'] ?? ''], // self-asserted; did:web trust-set layers on later (OPEN-2)
         );
+        $existingOperator = $ok ? Operator::where('operator_pubkey', $del['operator_pub'])->first() : null;
+        if ($existingOperator !== null && ($existingOperator->identity_status ?? Operator::IDENTITY_ACTIVE) !== Operator::IDENTITY_ACTIVE) {
+            throw ValidationException::withMessages([
+                'operator_delegation' => 'operator identity is rotated or revoked and cannot make new delegation claims (IICP-E063)',
+            ]);
+        }
         $node->update($ok ? [
             'operator_pubkey' => $del['operator_pub'],
             'operator_verified' => true,
@@ -548,6 +554,7 @@ class NodeRegistry
         if ($normalizedDisplayName !== null) {
             $collision = Operator::query()
                 ->whereNot('operator_pubkey', $operatorPub)
+                ->where('identity_status', Operator::IDENTITY_ACTIVE)
                 ->whereNotNull('display_name')
                 ->get(['operator_pubkey', 'display_name'])
                 ->first(fn (Operator $op) => $this->normalizeOperatorDisplayName($op->display_name) === $normalizedDisplayName);

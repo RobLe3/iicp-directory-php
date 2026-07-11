@@ -84,6 +84,11 @@ class OperatorController extends Controller
                 'error' => ['code' => 'IICP-E044', 'message' => 'unknown operator (register a node with this operator delegation first)'],
             ], 404);
         }
+        if (($operator->identity_status ?? Operator::IDENTITY_ACTIVE) !== Operator::IDENTITY_ACTIVE) {
+            return response()->json([
+                'error' => ['code' => 'IICP-E063', 'message' => 'operator identity is no longer active'],
+            ], 409)->header('Cache-Control', 'no-store');
+        }
 
         $operator->update(['display_name' => $v['display_name']]);
 
