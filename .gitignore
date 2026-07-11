@@ -26,5 +26,6 @@ Homestead.json
 Homestead.yaml
 Thumbs.db
 
+# Local Python parity/test helpers
 __pycache__/
 *.pyc

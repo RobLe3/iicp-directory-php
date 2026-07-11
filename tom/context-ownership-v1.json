@@ -1,0 +1,58 @@
+{
+  "version": "1.0.0",
+  "status": "portability-ready monolith contract",
+  "current_deployment": "single Laravel seed directory",
+  "target_deployment": "federated, bounded-context control-plane services",
+  "public_route_rule": "Existing client-visible routes remain stable; service placement is an internal deployment concern.",
+  "cross_context_data_rule": "Use stable IDs and signed events across contexts; do not introduce cross-context database foreign keys or direct database access.",
+  "contexts": {
+    "discovery": {
+      "owns": ["nodes", "capabilities", "availability_windows", "discovery views"],
+      "event_types": ["REGISTER", "HEARTBEAT", "DEREGISTER", "EVICT", "REACTIVATE"]
+    },
+    "identity": {
+      "owns": ["operator identity claims", "operator-key lifecycle", "identity resolution"],
+      "event_types": []
+    },
+    "ledger": {
+      "owns": ["credit transactions", "operator wallets", "settlement receipts"],
+      "event_types": ["CREDIT_AWARD"]
+    },
+    "reputation": {
+      "owns": ["reputation state", "decay", "reputation archives"],
+      "event_types": ["SCORE_UPDATE", "REPUTATION_UPDATE"]
+    },
+    "conformance": {
+      "owns": ["conformance results", "badge issuance"],
+      "event_types": []
+    },
+    "telemetry": {
+      "owns": ["health observations", "probe and aggregate telemetry", "mesh statistics"],
+      "event_types": ["HEALTH"]
+    },
+    "governance": {
+      "owns": ["replica governance", "founder succession", "federation policy"],
+      "event_types": ["FOUNDER_LOCKIN", "FOUNDER_SUCCESSION"]
+    }
+  },
+  "event_service_id": {
+    "status": "planned",
+    "current_value": "directory-monolith",
+    "activation_gate": "A backwards-compatible migration, event-signature compatibility fixtures, and an independently hosted service or replica pilot must exist before service_id becomes emitted runtime data.",
+    "compatibility_rule": "Unknown service IDs are retained as signed event metadata but are not interpreted as authorization or routing instructions."
+  },
+  "extraction_gate": {
+    "required": [
+      "independent hosting and named operational owner",
+      "context-owned backup and restore drill",
+      "signed event replay and compatibility evidence",
+      "stable public route compatibility",
+      "rollback plan and live observation window"
+    ],
+    "not_authorized_by_this_contract": [
+      "automatic service extraction",
+      "production federation readiness claim",
+      "client wire-format change"
+    ]
+  }
+}
