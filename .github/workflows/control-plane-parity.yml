@@ -9,11 +9,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: RobLe3/iicp.network
-          ref: main
-          path: seed
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
@@ -21,4 +16,8 @@ jobs:
       - run: mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
       - run: composer install --no-interaction --prefer-dist
       - run: php artisan test --compact
-      - run: python3 scripts/check_seed_parity.py --manifest parity/seed-manifest-v1.10.69.1.json --php-dir . --seed-dir seed/directory
+      # The pinned manifest is generated and verified from the seed workspace
+      # before each mirror release. Cross-repository checkout is deliberately
+      # avoided here because the default Actions token cannot read another
+      # private repository without an additional secret.
+      - run: python3 scripts/check_seed_parity.py --manifest parity/seed-manifest-v1.10.69.1.json --php-dir .
