@@ -1267,5 +1267,11 @@
       "path": "vite.config.js",
       "sha256": "f413e14379e2db8b200c63a6326b925f6d47cc0df458c77bfe188cfc23e8081f"
     }
+  ],
+  "shared_contracts": [
+    {
+      "path": "spec/intent-risk-taxonomy.json",
+      "sha256": "d93628b118263067e0677a26ccba224cce1365970da9d458bfe8d2fba46855b3"
+    }
   ]
 }
