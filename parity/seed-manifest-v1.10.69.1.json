@@ -900,6 +900,14 @@
       "sha256": "f661f3befe5901048bb2c2503b8a4e3d5438252b664b31e1b032fea7ace90a98"
     },
     {
+      "path": "spec/intent-risk-taxonomy.json",
+      "sha256": "d93628b118263067e0677a26ccba224cce1365970da9d458bfe8d2fba46855b3"
+    },
+    {
+      "path": "spec/proposals/fixtures/profile-compatibility-v0.json",
+      "sha256": "43912401488b7908887648abc32c67bf9e1647a7744b0c3f641cd3c870a57d08"
+    },
+    {
       "path": "start-fpm.sh",
       "sha256": "b4f3bb68edadecca7422e7a13fc0fbf329b14bbe922eb16929e98b0ab0a49176"
     },
@@ -1241,11 +1249,15 @@
     },
     {
       "path": "tests/Unit/Services/IntentPolicyGuardTest.php",
-      "sha256": "a966cd0efd7a70c160f2cc84c1c8491dc8603bbea16ee10da3edf70f3f4af51e"
+      "sha256": "b0ce8a7216a19ca9c72b75715659dd43c7d698d9164cb5ec2e6bd222c695a0b8"
     },
     {
       "path": "tests/Unit/Services/NodeHealthServiceTest.php",
       "sha256": "f0438048d4e9b5b904472d1a4354ec75870bc752dbef7f14352c0e1f16eecb00"
+    },
+    {
+      "path": "tests/Unit/Services/ProfileCompatibilityFixtureTest.php",
+      "sha256": "b9a18a607c81fc3fb8cf20109e47530d58cd5e5f1390d22f2cb1d7649f8c6f98"
     },
     {
       "path": "tests/Unit/Services/ReputationServiceSecurityTest.php",

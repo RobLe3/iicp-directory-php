@@ -43,7 +43,11 @@ class IntentPolicyGuardTest extends TestCase
 
     public function test_directory_rules_stay_aligned_with_shared_taxonomy_fixture(): void
     {
-        $fixture = json_decode(file_get_contents(__DIR__.'/../../../../spec/intent-risk-taxonomy.json'), true, flags: JSON_THROW_ON_ERROR);
+        // The dedicated PHP reference repository mirrors this shared contract
+        // inside its own application root. Resolve only to the repository root
+        // so the test never accidentally reads a sibling checkout.
+        $fixturePath = dirname(__DIR__, 3).'/spec/intent-risk-taxonomy.json';
+        $fixture = json_decode(file_get_contents($fixturePath), true, flags: JSON_THROW_ON_ERROR);
         $guard = new IntentPolicyGuard;
 
         $fixtureRules = array_map(fn (array $rule) => [
