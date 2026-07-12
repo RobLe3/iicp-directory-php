@@ -21,7 +21,7 @@
     },
     {
       "path": ".gitattributes",
-      "sha256": "a40eb27ee0b545ca5b5542daaf99fec51f84f23b3766a6353864ef2a115bc51c"
+      "sha256": "855e9681c91a312f0a7680f6ddfe6d87890e638f3cf22f726bab837d20dced58"
     },
     {
       "path": ".github/workflows/control-plane-parity.yml",

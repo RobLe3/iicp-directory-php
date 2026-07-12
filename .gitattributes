@@ -6,6 +6,8 @@
 *.md diff=markdown
 *.php diff=php
 
-/.github export-ignore
+# The dedicated PHP repository is exported with `git archive` by the mirror
+# synchronizer. Keep its CI workflow in that export so parity checks remain
+# active after every seed update.
 CHANGELOG.md export-ignore
 .styleci.yml export-ignore
