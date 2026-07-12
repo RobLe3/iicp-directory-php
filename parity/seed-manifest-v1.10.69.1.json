@@ -853,7 +853,7 @@
     },
     {
       "path": "parity/profile-negotiation-v0.json",
-      "sha256": "dfd00b5e52937ffda3004a0e447349abb48d7bcff4ac7c7a9bfeb3fbbb06ba27"
+      "sha256": "2752765c44627319bca9968411e29e3cbd7429d9b0a1b5317bb0b4ec58a3bb20"
     },
     {
       "path": "parity/selection-v1.json",
@@ -1013,7 +1013,7 @@
     },
     {
       "path": "tests/Feature/DiscoverTest.php",
-      "sha256": "6ca2b53aee9b1628516c630f791b677f5e6052e876d4bcfa13ca2ba565440323"
+      "sha256": "271bd8d013cd24de24f00c752ead0ffd6d5427572bcd54ea556a4fa1745a5dc9"
     },
     {
       "path": "tests/Feature/DispatchRouteTicketTest.php",

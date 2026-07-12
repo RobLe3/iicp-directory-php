@@ -193,24 +193,24 @@ class DiscoverTest extends TestCase
             'intent' => 'urn:iicp:intent:llm:chat:v1', 'models' => ['m'], 'max_tokens' => 4096,
         ]]);
 
-        $legacy = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')->assertOk();
-        $legacy->assertJsonMissingPath('profile_negotiation');
+        $fixture = json_decode(file_get_contents(base_path('parity/profile-negotiation-v0.json')), true, 512, JSON_THROW_ON_ERROR);
+        foreach ($fixture['cases'] as $case) {
+            $query = array_merge(['intent' => 'urn:iicp:intent:llm:chat:v1'], $case['request']);
+            $response = $this->getJson('/api/v1/discover?'.http_build_query($query));
+            $expected = $case['expected'];
+            if (($expected['requested'] ?? false) === false) {
+                $response->assertOk()->assertJsonMissingPath('profile_negotiation');
 
-        $base = '/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&profile_id=iicp.profile.compatibility.v0&profile_version=0.3.0-draft&profile_fixture_sha256=4137ecf91b4748a2b368cf4428b4604c6947f8879d77402cc7937d11d24b2aaf';
-        $this->getJson($base.'&profile_required=true')
-            ->assertOk()
-            ->assertJsonPath('profile_negotiation.status', 'compatible')
-            ->assertJsonPath('profile_negotiation.dispatch_allowed', true);
-
-        $this->getJson($base.'&profile_fixture_sha256='.str_repeat('0', 64).'&profile_required=true')
-            ->assertStatus(422)
-            ->assertJsonPath('error.code', 'unsupported_pre_normative_profile')
-            ->assertJsonPath('profile_negotiation.dispatch_allowed', false);
-
-        $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&profile_id=iicp.profile.unknown.v0&profile_version=0.1.0-draft&profile_fixture_sha256='.str_repeat('0', 64).'&profile_required=false')
-            ->assertOk()
-            ->assertJsonPath('profile_negotiation.status', 'unsupported')
-            ->assertJsonPath('profile_negotiation.dispatch_allowed', true);
+                continue;
+            }
+            $response->assertStatus($expected['dispatch_allowed'] ? 200 : 422)
+                ->assertJsonPath('profile_negotiation.dispatch_allowed', $expected['dispatch_allowed']);
+            foreach (['status', 'reason'] as $field) {
+                if (array_key_exists($field, $expected)) {
+                    $response->assertJsonPath("profile_negotiation.$field", $expected[$field]);
+                }
+            }
+        }
     }
 
     public function test_discover_public_view_redacts_route_endpoints_and_full_node_ids(): void
