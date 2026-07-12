@@ -80,6 +80,9 @@ class AggregateProbeMetricsJob implements ShouldQueue
             ->get(['latency_ms', 'metadata']);
 
         $query = collect();
+        $queryCacheHit = collect();
+        $queryCacheMiss = collect();
+        $queryCacheBypass = collect();
         $edge = collect();
         $origin = collect();
         foreach ($rows as $row) {
@@ -88,7 +91,18 @@ class AggregateProbeMetricsJob implements ShouldQueue
                 continue;
             }
             if (isset($meta['directory_query_ms']) && is_numeric($meta['directory_query_ms'])) {
-                $query->push((float) $meta['directory_query_ms']);
+                $queryMs = (float) $meta['directory_query_ms'];
+                $query->push($queryMs);
+                // An edge HIT replays the origin header/body, so it cannot
+                // reliably classify the current origin-cache state.
+                if (($meta['cf_cache_status'] ?? null) !== 'HIT') {
+                    match ($meta['directory_origin_cache_state'] ?? null) {
+                        'hit' => $queryCacheHit->push($queryMs),
+                        'miss' => $queryCacheMiss->push($queryMs),
+                        'bypass' => $queryCacheBypass->push($queryMs),
+                        default => null,
+                    };
+                }
             }
             if ($row->latency_ms !== null) {
                 if (($meta['cf_cache_status'] ?? null) === 'HIT') {
@@ -100,6 +114,9 @@ class AggregateProbeMetricsJob implements ShouldQueue
         }
 
         $this->writeAggregate($window, 'discover_query_p50_ms', $this->percentile($query->sort()->values(), 50), $query->count());
+        $this->writeAggregate($window, 'discover_query_cache_hit_p50_ms', $this->percentile($queryCacheHit->sort()->values(), 50), $queryCacheHit->count());
+        $this->writeAggregate($window, 'discover_query_cache_miss_p50_ms', $this->percentile($queryCacheMiss->sort()->values(), 50), $queryCacheMiss->count());
+        $this->writeAggregate($window, 'discover_query_cache_bypass_p50_ms', $this->percentile($queryCacheBypass->sort()->values(), 50), $queryCacheBypass->count());
         $this->writeAggregate($window, 'discover_edge_p50_ms', $this->percentile($edge->sort()->values(), 50), $edge->count());
         $this->writeAggregate($window, 'discover_origin_p50_ms', $this->percentile($origin->sort()->values(), 50), $origin->count());
 

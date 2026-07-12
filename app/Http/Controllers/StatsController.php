@@ -289,6 +289,9 @@ class StatsController extends Controller
             'discover_p95_ms' => $rows->get('discover_p95_ms')?->value,
             // #508 decomposition: app processing vs CDN edge vs CDN→origin pull.
             'discover_query_p50_ms' => $rows->get('discover_query_p50_ms')?->value,
+            'discover_query_cache_hit_p50_ms' => $rows->get('discover_query_cache_hit_p50_ms')?->value,
+            'discover_query_cache_miss_p50_ms' => $rows->get('discover_query_cache_miss_p50_ms')?->value,
+            'discover_query_cache_bypass_p50_ms' => $rows->get('discover_query_cache_bypass_p50_ms')?->value,
             'discover_edge_p50_ms' => $rows->get('discover_edge_p50_ms')?->value,
             'discover_origin_p50_ms' => $rows->get('discover_origin_p50_ms')?->value,
             'heartbeat_p50_ms' => $rows->get('heartbeat_p50_ms')?->value,

@@ -167,7 +167,12 @@ class DiscoverController extends Controller
         // already shows a healthy node.
         $includeInternal = (bool) ($validated['include_internal'] ?? false);
         $cacheKey = 'discover:v1:'.md5(json_encode($validated));
-        $nodes = Cache::remember($cacheKey, self::ORIGIN_CACHE_SECONDS, function () use ($validated, $includeInternal) {
+        // This describes the directory-origin cache only. A CDN may cache this
+        // response header with the body, so REACH treats it as current evidence
+        // only when Cloudflare did not serve an edge HIT.
+        $originCacheState = 'hit';
+        $nodes = Cache::remember($cacheKey, self::ORIGIN_CACHE_SECONDS, function () use ($validated, $includeInternal, &$originCacheState) {
+            $originCacheState = 'miss';
             $scored = $this->scorer->discover(
                 intent: $validated['intent'],
                 qos: $validated['qos'] ?? null,
@@ -191,6 +196,7 @@ class DiscoverController extends Controller
         $span->setAttribute('iicp.intent', $validated['intent'])
             ->setAttribute('iicp.discover.count', count($nodes))
             ->setAttribute('iicp.discover.query_ms', $queryMs)
+            ->setAttribute('iicp.discover.origin_cache_state', $originCacheState)
             ->setAttribute('iicp.discover.cip_capable_filter', isset($validated['cip_capable']) ? (bool) $validated['cip_capable'] : false);
         $span->end();
 
@@ -249,6 +255,7 @@ class DiscoverController extends Controller
             )
         )
             ->header('X-IICP-Discover-Data-Class', $dataClass)
+            ->header('X-IICP-Discover-Origin-Cache', $originCacheState)
             ->header('Vary', 'Accept-Encoding');
     }
 

@@ -165,7 +165,7 @@
     },
     {
       "path": "app/Http/Controllers/DiscoverController.php",
-      "sha256": "c0b18dddce9e89569bf1cc7af6a146a60c2ebfa034df29b43916b9e9a47af3be"
+      "sha256": "75cd5fb1dcd5f1aa0b9d0336fd094343a7b239407673b8df3d60369ee49f7684"
     },
     {
       "path": "app/Http/Controllers/DispatchRouteTicketController.php",
@@ -233,7 +233,7 @@
     },
     {
       "path": "app/Http/Controllers/StatsController.php",
-      "sha256": "ba1c6c8e018d7220ca97d069330c8b4fb66218201ec4ce8ea84d07650ee3e474"
+      "sha256": "b883ec046de4aa74ca644a2c8fb638db0c76058d73467648706aea7dfd74f9a2"
     },
     {
       "path": "app/Http/Controllers/TelemetryController.php",
@@ -269,7 +269,7 @@
     },
     {
       "path": "app/Jobs/AggregateProbeMetricsJob.php",
-      "sha256": "8c6eb55aaaed3eb136a1192b70b243ac1ad3ded548c866957145425cc2870334"
+      "sha256": "bdb86d5065691d41e3cf4560674c3492f9e6ff2736afed3945224b82ebba8e7b"
     },
     {
       "path": "app/Models/AvailabilityWindow.php",
@@ -1013,7 +1013,7 @@
     },
     {
       "path": "tests/Feature/DiscoverTest.php",
-      "sha256": "053995dd55f93908773dbba9afc42d245569afc363b5525f983fad0deb96d14b"
+      "sha256": "574462bb701f10e86bc6d9b628fe47684a3a32bc09c714ae6d74781b2134f793"
     },
     {
       "path": "tests/Feature/DispatchRouteTicketTest.php",
@@ -1229,7 +1229,7 @@
     },
     {
       "path": "tests/Feature/StatsTest.php",
-      "sha256": "34c2fd814a078239be43ee6c35b19dec9275bb667c26623e52a5245e6ecb1f51"
+      "sha256": "fe83b3bd6a0eba31659f536c8209d38294e23469d785f749b3e5c5e11599c941"
     },
     {
       "path": "tests/Feature/TelemetryRetentionCommandTest.php",

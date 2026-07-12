@@ -537,6 +537,18 @@ class DiscoverTest extends TestCase
         $response->assertStatus(200)->assertJsonStructure(['query_ms']);
     }
 
+    public function test_discover_exposes_safe_origin_cache_state(): void
+    {
+        $url = '/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&region=cache-contract-unique';
+
+        $first = $this->getJson($url)->assertOk();
+        $first->assertHeader('X-IICP-Discover-Origin-Cache', 'miss');
+
+        $second = $this->getJson($url)->assertOk();
+        $second->assertHeader('X-IICP-Discover-Origin-Cache', 'hit');
+        $this->assertSame($first->json('nodes'), $second->json('nodes'));
+    }
+
     // --- ADR-021 model filter tests (CIP-D2 / #162) ---
 
     public function test_model_filter_returns_only_nodes_advertising_the_model(): void

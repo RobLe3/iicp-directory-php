@@ -532,7 +532,7 @@ class StatsTest extends TestCase
     {
         // 4 probe samples: origin-pull walls ~330ms, one edge HIT 25ms; the app
         // itself spent ~30ms on each (query_ms).
-        foreach ([[330, 'EXPIRED', 28], [340, 'EXPIRED', 31], [320, 'MISS', 30], [25, 'HIT', 32]] as [$wall, $cf, $q]) {
+        foreach ([[330, 'EXPIRED', 28, 'miss'], [340, 'EXPIRED', 31, 'hit'], [320, 'MISS', 30, 'miss'], [25, 'HIT', 32, 'hit']] as [$wall, $cf, $q, $originCache]) {
             TelemetryProbe::create([
                 'probe_token_id' => null,
                 'node_id' => null,
@@ -544,7 +544,11 @@ class StatsTest extends TestCase
                 'passed' => true,
                 'latency_ms' => $wall,
                 'detail' => 'test',
-                'metadata' => ['cf_cache_status' => $cf, 'directory_query_ms' => $q],
+                'metadata' => [
+                    'cf_cache_status' => $cf,
+                    'directory_query_ms' => $q,
+                    'directory_origin_cache_state' => $originCache,
+                ],
                 'probed_at' => now()->subMinutes(5),
             ]);
         }
@@ -556,6 +560,9 @@ class StatsTest extends TestCase
 
         $agg = $body['probes']['aggregate_24h'];
         $this->assertEqualsWithDelta(31, $agg['discover_query_p50_ms'], 2.0, 'app-processing p50');
+        $this->assertEqualsWithDelta(31, $agg['discover_query_cache_hit_p50_ms'], 1.0, 'origin cache-hit app p50');
+        $this->assertEqualsWithDelta(28, $agg['discover_query_cache_miss_p50_ms'], 1.0, 'origin cache-miss app p50');
+        $this->assertNull($agg['discover_query_cache_bypass_p50_ms'], 'no bypass sample');
         $this->assertEqualsWithDelta(25, $agg['discover_edge_p50_ms'], 1.0, 'edge-HIT p50');
         $this->assertEqualsWithDelta(330, $agg['discover_origin_p50_ms'], 15.0, 'origin-pull p50');
 
@@ -589,6 +596,34 @@ class StatsTest extends TestCase
 
         $dh = $this->getJson('/api/v1/stats')->assertOk()->json()['directory_health'];
         $this->assertSame('wall', $dh['latency_basis']);
+    }
+
+    public function test_stats_exposes_uncached_directory_implementation_timing_separately(): void
+    {
+        TelemetryProbe::create([
+            'probe_token_id' => null,
+            'node_id' => null,
+            'run_id' => 'run-cache-bypass',
+            'probe_id' => 'reach',
+            'probe_type' => 'conformance',
+            'test_id' => 'DIR-DISC-01',
+            'level' => 'MUST',
+            'passed' => true,
+            'latency_ms' => 220,
+            'detail' => 'test',
+            'metadata' => [
+                'cf_cache_status' => 'MISS',
+                'directory_query_ms' => 19,
+                'directory_origin_cache_state' => 'bypass',
+            ],
+            'probed_at' => now()->subMinutes(5),
+        ]);
+
+        (new AggregateProbeMetricsJob)->handle();
+        Cache::forget('stats.public');
+
+        $aggregate = $this->getJson('/api/v1/stats')->assertOk()->json('probes.aggregate_24h');
+        $this->assertEquals(19.0, $aggregate['discover_query_cache_bypass_p50_ms']);
     }
 
     /**
