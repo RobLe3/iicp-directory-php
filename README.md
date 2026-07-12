@@ -14,14 +14,14 @@ discovery, emits a federated-signed event log (Phase 6 prep). **Never sees task 
 ```
 app/
 ├── Http/
-│   ├── Controllers/   REST API endpoints (21 controllers — see §API surface)
+│   ├── Controllers/   REST API endpoints (see §API surface)
 │   └── Middleware/    NodeTokenAuth, ProxyTokenAuth, ProbeTokenAuth, LoadRedirect
-├── Models/            Eloquent ORM (14 models — see §Models)
-├── Services/          Domain logic (14 services — see §Services)
-└── Console/Commands/  Artisan commands (11 commands — see §Artisan commands)
+├── Models/            Eloquent ORM
+├── Services/          Domain logic
+└── Console/Commands/  Scheduled and operator commands
 config/                Laravel config (scoring weights, throttle limits, OTel)
 database/migrations/   Schema evolution
-tests/Feature/         PHPUnit feature tests (597)
+tests/Feature/         PHPUnit feature tests
 routes/api_protocol.php  Protocol endpoints — /api/v1/*
 routes/api_public.php    Public read-only endpoints — /api/v1/registry/*, /api/metrics
 ```
@@ -123,7 +123,7 @@ See [`project/ARCHITECTURE.md`](../project/ARCHITECTURE.md) §API table for norm
 
 ```bash
 # Normal test run
-php artisan test                                    # 307 tests (PHPUnit)
+php artisan test                                    # PHPUnit suite
 php artisan test --filter RegisterTest              # one feature
 php artisan test --compact                          # summary line only
 
@@ -165,7 +165,7 @@ on the SSH host, outside the public web root.
 
 ```bash
 cd directory
-php artisan test                    # all 307 feature tests (~2 min, SQLite in-memory)
+php artisan test                    # feature suite (SQLite in-memory)
 php artisan test --compact          # one-line summary
 ```
 
