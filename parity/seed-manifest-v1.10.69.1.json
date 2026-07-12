@@ -25,7 +25,7 @@
     },
     {
       "path": ".github/workflows/control-plane-parity.yml",
-      "sha256": "9872501a5375819f860f0fec27817fd76357d6d8ce7b494efc9eeaaf2ed43d28"
+      "sha256": "9ff3d0aaf4906a4cef1659007ad4fa5c69c62f5f8fa2e0f3ea43a238272761f9"
     },
     {
       "path": ".gitignore",
