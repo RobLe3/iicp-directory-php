@@ -1013,7 +1013,7 @@
     },
     {
       "path": "tests/Feature/DiscoverTest.php",
-      "sha256": "271bd8d013cd24de24f00c752ead0ffd6d5427572bcd54ea556a4fa1745a5dc9"
+      "sha256": "053995dd55f93908773dbba9afc42d245569afc363b5525f983fad0deb96d14b"
     },
     {
       "path": "tests/Feature/DispatchRouteTicketTest.php",
