@@ -24,6 +24,10 @@
       "sha256": "a40eb27ee0b545ca5b5542daaf99fec51f84f23b3766a6353864ef2a115bc51c"
     },
     {
+      "path": ".github/workflows/control-plane-parity.yml",
+      "sha256": "9872501a5375819f860f0fec27817fd76357d6d8ce7b494efc9eeaaf2ed43d28"
+    },
+    {
       "path": ".gitignore",
       "sha256": "495b10ae5aee366d995bf9a18c2342d0c432e8ba4a5c689855db8917edacd71a"
     },
@@ -161,7 +165,7 @@
     },
     {
       "path": "app/Http/Controllers/DiscoverController.php",
-      "sha256": "7dedf96f426052450968ec8184cfb54bf0ad3e9c5f44ba7df4d13832325fa641"
+      "sha256": "c0b18dddce9e89569bf1cc7af6a146a60c2ebfa034df29b43916b9e9a47af3be"
     },
     {
       "path": "app/Http/Controllers/DispatchRouteTicketController.php",
@@ -446,6 +450,10 @@
     {
       "path": "app/Services/PolicyKeyLifecycleService.php",
       "sha256": "f2b1fb5af3d1f8a72ccd88c6f6b03eb92123d293f0f74f2f0a08a92badc09c3f"
+    },
+    {
+      "path": "app/Services/ProfileNegotiation.php",
+      "sha256": "4c10850ba3538e0db899159f8eeae105dc0dda5f70d852c46fa40eee7e33aefa"
     },
     {
       "path": "app/Services/RelayBindTicketService.php",
@@ -841,7 +849,15 @@
     },
     {
       "path": "parity/dispatch-route-ticket-v1.json",
-      "sha256": "5d02ff21aab6af3f6a57c020443176aed9003b1d12c71cffea18089320d2d3ae"
+      "sha256": "bbdbe180a543cb14cfc7791e9fdf18d0c9b5dfa88c4098690a1bed0003221a94"
+    },
+    {
+      "path": "parity/profile-negotiation-v0.json",
+      "sha256": "dfd00b5e52937ffda3004a0e447349abb48d7bcff4ac7c7a9bfeb3fbbb06ba27"
+    },
+    {
+      "path": "parity/selection-v1.json",
+      "sha256": "ba28a8865d58d87d5302f216602816431697f9c3f963974769536a45e8e9b488"
     },
     {
       "path": "phpunit.xml",
@@ -912,12 +928,16 @@
       "sha256": "f661f3befe5901048bb2c2503b8a4e3d5438252b664b31e1b032fea7ace90a98"
     },
     {
+      "path": "scripts/check_seed_parity.py",
+      "sha256": "8166ea947e163a2b2717a9e25ad108722e6fd1b221e324430567c37cdb114c3e"
+    },
+    {
       "path": "spec/intent-risk-taxonomy.json",
       "sha256": "d93628b118263067e0677a26ccba224cce1365970da9d458bfe8d2fba46855b3"
     },
     {
       "path": "spec/proposals/fixtures/profile-compatibility-v0.json",
-      "sha256": "43912401488b7908887648abc32c67bf9e1647a7744b0c3f641cd3c870a57d08"
+      "sha256": "4137ecf91b4748a2b368cf4428b4604c6947f8879d77402cc7937d11d24b2aaf"
     },
     {
       "path": "start-fpm.sh",
@@ -993,11 +1013,11 @@
     },
     {
       "path": "tests/Feature/DiscoverTest.php",
-      "sha256": "38bee1af8401b6d7cbb03b8ed795593c922283b72cc7b1f535e49651a9e1cb9d"
+      "sha256": "6ca2b53aee9b1628516c630f791b677f5e6052e876d4bcfa13ca2ba565440323"
     },
     {
       "path": "tests/Feature/DispatchRouteTicketTest.php",
-      "sha256": "115c4743deefdb6afb9255faa34527596976781b7bf4ec151c0d0e18d843ee81"
+      "sha256": "c50a173fbcb57c5e6bae611e71d8f45a822101247d3fb770d3dbd08eabef65dc"
     },
     {
       "path": "tests/Feature/DispatchUsageCounterTest.php",
@@ -1269,7 +1289,7 @@
     },
     {
       "path": "tests/Unit/Services/ProfileCompatibilityFixtureTest.php",
-      "sha256": "b9a18a607c81fc3fb8cf20109e47530d58cd5e5f1390d22f2cb1d7649f8c6f98"
+      "sha256": "63a9f4e6a08f3b66ce17fa860002876a3abcf4618fbddc974938501e6ec0353a"
     },
     {
       "path": "tests/Unit/Services/ReputationServiceSecurityTest.php",

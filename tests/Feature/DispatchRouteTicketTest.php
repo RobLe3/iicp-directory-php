@@ -103,6 +103,8 @@ class DispatchRouteTicketTest extends TestCase
         $this->assertGreaterThan(time(), $payload['exp']);
         $this->assertArrayNotHasKey('prompt', $payload);
         $this->assertArrayNotHasKey('messages', $payload);
+        $this->assertArrayNotHasKey('endpoint', $payload);
+        $this->assertArrayNotHasKey('node_token', $payload);
         $this->assertNull(app(DispatchRouteTicketService::class)->verify($resp->json('ticket'), $node->id, 'urn:iicp:intent:code:review:v1'));
         $this->assertNull(app(DispatchRouteTicketService::class)->verify($resp->json('ticket'), (string) Str::uuid(), 'urn:iicp:intent:llm:chat:v1'));
     }

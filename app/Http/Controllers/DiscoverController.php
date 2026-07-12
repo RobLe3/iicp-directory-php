@@ -33,6 +33,7 @@ use App\Services\DispatchUsageCounter;
 use App\Services\IntentPolicyGuard;
 use App\Services\NodeScorer;
 use App\Services\OtelTracer;
+use App\Services\ProfileNegotiation;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -64,6 +65,7 @@ class DiscoverController extends Controller
         private NodeScorer $scorer,
         private IntentPolicyGuard $intentPolicy,
         private DispatchUsageCounter $usage,
+        private ProfileNegotiation $profiles,
     ) {}
 
     /**
@@ -80,7 +82,7 @@ class DiscoverController extends Controller
         // Operators naturally pass `?include_internal=true` (and `?cip_capable=true`), which
         // 422'd and broke the documented escape hatch for debugging demoted/internal nodes.
         // Normalize via filter_var-backed Request::boolean() so both string and numeric forms work.
-        foreach (['cip_capable', 'include_internal'] as $boolParam) {
+        foreach (['cip_capable', 'include_internal', 'profile_required'] as $boolParam) {
             if ($request->has($boolParam)) {
                 $request->merge([$boolParam => $request->boolean($boolParam)]);
             }
@@ -132,7 +134,24 @@ class DiscoverController extends Controller
             // #611 — safe presentation view for dashboards/research. Default
             // remains route-bearing dispatch data for current client compatibility.
             'view' => ['sometimes', 'string', 'in:dispatch,public'],
+            // Pre-normative profile negotiation is additive. All three identity
+            // fields are required only when a caller explicitly requests one.
+            'profile_id' => ['sometimes', 'string', 'max:128', 'required_with:profile_version,profile_fixture_sha256,profile_required'],
+            'profile_version' => ['required_with:profile_id', 'string', 'max:64'],
+            'profile_fixture_sha256' => ['required_with:profile_id', 'string', 'regex:/^[a-f0-9]{64}$/'],
+            'profile_required' => ['sometimes', 'boolean'],
         ]);
+
+        $profileNegotiation = $this->profiles->negotiate($validated);
+        if (($profileNegotiation['requested'] ?? false) && ! ($profileNegotiation['dispatch_allowed'] ?? false)) {
+            return response()->json([
+                'error' => [
+                    'code' => 'unsupported_pre_normative_profile',
+                    'message' => 'The requested pre-normative profile is not supported by this directory.',
+                ],
+                'profile_negotiation' => $profileNegotiation,
+            ], 422);
+        }
 
         if ($message = $this->intentPolicy->refusalMessage($validated['intent'])) {
             throw ValidationException::withMessages(['intent' => [$message]]);
@@ -206,6 +225,8 @@ class DiscoverController extends Controller
             // task, while older clients continue using default dispatch discover.
             'dispatch_ticket_endpoint' => '/api/v1/dispatch/ticket',
             'ticketed_dispatch_available' => true,
+            // Omitted for legacy callers so the response shape remains stable.
+            ...(($profileNegotiation['requested'] ?? false) ? ['profile_negotiation' => $profileNegotiation] : []),
             'redaction' => $view === 'public'
                 ? [
                     'node_id' => 'node_id_prefix_only',
