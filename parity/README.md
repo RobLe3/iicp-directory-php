@@ -21,3 +21,8 @@ lifecycle, and dispatch-accounting features are implemented and tested.
 The checker is not a replacement for container tests.  Releases must also run
 the variant's full suite, migration upgrade tests, and cross-implementation
 request fixtures before any cutover claim.
+
+`policy-detail-disclosure-v0.json` is a portable mirror of the pre-normative
+fixture under `spec/proposals/fixtures/`. The PHP unit test verifies that both
+copies remain byte-identical in the monorepo while allowing the standalone
+directory repository to run without depending on files outside its checkout.

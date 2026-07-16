@@ -9,7 +9,19 @@ final class PolicyDetailDisclosurePolicyTest extends TestCase
 {
     public function test_portable_fixture(): void
     {
-        $fixture = json_decode(file_get_contents(dirname(__DIR__, 2).'/../spec/proposals/fixtures/policy-detail-disclosure-v0.json'), true, flags: JSON_THROW_ON_ERROR);
+        $fixturePath = dirname(__DIR__, 2).'/parity/policy-detail-disclosure-v0.json';
+        $fixtureBytes = file_get_contents($fixturePath);
+        $this->assertNotFalse($fixtureBytes);
+
+        // The standalone directory export cannot rely on the monorepo's spec/
+        // tree. Keep its portable copy byte-identical whenever the canonical
+        // pre-normative fixture is available in the monorepo checkout.
+        $canonicalPath = dirname(__DIR__, 2).'/../spec/proposals/fixtures/policy-detail-disclosure-v0.json';
+        if (is_file($canonicalPath)) {
+            $this->assertSame(file_get_contents($canonicalPath), $fixtureBytes);
+        }
+
+        $fixture = json_decode($fixtureBytes, true, flags: JSON_THROW_ON_ERROR);
         $this->assertSame(PolicyDetailDisclosurePolicy::ALLOWED_DETAIL_FIELDS, $fixture['allowed_detail_fields']);
 
         foreach ($fixture['cases'] as $case) {
