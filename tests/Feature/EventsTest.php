@@ -116,6 +116,8 @@ class EventsTest extends TestCase
         $this->assertArrayHasKey('event_id', $event);
         $this->assertArrayHasKey('seq', $event);
         $this->assertArrayHasKey('event_type', $event);
+        $this->assertArrayHasKey('service_id', $event);
+        $this->assertNull($event['service_id'], 'legacy events remain valid without service_id');
         $this->assertArrayHasKey('node_id', $event);
         $this->assertArrayHasKey('ts_ms', $event);
         $this->assertArrayHasKey('payload', $event);
@@ -124,6 +126,16 @@ class EventsTest extends TestCase
         $this->assertArrayHasKey('signer_did', $event, 'S.13 §5.1: signer_did must be present for replica verification');
         $this->assertArrayNotHasKey('signature', $event, 'S.13 §5.1: legacy signature field must not appear in output');
         $this->assertStringStartsWith('did:web:', $event['signer_did']);
+    }
+
+    public function test_response_retains_unknown_service_id_as_opaque_metadata(): void
+    {
+        $this->createEvent(['service_id' => 'future-research-service']);
+
+        $response = $this->getJson('/api/v1/events');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('events.0.service_id', 'future-research-service');
     }
 
     public function test_next_seq_matches_highest_seq_returned(): void

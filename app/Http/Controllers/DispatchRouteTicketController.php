@@ -115,7 +115,13 @@ class DispatchRouteTicketController extends Controller
             ], $selected);
         }
 
-        $ticket = $this->tickets->issue($selected['node_id'], $validated['intent']);
+        $route = $this->routes->routeMaterial($selected);
+        $policyManifestSha256 = $route['node_policy_manifest']['verification']['canonical_sha256'] ?? null;
+        $ticket = $this->tickets->issue(
+            $selected['node_id'],
+            $validated['intent'],
+            policyManifestSha256: is_string($policyManifestSha256) ? $policyManifestSha256 : null,
+        );
         if ($ticket === null) {
             return response()->json([
                 'error' => [
@@ -134,7 +140,7 @@ class DispatchRouteTicketController extends Controller
             'intent' => $validated['intent'],
             'node_id' => $selected['node_id'],
             'node_id_prefix' => substr($selected['node_id'], 0, 8),
-            'route' => $this->routes->routeMaterial($selected),
+            'route' => $route,
             'algorithm' => 'ed25519',
             'data_class' => 'ticketed_route_dispatch',
             'route_fields_present' => true,

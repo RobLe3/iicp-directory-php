@@ -21,4 +21,4 @@ jobs:
       # before each mirror release. Cross-repository checkout is deliberately
       # avoided here because the default Actions token cannot read another
       # private repository without an additional secret.
-      - run: python3 scripts/check_seed_parity.py --manifest parity/seed-manifest-v1.10.69.1.json --php-dir .
+      - run: python3 scripts/check_seed_parity.py --manifest parity/seed-manifest-v1.10.74.1.json --php-dir .

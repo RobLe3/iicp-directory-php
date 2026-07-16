@@ -37,6 +37,8 @@
   },
   "event_service_id": {
     "status": "planned",
+    "migration_status": "compatibility-ready",
+    "runtime_emission_status": "dormant",
     "current_value": "directory-monolith",
     "activation_gate": "A backwards-compatible migration, event-signature compatibility fixtures, and an independently hosted service or replica pilot must exist before service_id becomes emitted runtime data.",
     "compatibility_rule": "Unknown service IDs are retained as signed event metadata but are not interpreted as authorization or routing instructions."

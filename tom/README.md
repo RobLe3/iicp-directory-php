@@ -8,9 +8,10 @@ integrity, backup/restore discipline and client compatibility.
 
 `context-ownership-v1.json` is an executable architecture guard, not a service
 deployment manifest. It must cover every signed `NodeEvent` type exactly once.
-It deliberately marks `service_id` as planned: a service-origin field cannot be
-emitted until the migration, signature fixtures and an independently operated
-service/replica pilot exist.
+The nullable `service_id` migration and domain-separated signature/replay paths
+are compatibility-ready. Runtime emission remains deliberately dormant: a
+service-origin field cannot be emitted until an independently operated
+service/replica pilot, backup/restore drill and rollback evidence exist.
 
 Run `python3 scripts/check_tom_portability_contract.py` after changing event
 types or ownership boundaries.

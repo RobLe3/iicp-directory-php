@@ -19,6 +19,7 @@ class NodeEvent extends Model
         'event_id',
         'seq',
         'event_type',
+        'service_id',
         'node_id',
         'ts_ms',
         'payload',

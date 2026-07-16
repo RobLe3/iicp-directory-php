@@ -1,10 +1,11 @@
 {
-  "manifest_version": "v1.10.69.1",
-  "seed_runtime_version": "v1.10.69",
+  "manifest_version": "v1.10.74.1",
+  "seed_runtime_version": "v1.10.74",
   "mirror_policy": "strict_source_mirror",
   "excluded_paths": [
     ".env.testing",
-    "parity/seed-manifest-v1.10.69.1.json"
+    "README.md",
+    "parity/seed-manifest-*.json"
   ],
   "files": [
     {
@@ -17,7 +18,7 @@
     },
     {
       "path": ".env.example",
-      "sha256": "ca50d22f560920bb4c4de7a2d19e10accfeb5402850564e2b388557d3925eebd"
+      "sha256": "5bfaea2f1e26e2493b038308e3f5ac8689451353e80b361c74c6b1ee0b338ce2"
     },
     {
       "path": ".gitattributes",
@@ -25,7 +26,7 @@
     },
     {
       "path": ".github/workflows/control-plane-parity.yml",
-      "sha256": "9ff3d0aaf4906a4cef1659007ad4fa5c69c62f5f8fa2e0f3ea43a238272761f9"
+      "sha256": "0d7783fb7db794c641dd674194d9d5c922ae0fc3eb8d920baf196e1dc44f7971"
     },
     {
       "path": ".gitignore",
@@ -46,10 +47,6 @@
     {
       "path": "Dockerfile.fpm",
       "sha256": "3052e27b07f561c4296f447806aa72544abd3be14871c740a34b249549556698"
-    },
-    {
-      "path": "README.md",
-      "sha256": "f604a665f6a8c1225bdd8cffd99fe984ab89c378c1bcb068eaf46055b0363ec8"
     },
     {
       "path": "app/Console/Commands/DataSubjectRightsCommand.php",
@@ -165,15 +162,15 @@
     },
     {
       "path": "app/Http/Controllers/DiscoverController.php",
-      "sha256": "75cd5fb1dcd5f1aa0b9d0336fd094343a7b239407673b8df3d60369ee49f7684"
+      "sha256": "8ff116ad2f78086913ed1ac27822b79d3898a9f7cba9f57bcf32d5c83a41ac98"
     },
     {
       "path": "app/Http/Controllers/DispatchRouteTicketController.php",
-      "sha256": "a42fe553a26668b3d78295ece0e2d597d0285b2b88e46a2082b734e49dd626b5"
+      "sha256": "7a7c5db3ef6a705877435d3771f2dae7b536a33d7d347973d733231afae9fb55"
     },
     {
       "path": "app/Http/Controllers/EventsController.php",
-      "sha256": "3b7060c74dfc58ba6af114b6eca771598a5196929b488f9a7ff9e7e96acb80be"
+      "sha256": "ae464bb584b49add1840b1c6b5766add5e7b1e6aa516b3b4ccc366eef80d81f9"
     },
     {
       "path": "app/Http/Controllers/HeartbeatController.php",
@@ -213,7 +210,7 @@
     },
     {
       "path": "app/Http/Controllers/RegisterController.php",
-      "sha256": "90b4874aeb0f289831883342914df52d7dc6329a12b264ad269fb86fab8be697"
+      "sha256": "065c5780e4f4447126c82b48d80bc51090909e8ae85b07b0e6b741b49b8f6963"
     },
     {
       "path": "app/Http/Controllers/RegistryController.php",
@@ -233,7 +230,7 @@
     },
     {
       "path": "app/Http/Controllers/StatsController.php",
-      "sha256": "b883ec046de4aa74ca644a2c8fb638db0c76058d73467648706aea7dfd74f9a2"
+      "sha256": "a5001ac1196fd4bfbeb63158224df05285bd89a0f88314e4cec6d098983579b9"
     },
     {
       "path": "app/Http/Controllers/TelemetryController.php",
@@ -269,7 +266,7 @@
     },
     {
       "path": "app/Jobs/AggregateProbeMetricsJob.php",
-      "sha256": "bdb86d5065691d41e3cf4560674c3492f9e6ff2736afed3945224b82ebba8e7b"
+      "sha256": "c8392c377c510ff54dd27d18f78436319d7301b24ae9a823f94f113d2c7d2929"
     },
     {
       "path": "app/Models/AvailabilityWindow.php",
@@ -305,7 +302,7 @@
     },
     {
       "path": "app/Models/NodeEvent.php",
-      "sha256": "e3936288643e8f8988b207aa075be4e2ae411494cdd0aaf6ec836cf9a385652c"
+      "sha256": "bb893ddc25b357fea0d6823d1d176143e7662ce67e194d825888d9b7f5f5d817"
     },
     {
       "path": "app/Models/NodeHealthObservation.php",
@@ -373,7 +370,7 @@
     },
     {
       "path": "app/Services/DispatchRouteTicketService.php",
-      "sha256": "4d888e93edb41997f6d2084f94a22cd547e63af8f6b51a3981eefe6983bf79e1"
+      "sha256": "db0ff4cf816d431d2a079ea42334b69b847e59b0d2721e48dc78ac3ff0919952"
     },
     {
       "path": "app/Services/DispatchUsageCounter.php",
@@ -417,11 +414,11 @@
     },
     {
       "path": "app/Services/NodeEventLogger.php",
-      "sha256": "7313f45c72b75e2a3420108856cdad08a57842024c49f07af6d8656ad171fd05"
+      "sha256": "39ac82bb959bb1bc88497920599a6ad9d948ba944188a3a8116fe336e410a35d"
     },
     {
       "path": "app/Services/NodeHealthService.php",
-      "sha256": "c50a94ff2b21d4c7f080aa392bac5c1675d358cd321fd9bab61b03ecac1be5fd"
+      "sha256": "0824b23efff64ccc007bd07cccba8d79ebf8927bd9bdb8bcc0b3abe4dd56e0da"
     },
     {
       "path": "app/Services/NodePolicyManifestVerifier.php",
@@ -433,7 +430,7 @@
     },
     {
       "path": "app/Services/NodeScorer.php",
-      "sha256": "562c5d6d5b81ce94948323c6cf9d15173efa077c7f269973eb644b67bd3dc0d9"
+      "sha256": "60c513581060583875e1a24e8e9a036d7c1de18ddd357719b497578579f9f26f"
     },
     {
       "path": "app/Services/OperatorDelegationVerifier.php",
@@ -448,12 +445,16 @@
       "sha256": "c0be1817b28d3e8d138b668a942f6cdb732d027f5f748780644575abb036a3e6"
     },
     {
+      "path": "app/Services/PolicyDetailDisclosurePolicy.php",
+      "sha256": "419c19a891c0dd0d6f4984ca7ed7dbcf1e57829687057def4747f65033ea5394"
+    },
+    {
       "path": "app/Services/PolicyKeyLifecycleService.php",
       "sha256": "f2b1fb5af3d1f8a72ccd88c6f6b03eb92123d293f0f74f2f0a08a92badc09c3f"
     },
     {
       "path": "app/Services/ProfileNegotiation.php",
-      "sha256": "4c10850ba3538e0db899159f8eeae105dc0dda5f70d852c46fa40eee7e33aefa"
+      "sha256": "7e6c2fb234e84243a293b2f95f00c159b238209dd7d2872b90e32bfaaeb01c52"
     },
     {
       "path": "app/Services/RelayBindTicketService.php",
@@ -461,7 +462,7 @@
     },
     {
       "path": "app/Services/ReplicaEventApplier.php",
-      "sha256": "e9fbbcb0d3f41d70936154c0d7b9c4569d25317cf78283f9fd0ac72333a24398"
+      "sha256": "f64c678ee30fc6e6975d091a7d6f7056cf0405ae23b76f4a9ef9b12eae02a1ab"
     },
     {
       "path": "app/Services/ReputationService.php",
@@ -473,7 +474,7 @@
     },
     {
       "path": "app/Services/UptimeService.php",
-      "sha256": "c8564ac7c1f6f5c32c002e7847e9a612265749f67e54544c1808e97ede52d796"
+      "sha256": "9c1235a96aad074b80b4c6c5f7e20f40d773da3810d6d69b7f874186b05e3f1f"
     },
     {
       "path": "artisan",
@@ -493,11 +494,11 @@
     },
     {
       "path": "composer.lock",
-      "sha256": "280dce299b811ef7fe83e94424e8a6dbad0ee96ebdc0016251edc97ed09daefb"
+      "sha256": "e7345215c99b44d9b15ff412a53bd6f3463398f06451c20526bf4d970d8acce0"
     },
     {
       "path": "config/app.php",
-      "sha256": "1f6de30c258dffe925118c2697f6fd6bbf0fc9579afe0839d6791326bf28bee2"
+      "sha256": "b611835793a6f8728c1d061e233c73edf84bc279e202461e790793166ab83e9f"
     },
     {
       "path": "config/auth.php",
@@ -753,7 +754,7 @@
     },
     {
       "path": "database/migrations/2026_06_03_110000_add_operator_identity_to_nodes.php",
-      "sha256": "ed9457775db3230fe692ab6f27e42e2e1ee6f92fb2a83298eb00aa4a78d247d8"
+      "sha256": "32c88182b7d66b8b901e3066874316dc72aa76d7ece64691a63b2a2571e70a8d"
     },
     {
       "path": "database/migrations/2026_06_03_120000_add_liveness_challenge_to_nodes.php",
@@ -773,7 +774,7 @@
     },
     {
       "path": "database/migrations/2026_06_05_150000_create_operators_table.php",
-      "sha256": "87d5bb0f321e399585ebd06e5aedd412a39edc248c1dd45e40d463318f14438b"
+      "sha256": "492068769a8e03a86133bcebf8f22b11dc5104558aeb72d8cd3897193d029dd4"
     },
     {
       "path": "database/migrations/2026_06_06_100000_add_expires_at_to_credit_transactions.php",
@@ -824,6 +825,14 @@
       "sha256": "da36fdac6255cf926e93fdab0781b8a1fec5c5209e5ba69d8e8b6789c2a25e8b"
     },
     {
+      "path": "database/migrations/2026_07_13_170000_widen_operator_pubkey_columns.php",
+      "sha256": "2d7e569d57eb6b62aa60056fcbc58cde98406868fb6a90ce713327a7899dff01"
+    },
+    {
+      "path": "database/migrations/2026_07_16_180000_add_service_id_to_node_events.php",
+      "sha256": "3b9610e0016f1a15218089c4a4fa867ca0dae374090fcbe6eea9c82d87389dd5"
+    },
+    {
       "path": "database/seeders/DatabaseSeeder.php",
       "sha256": "cf8e4b6e48360218bb5534f66419c955288f78338eb8a3dba9d8ac3394ec3dbc"
     },
@@ -841,7 +850,19 @@
     },
     {
       "path": "parity/README.md",
-      "sha256": "0a4936aef5355dba540924b77ac3c933f386108eceb332ed8aacd15b49ef63ed"
+      "sha256": "2df77df3a9ed0ba2343392c465486df078fe149f6a5724c09025edae844ec13d"
+    },
+    {
+      "path": "parity/cip-conformance-v0.json",
+      "sha256": "cccee0823f5f81e1651314f4403de33a8eff97ce6e4ee510a14c27ef4ea8970c"
+    },
+    {
+      "path": "parity/cip-consumer-cosignature-v1.json",
+      "sha256": "cc5acafa22271255090912c71b52a7a0e02f08a4350f73a17d5070945ed01575"
+    },
+    {
+      "path": "parity/cip-economic-attribution-v0.json",
+      "sha256": "30b4e3ae20906cf2817b37b7d9af5eed1450f7bd9b1f3bfe2f39d1370ca51811"
     },
     {
       "path": "parity/contract-v1.10.69.json",
@@ -852,12 +873,16 @@
       "sha256": "bbdbe180a543cb14cfc7791e9fdf18d0c9b5dfa88c4098690a1bed0003221a94"
     },
     {
+      "path": "parity/policy-detail-disclosure-v0.json",
+      "sha256": "341669ad9f866d0f5f975ae9855f4443ca05fb363df0e097c6deffc7329f5012"
+    },
+    {
       "path": "parity/profile-negotiation-v0.json",
-      "sha256": "2752765c44627319bca9968411e29e3cbd7429d9b0a1b5317bb0b4ec58a3bb20"
+      "sha256": "c86428264dd5be4f589c2d7171ac9c7e2488dc37a78f38cbb7a83ffb63339d68"
     },
     {
       "path": "parity/selection-v1.json",
-      "sha256": "ba28a8865d58d87d5302f216602816431697f9c3f963974769536a45e8e9b488"
+      "sha256": "cacb87b268e480fbf2f288faab3b41e90b9d3ec14b13bd9c0a731c376e4ea3ca"
     },
     {
       "path": "phpunit.xml",
@@ -937,7 +962,7 @@
     },
     {
       "path": "spec/proposals/fixtures/profile-compatibility-v0.json",
-      "sha256": "4137ecf91b4748a2b368cf4428b4604c6947f8879d77402cc7937d11d24b2aaf"
+      "sha256": "d039eaf52afca6866832779261db7bdd2ffd818a36bc8ba9aea1db0c9c115012"
     },
     {
       "path": "start-fpm.sh",
@@ -1013,11 +1038,11 @@
     },
     {
       "path": "tests/Feature/DiscoverTest.php",
-      "sha256": "574462bb701f10e86bc6d9b628fe47684a3a32bc09c714ae6d74781b2134f793"
+      "sha256": "7a8b7307b5162d2aad4e4ac971bf328885761b25734c31886af876e341393daa"
     },
     {
       "path": "tests/Feature/DispatchRouteTicketTest.php",
-      "sha256": "c50a173fbcb57c5e6bae611e71d8f45a822101247d3fb770d3dbd08eabef65dc"
+      "sha256": "1258f1fde8c31b63514ffa51aafae8686724fe889577d54528df580d4dfb1e7a"
     },
     {
       "path": "tests/Feature/DispatchUsageCounterTest.php",
@@ -1029,7 +1054,7 @@
     },
     {
       "path": "tests/Feature/EventsTest.php",
-      "sha256": "d796af5b06bab821fe4f9274cffe199bbd3b1af136d28d8d43ecdc17b9bec7ce"
+      "sha256": "7b178e1f94ec8fb0e13768341073ddb04f8ad07811b1708842f472ee5a68de04"
     },
     {
       "path": "tests/Feature/ExampleTest.php",
@@ -1153,7 +1178,7 @@
     },
     {
       "path": "tests/Feature/RegisterTest.php",
-      "sha256": "cf110db17a658972ed498faa09219fd2544f1f6716b0103e0eab6bb850ca2188"
+      "sha256": "ae8871ce7a97bb3410767a5f9e54f9aa0cba3a167391cca0de043a4422ba0721"
     },
     {
       "path": "tests/Feature/RegistryTest.php",
@@ -1165,7 +1190,7 @@
     },
     {
       "path": "tests/Feature/ReplicaEventApplierSigVerifyTest.php",
-      "sha256": "faf772f644d4cca084699ca19062d103e5d2f3372b14836f990f31bcff4d5026"
+      "sha256": "7043bf21aed89a84ad451016d6e78ed40ac70133ec7cab90f09d16d2a374197e"
     },
     {
       "path": "tests/Feature/ReplicaEventApplierTest.php",
@@ -1229,7 +1254,7 @@
     },
     {
       "path": "tests/Feature/StatsTest.php",
-      "sha256": "fe83b3bd6a0eba31659f536c8209d38294e23469d785f749b3e5c5e11599c941"
+      "sha256": "ba481592ea34f62d544302803c8e5c8a0c56fc55fcb1d764dace1adf45743e33"
     },
     {
       "path": "tests/Feature/TelemetryRetentionCommandTest.php",
@@ -1238,6 +1263,18 @@
     {
       "path": "tests/TestCase.php",
       "sha256": "c7c209f5579c42647c1f7b2a79ac828e8b54ac62a98442045a6e94fa2c0d0ebc"
+    },
+    {
+      "path": "tests/Unit/CipConformanceFixtureTest.php",
+      "sha256": "2ff9bec8a1f9c101af329a0feef1c4570fb17923dd0076342dce64b5a93084d3"
+    },
+    {
+      "path": "tests/Unit/CipConsumerCosignatureFixtureTest.php",
+      "sha256": "7c0cd9efbe878f05c0050ff5fb5295a5eeafc16dd026e1fdc2cf9e110389c5df"
+    },
+    {
+      "path": "tests/Unit/CipEconomicAttributionFixtureTest.php",
+      "sha256": "d62cbde43bfb9c0688056f91d96b681a1ad8f4ef5727bb9944f8e17323cd304d"
     },
     {
       "path": "tests/Unit/ConsumerTokenServiceTest.php",
@@ -1261,7 +1298,7 @@
     },
     {
       "path": "tests/Unit/NodeEventLoggerTest.php",
-      "sha256": "c47c2709eefe0232b6746a1a5c3bef23ca15e42ebf26c0c1e38a773e530a6cfa"
+      "sha256": "794476c2b182ed52b6741efce8a18e59dc9ab8cb93c934aa8715b71ce1ca4b35"
     },
     {
       "path": "tests/Unit/NodePolicyManifestVerifierTest.php",
@@ -1276,6 +1313,10 @@
       "sha256": "7ac2ce2364d151a807074b4e6383194ae092b2a15d489eb46ee412739ed51a7c"
     },
     {
+      "path": "tests/Unit/PolicyDetailDisclosurePolicyTest.php",
+      "sha256": "80c6ee47a2ab2f3401d8c38ffde88955eaa290264ffe060b22080401f84d2ad1"
+    },
+    {
       "path": "tests/Unit/Services/FederatedMeshHealthResolverTest.php",
       "sha256": "d1d574ef22ca11c396aab530057620d13a71555ed8a25db4866be4fd25de4aba"
     },
@@ -1285,11 +1326,11 @@
     },
     {
       "path": "tests/Unit/Services/NodeHealthServiceTest.php",
-      "sha256": "f0438048d4e9b5b904472d1a4354ec75870bc752dbef7f14352c0e1f16eecb00"
+      "sha256": "0778df4135e9ef74410ed280283061f845739a2597b5eacad683129d50ff6b1a"
     },
     {
       "path": "tests/Unit/Services/ProfileCompatibilityFixtureTest.php",
-      "sha256": "63a9f4e6a08f3b66ce17fa860002876a3abcf4618fbddc974938501e6ec0353a"
+      "sha256": "e6baff334877b78e1d08612c5d09340d0a2da9a0663b5d53d715f08c95be7661"
     },
     {
       "path": "tests/Unit/Services/ReputationServiceSecurityTest.php",
@@ -1301,11 +1342,11 @@
     },
     {
       "path": "tom/README.md",
-      "sha256": "add59752e6944865dc7eacd9320466c8d194b71f599363146c5847ca7448a2ca"
+      "sha256": "f284dd6aaa6d2707f29baeb357b1e8b697beaf204fd9ca6b39467dbac2ad47d4"
     },
     {
       "path": "tom/context-ownership-v1.json",
-      "sha256": "27629281141c52d9c69cda02455b4499a38f3c7fb898a2be7fdb6d84ba87e386"
+      "sha256": "fb9b152e502c6bf3c659b8730ee177e721d78a401436354dcb987fdcbf9858b3"
     },
     {
       "path": "vite.config.js",

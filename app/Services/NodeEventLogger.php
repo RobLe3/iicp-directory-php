@@ -25,8 +25,11 @@ class NodeEventLogger
      */
     public const GENESIS_ROOT = 'c44802bedf3e63b5a3f1634c5d19263634f92f26dd15401b09b06dd53a80cf9d';
 
-    public function log(string $eventType, string $nodeId, array $payload): NodeEvent
+    public function log(string $eventType, string $nodeId, array $payload, ?string $serviceId = null): NodeEvent
     {
+        if ($serviceId !== null && ! preg_match('/^[a-z0-9][a-z0-9._-]{0,63}$/', $serviceId)) {
+            throw new \InvalidArgumentException('service_id must be a lowercase portable identifier');
+        }
         $eventId = (string) Str::uuid();
         $seq = (NodeEvent::max('seq') ?? 0) + 1;
         $tsMs = (int) (microtime(true) * 1000);
@@ -38,11 +41,12 @@ class NodeEventLogger
             'event_id' => $eventId,
             'seq' => $seq,
             'event_type' => $eventType,
+            'service_id' => $serviceId,
             'node_id' => $nodeId,
             'ts_ms' => $tsMs,
             'payload' => $payload,
             'prev_hash' => $prevHash,
-            'signature' => $this->sign($eventId, $eventType, $seq, $tsMs, $payload, $prevHash),
+            'signature' => $this->sign($eventId, $eventType, $seq, $tsMs, $payload, $prevHash, $serviceId),
         ]);
     }
 
@@ -70,7 +74,8 @@ class NodeEventLogger
         int $seq,
         int $tsMs,
         array $payload,
-        string $prevHash
+        string $prevHash,
+        ?string $serviceId = null
     ): ?string {
         $hexKey = config('app.genesis_ed25519_secret_key');
         if (! $hexKey || strlen($hexKey) !== 128) {
@@ -79,10 +84,14 @@ class NodeEventLogger
 
         $secretKey = sodium_hex2bin($hexKey);
         $payloadHash = hash('sha256', self::canonicalJson($payload));
-        $message = hash('sha256',
-            implode(':', [$eventId, $eventType, (string) $seq, (string) $tsMs, $payloadHash, $prevHash]),
-            true
-        );
+        $fields = [$eventId, $eventType, (string) $seq, (string) $tsMs, $payloadHash, $prevHash];
+        if ($serviceId !== null) {
+            // V2 is selected only by an explicitly present service_id. The
+            // domain prefix prevents a V2 event from colliding with a legacy
+            // signing input. Colons are forbidden by service_id validation.
+            array_unshift($fields, 'iicp-event-v2', $serviceId);
+        }
+        $message = hash('sha256', implode(':', $fields), true);
 
         return bin2hex(sodium_crypto_sign_detached($message, $secretKey));
     }

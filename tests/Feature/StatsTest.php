@@ -132,6 +132,7 @@ class StatsTest extends TestCase
             ->assertJsonStructure([
                 'server' => [
                     'version',
+                    'build_id',
                     'active_nodes',
                     'public_routable_nodes',
                     'heartbeating_nodes',
@@ -154,6 +155,16 @@ class StatsTest extends TestCase
                     'recovery_window',
                 ],
             ]);
+    }
+
+    public function test_stats_exposes_secret_free_directory_build_identity(): void
+    {
+        config(['app.iicp_build_id' => 'sha256:'.str_repeat('a', 64)]);
+        Cache::forget(StatsController::PUBLIC_STATS_CACHE_KEY);
+
+        $this->getJson('/api/v1/stats')
+            ->assertOk()
+            ->assertJsonPath('server.build_id', 'sha256:'.str_repeat('a', 64));
     }
 
     public function test_stats_public_document_does_not_leak_route_endpoints_or_full_uuid(): void
@@ -624,6 +635,82 @@ class StatsTest extends TestCase
 
         $aggregate = $this->getJson('/api/v1/stats')->assertOk()->json('probes.aggregate_24h');
         $this->assertEquals(19.0, $aggregate['discover_query_cache_bypass_p50_ms']);
+    }
+
+    public function test_stats_aggregates_paired_safe_origin_cache_evidence(): void
+    {
+        foreach ([
+            [31, 340, 'miss'],
+            [3, 115, 'hit'],
+            [27, 320, 'miss'],
+            [2, 108, 'hit'],
+        ] as $index => [$queryMs, $wallMs, $state]) {
+            TelemetryProbe::create([
+                'probe_token_id' => null,
+                'node_id' => null,
+                'run_id' => 'run-cache-pair-'.$index,
+                'probe_id' => 'reach-cache-pair',
+                'probe_type' => 'conformance',
+                'test_id' => 'DIR-DISC-CACHE-01',
+                'level' => 'INFO',
+                'passed' => true,
+                'latency_ms' => $wallMs,
+                'detail' => 'safe paired cache evidence',
+                'metadata' => [
+                    'cache_pair_safe_public' => true,
+                    'cache_pair' => [[
+                        'sequence' => $index + 1,
+                        'status' => 200,
+                        'origin_cache_state' => $state,
+                        'cf_cache_status' => 'DYNAMIC',
+                        'directory_query_ms' => $queryMs,
+                        'wall_ms' => $wallMs,
+                    ]],
+                ],
+                'probed_at' => now()->subMinutes(5),
+            ]);
+        }
+
+        // A CDN HIT can replay an old origin header and must not be classified.
+        TelemetryProbe::create([
+            'probe_token_id' => null,
+            'node_id' => null,
+            'run_id' => 'run-cache-pair-edge-replay',
+            'probe_id' => 'reach-cache-pair',
+            'probe_type' => 'conformance',
+            'test_id' => 'DIR-DISC-CACHE-01',
+            'level' => 'INFO',
+            'passed' => false,
+            'latency_ms' => 10,
+            'detail' => 'edge replay',
+            'metadata' => [
+                'cache_pair_safe_public' => true,
+                'cache_pair' => [[
+                    'origin_cache_state' => 'miss',
+                    'cf_cache_status' => 'HIT',
+                    'directory_query_ms' => 1,
+                    'wall_ms' => 10,
+                ]],
+            ],
+            'probed_at' => now()->subMinutes(5),
+        ]);
+
+        $this->assertCount(5, TelemetryProbe::where('test_id', 'DIR-DISC-CACHE-01')->get());
+
+        (new AggregateProbeMetricsJob)->handle();
+        Cache::forget('stats.public');
+
+        $aggregate = $this->getJson('/api/v1/stats')->assertOk()->json('probes.aggregate_24h');
+        $this->assertEquals(2.0, $aggregate['discover_query_cache_hit_p50_ms']);
+        $this->assertEquals(3.0, $aggregate['discover_query_cache_hit_p95_ms']);
+        $this->assertSame(2, $aggregate['discover_query_cache_hit_samples']);
+        $this->assertEquals(27.0, $aggregate['discover_query_cache_miss_p50_ms']);
+        $this->assertEquals(31.0, $aggregate['discover_query_cache_miss_p95_ms']);
+        $this->assertSame(2, $aggregate['discover_query_cache_miss_samples']);
+        $this->assertEquals(108.0, $aggregate['discover_origin_cache_hit_p50_ms']);
+        $this->assertEquals(115.0, $aggregate['discover_origin_cache_hit_p95_ms']);
+        $this->assertEquals(320.0, $aggregate['discover_origin_cache_miss_p50_ms']);
+        $this->assertEquals(340.0, $aggregate['discover_origin_cache_miss_p95_ms']);
     }
 
     /**

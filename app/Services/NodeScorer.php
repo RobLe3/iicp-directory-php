@@ -241,11 +241,13 @@ class NodeScorer
             ->take($limit)
             ->values();
 
-        return $scored->map(function (array $item) use ($model, $scoreVersion): array {
+        $healthByNode = $this->health->forNodes($scored->pluck('node'));
+
+        return $scored->map(function (array $item) use ($model, $scoreVersion, $healthByNode): array {
             $node = $item['node'];
             $registeredModels = $this->registeredModels($node);
             $liveModels = $this->liveModels($node, $registeredModels);
-            $health = $this->health->forNode($node);
+            $health = $healthByNode[$node->id] ?? $this->health->forNode($node);
             $capabilitySummary = $this->capabilitySummary($node, $registeredModels, $liveModels);
             $routingSignals = self::routingSignals($node, $health);
             $out = [

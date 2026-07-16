@@ -102,6 +102,44 @@ class RegisterTest extends TestCase
             ->assertJsonPath('backend', 'ollama');
     }
 
+    public function test_register_accepts_meshllm_as_informational_backend_flavor(): void
+    {
+        $nodeId = (string) Str::uuid();
+        $payload = array_merge($this->validPayload, ['node_id' => $nodeId, 'backend' => 'meshllm']);
+        $this->postJson('/api/v1/register', $payload)->assertStatus(201);
+        $this->getJson("/api/v1/registry/nodes/{$nodeId}")
+            ->assertStatus(200)
+            ->assertJsonPath('backend', 'meshllm');
+    }
+
+    public function test_reregister_replaces_stale_capability_models(): void
+    {
+        $nodeId = (string) Str::uuid();
+        $initial = array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'capabilities' => [[
+                'intent' => 'urn:iicp:intent:llm:chat:v1',
+                'models' => ['stable-model', 'mesh'],
+                'max_tokens' => 4096,
+            ]],
+        ]);
+        $this->postJson('/api/v1/register', $initial)->assertStatus(201);
+
+        $current = array_merge($initial, [
+            'capabilities' => [[
+                'intent' => 'urn:iicp:intent:llm:chat:v1',
+                'models' => ['stable-model', 'replacement-model'],
+                'max_tokens' => 4096,
+            ]],
+        ]);
+        $this->postJson('/api/v1/register', $current)->assertStatus(201);
+
+        $this->getJson("/api/v1/registry/nodes/{$nodeId}")
+            ->assertStatus(200)
+            ->assertJsonPath('models', ['stable-model', 'replacement-model']);
+        $this->assertDatabaseCount('capabilities', 1);
+    }
+
     public function test_register_rejects_unknown_backend(): void
     {
         $payload = array_merge($this->validPayload, ['backend' => 'not-a-backend']);
@@ -725,6 +763,7 @@ class RegisterTest extends TestCase
         'key_id' => 'a1b2c3d4e5f60718',
         'not_after' => '2026-08-27T00:00:00Z',
         'hybrid_pq' => null,
+        'features' => ['response_encryption_v1'],
     ];
 
     /** @test CX-01: CX-Provider advertises public_key; directory stores it verbatim */
@@ -739,6 +778,7 @@ class RegisterTest extends TestCase
         $this->assertSame('X25519', $node->cx_public_key['algorithm']);
         $this->assertSame($this->cxKey['key'], $node->cx_public_key['key']);
         $this->assertSame($this->cxKey['key_id'], $node->cx_public_key['key_id']);
+        $this->assertSame(['response_encryption_v1'], $node->cx_public_key['features']);
     }
 
     /** @test CX-01: registration without cx_public_key leaves the column null (back-compat) */
