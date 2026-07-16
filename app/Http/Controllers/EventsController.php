@@ -69,6 +69,7 @@ class EventsController extends Controller
             'events' => $events->map(fn ($e) => [
                 'event_id' => $e->event_id,
                 'event_type' => $e->event_type,
+                'service_id' => $e->service_id,
                 'seq' => $e->seq,
                 'ts_ms' => $e->ts_ms,
                 'node_id' => $e->node_id,

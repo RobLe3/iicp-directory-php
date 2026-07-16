@@ -29,7 +29,8 @@ return new class extends Migration
     {
         Schema::create('operators', function (Blueprint $table) {
             $table->id();
-            $table->string('operator_pubkey', 64)->unique();
+            // `ed25519:` + 64 hex characters.
+            $table->string('operator_pubkey', 80)->unique();
             $table->string('display_name', 64)->nullable();
             $table->string('attested_created_at', 40)->nullable();
             $table->char('operator_integrity_hash', 64)->nullable();

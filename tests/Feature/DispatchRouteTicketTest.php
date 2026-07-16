@@ -100,6 +100,10 @@ class DispatchRouteTicketTest extends TestCase
         $this->assertSame($node->id, $payload['node_id']);
         $this->assertSame('urn:iicp:intent:llm:chat:v1', $payload['intent']);
         $this->assertSame('iicp.directory.dispatch', $payload['aud']);
+        $this->assertSame(
+            $resp->json('route.node_policy_manifest.verification.canonical_sha256'),
+            $payload['policy_manifest_sha256']
+        );
         $this->assertGreaterThan(time(), $payload['exp']);
         $this->assertArrayNotHasKey('prompt', $payload);
         $this->assertArrayNotHasKey('messages', $payload);
@@ -107,6 +111,29 @@ class DispatchRouteTicketTest extends TestCase
         $this->assertArrayNotHasKey('node_token', $payload);
         $this->assertNull(app(DispatchRouteTicketService::class)->verify($resp->json('ticket'), $node->id, 'urn:iicp:intent:code:review:v1'));
         $this->assertNull(app(DispatchRouteTicketService::class)->verify($resp->json('ticket'), (string) Str::uuid(), 'urn:iicp:intent:llm:chat:v1'));
+    }
+
+    public function test_dispatch_ticket_omits_policy_binding_for_legacy_node_without_manifest(): void
+    {
+        $keypair = sodium_crypto_sign_keypair();
+        config(['app.genesis_ed25519_secret_key' => bin2hex(sodium_crypto_sign_secretkey($keypair))]);
+        $node = $this->createNode([], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'models' => ['qwen2.5:0.5b'],
+            'max_tokens' => 4096,
+        ]]);
+
+        $response = $this->postJson('/api/v1/dispatch/ticket', [
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+        ])->assertCreated();
+        $payload = app(DispatchRouteTicketService::class)->verify(
+            $response->json('ticket'),
+            $node->id,
+            'urn:iicp:intent:llm:chat:v1'
+        );
+
+        $this->assertIsArray($payload);
+        $this->assertArrayNotHasKey('policy_manifest_sha256', $payload);
     }
 
     public function test_dispatch_ticket_verify_returns_null_for_expired_ticket(): void

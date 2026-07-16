@@ -300,6 +300,16 @@ class DiscoverController extends Controller
             'browser_usable' => $node['browser_usable'] ?? null,
             'exposure_mode' => $node['exposure_mode'] ?? null,
             'key_ready' => (bool) ($node['key_ready'] ?? (($node['cx_public_key'] ?? null) !== null)),
+            // Public-safe capability evidence: expose only whether the node
+            // advertised the reviewed response-encryption feature, never key
+            // material or the full mutable feature list.
+            'response_encryption_ready' => in_array(
+                'response_encryption_v1',
+                is_array($node['cx_public_key']['features'] ?? null)
+                    ? $node['cx_public_key']['features']
+                    : [],
+                true,
+            ),
             'privacy_routing_status' => $node['privacy_routing_status'] ?? null,
             'sdk_language' => $node['sdk_language'] ?? null,
             'sdk_version' => $node['sdk_version'] ?? null,

@@ -9,6 +9,7 @@ use App\Models\TelemetryProbe;
 use App\Services\NodePolicyManifestVerifier;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -74,6 +75,43 @@ class DiscoverTest extends TestCase
         $this->assertContains(Operator::publicFingerprint('OPKEY'), $fingerprints);
         $this->assertCount(1, $fingerprints, 'only the bound node carries operator_fingerprint');
         $this->assertStringNotContainsString('OPKEY', $resp->getContent(), 'operator_pubkey must never be served');
+    }
+
+    public function test_discover_health_enrichment_uses_bounded_queries_for_many_nodes(): void
+    {
+        // Discovery renders health evidence for every candidate.  Keep that
+        // evidence and operator enrichment batch-loaded so adding providers
+        // cannot create an N+1 query path on an origin cache miss.
+        foreach (['OPKEY-A', 'OPKEY-B'] as $key) {
+            Operator::create(['operator_pubkey' => $key, 'display_name' => "Operator {$key}"]);
+        }
+        for ($i = 0; $i < 10; $i++) {
+            $this->createNode([
+                'operator_pubkey' => $i % 2 === 0 ? 'OPKEY-A' : 'OPKEY-B',
+                'operator_verified' => true,
+            ], [[
+                'intent' => 'urn:iicp:intent:llm:chat:v1',
+                'models' => ['m'],
+                'max_tokens' => 4096,
+            ]]);
+        }
+
+        Cache::flush();
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')->assertOk();
+        $selects = collect(DB::getQueryLog())
+            ->filter(fn (array $query) => str_starts_with(strtolower(ltrim($query['query'])), 'select'));
+        $operatorSelects = $selects->filter(
+            fn (array $query) => preg_match('/\bfrom\s+["`]?operators["`]?\b/i', $query['query'])
+        );
+
+        $this->assertLessThanOrEqual(
+            12,
+            $selects->count(),
+            'Discovery must batch health, lifecycle and operator evidence rather than query per returned node.',
+        );
+        $this->assertCount(1, $operatorSelects, 'all operator display names must be loaded in one query');
     }
 
     public function test_discover_surfaces_self_attested_node_policy_manifest(): void
@@ -222,7 +260,11 @@ class DiscoverTest extends TestCase
             'transport_method' => 'external_tunnel',
             'nat_type' => 'unknown',
             'transport_metadata' => ['detection_log_tail' => ['rung 5: quick tunnel']],
-            'cx_public_key' => ['algorithm' => 'X25519', 'key' => 'abc'],
+            'cx_public_key' => [
+                'algorithm' => 'X25519',
+                'key' => 'abc',
+                'features' => ['response_encryption_v1'],
+            ],
             'relay_capable' => true,
         ], [[
             'intent' => 'urn:iicp:intent:llm:chat:v1',
@@ -238,7 +280,8 @@ class DiscoverTest extends TestCase
             ->assertJsonPath('route_fields_present', false)
             ->assertJsonPath('nodes.0.node_id_prefix', substr($node->id, 0, 8))
             ->assertJsonPath('nodes.0.route_class', 'external_tunnel')
-            ->assertJsonPath('nodes.0.key_ready', true);
+            ->assertJsonPath('nodes.0.key_ready', true)
+            ->assertJsonPath('nodes.0.response_encryption_ready', true);
 
         $publicNode = $resp->json('nodes.0');
         $this->assertArrayNotHasKey('node_id', $publicNode);
@@ -247,6 +290,7 @@ class DiscoverTest extends TestCase
         $this->assertArrayNotHasKey('transport_metadata', $publicNode);
         $this->assertArrayNotHasKey('cx_public_key', $publicNode);
         $this->assertArrayNotHasKey('public_key', $publicNode);
+        $this->assertArrayNotHasKey('features', $publicNode);
 
         $content = $resp->getContent();
         $this->assertStringNotContainsString($node->id, $content);
@@ -544,9 +588,20 @@ class DiscoverTest extends TestCase
         $first = $this->getJson($url)->assertOk();
         $first->assertHeader('X-IICP-Discover-Origin-Cache', 'miss');
 
+        // A cache header alone is not enough evidence: prove a warm origin
+        // request does not re-enter the node scorer/health path. Database-cache
+        // bookkeeping may still issue its own query, so look specifically for
+        // serving-state tables rather than asserting a blanket query count.
+        DB::flushQueryLog();
+        DB::enableQueryLog();
         $second = $this->getJson($url)->assertOk();
         $second->assertHeader('X-IICP-Discover-Origin-Cache', 'hit');
         $this->assertSame($first->json('nodes'), $second->json('nodes'));
+
+        $servingStateSelects = collect(DB::getQueryLog())
+            ->filter(fn (array $query) => str_starts_with(strtolower(ltrim($query['query'])), 'select'))
+            ->filter(fn (array $query) => preg_match('/\b(nodes|capabilities|iicp_telemetry_probes|node_events)\b/i', $query['query']));
+        $this->assertCount(0, $servingStateSelects, 'warm discovery must not recompute node scoring or health evidence');
     }
 
     // --- ADR-021 model filter tests (CIP-D2 / #162) ---

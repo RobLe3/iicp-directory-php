@@ -113,10 +113,28 @@ class AggregateProbeMetricsJob implements ShouldQueue
             }
         }
 
+        // #627: a low-rate REACH pair deliberately bypasses the CDN edge and
+        // performs a fresh public-view origin miss followed immediately by a
+        // warm-origin hit.  Keep it separate from the ordinary DIR-DISC-01 wall
+        // metric so two-request evidence cannot distort user-path latency.
+        $paired = $this->pairedCacheSamples($latencySince);
+        $pairedQueryHit = $this->numericSampleValues($paired, 'hit', 'directory_query_ms');
+        $pairedQueryMiss = $this->numericSampleValues($paired, 'miss', 'directory_query_ms');
+        $pairedWallCacheHit = $this->numericSampleValues($paired, 'hit', 'wall_ms');
+        $pairedWallCacheMiss = $this->numericSampleValues($paired, 'miss', 'wall_ms');
+        $queryCacheHit = $queryCacheHit->merge($pairedQueryHit);
+        $queryCacheMiss = $queryCacheMiss->merge($pairedQueryMiss);
+
         $this->writeAggregate($window, 'discover_query_p50_ms', $this->percentile($query->sort()->values(), 50), $query->count());
         $this->writeAggregate($window, 'discover_query_cache_hit_p50_ms', $this->percentile($queryCacheHit->sort()->values(), 50), $queryCacheHit->count());
+        $this->writeAggregate($window, 'discover_query_cache_hit_p95_ms', $this->percentile($queryCacheHit->sort()->values(), 95), $queryCacheHit->count());
         $this->writeAggregate($window, 'discover_query_cache_miss_p50_ms', $this->percentile($queryCacheMiss->sort()->values(), 50), $queryCacheMiss->count());
+        $this->writeAggregate($window, 'discover_query_cache_miss_p95_ms', $this->percentile($queryCacheMiss->sort()->values(), 95), $queryCacheMiss->count());
         $this->writeAggregate($window, 'discover_query_cache_bypass_p50_ms', $this->percentile($queryCacheBypass->sort()->values(), 50), $queryCacheBypass->count());
+        $this->writeAggregate($window, 'discover_origin_cache_hit_p50_ms', $this->percentile($pairedWallCacheHit->sort()->values(), 50), $pairedWallCacheHit->count());
+        $this->writeAggregate($window, 'discover_origin_cache_hit_p95_ms', $this->percentile($pairedWallCacheHit->sort()->values(), 95), $pairedWallCacheHit->count());
+        $this->writeAggregate($window, 'discover_origin_cache_miss_p50_ms', $this->percentile($pairedWallCacheMiss->sort()->values(), 50), $pairedWallCacheMiss->count());
+        $this->writeAggregate($window, 'discover_origin_cache_miss_p95_ms', $this->percentile($pairedWallCacheMiss->sort()->values(), 95), $pairedWallCacheMiss->count());
         $this->writeAggregate($window, 'discover_edge_p50_ms', $this->percentile($edge->sort()->values(), 50), $edge->count());
         $this->writeAggregate($window, 'discover_origin_p50_ms', $this->percentile($origin->sort()->values(), 50), $origin->count());
 
@@ -171,6 +189,40 @@ class AggregateProbeMetricsJob implements ShouldQueue
         $idx = (int) ceil($pct / 100 * $sorted->count()) - 1;
 
         return round($sorted->get(max(0, $idx)), 1);
+    }
+
+    /** @return Collection<int,array<string,mixed>> */
+    private function pairedCacheSamples(Carbon $since): Collection
+    {
+        return TelemetryProbe::where('test_id', 'DIR-DISC-CACHE-01')
+            ->whereNotNull('metadata')
+            ->where('probed_at', '>=', $since)
+            ->get(['metadata'])
+            ->flatMap(function (TelemetryProbe $row): array {
+                $meta = is_array($row->metadata) ? $row->metadata : json_decode((string) $row->metadata, true);
+                if (! is_array($meta) || ! filter_var($meta['cache_pair_safe_public'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+                    return [];
+                }
+
+                return array_values(array_filter(
+                    $meta['cache_pair'] ?? [],
+                    fn ($sample) => is_array($sample)
+                        && strtoupper((string) ($sample['cf_cache_status'] ?? '')) !== 'HIT'
+                        && in_array($sample['origin_cache_state'] ?? null, ['hit', 'miss'], true),
+                ));
+            })
+            ->values();
+    }
+
+    /** @param Collection<int,array<string,mixed>> $samples */
+    private function numericSampleValues(Collection $samples, string $state, string $field): Collection
+    {
+        return $samples
+            ->where('origin_cache_state', $state)
+            ->pluck($field)
+            ->filter(fn ($value) => is_numeric($value))
+            ->map(fn ($value) => (float) $value)
+            ->values();
     }
 
     private function writeAggregate(string $window, string $metric, ?float $value, int $samples = 0): void

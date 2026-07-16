@@ -21,8 +21,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('nodes', function (Blueprint $table) {
-            // base64 ed25519 operator public key, verified at register.
-            $table->string('operator_pubkey', 64)->nullable()->after('operator_contact');
+            // `ed25519:` + 64 hex characters; verified at register.
+            $table->string('operator_pubkey', 80)->nullable()->after('operator_contact');
             // true once a valid delegation bound this node to operator_pubkey.
             $table->boolean('operator_verified')->default(false)->after('operator_pubkey');
             // 'did_key' (self-asserted) | 'did_web' (domain-verified). OPEN-2.

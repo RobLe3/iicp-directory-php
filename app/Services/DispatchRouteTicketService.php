@@ -34,8 +34,12 @@ class DispatchRouteTicketService
     /**
      * @return array{token: string, expires_at: int, ticket_id: string}|null
      */
-    public function issue(string $nodeId, string $intent, string $audience = 'iicp.directory.dispatch'): ?array
-    {
+    public function issue(
+        string $nodeId,
+        string $intent,
+        string $audience = 'iicp.directory.dispatch',
+        ?string $policyManifestSha256 = null,
+    ): ?array {
         $secretKey = $this->secretKey();
         if ($secretKey === null) {
             return null;
@@ -44,7 +48,7 @@ class DispatchRouteTicketService
         $now = time();
         $exp = $now + self::TTL_SECONDS;
         $ticketId = bin2hex(random_bytes(12));
-        $payloadJson = json_encode([
+        $payload = [
             'v' => 1,
             'typ' => 'dispatch-route-ticket',
             'iss' => config('app.url'),
@@ -54,7 +58,11 @@ class DispatchRouteTicketService
             'intent' => $intent,
             'iat' => $now,
             'exp' => $exp,
-        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        ];
+        if (is_string($policyManifestSha256) && preg_match('/^[0-9a-f]{64}$/', $policyManifestSha256) === 1) {
+            $payload['policy_manifest_sha256'] = $policyManifestSha256;
+        }
+        $payloadJson = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
 
         $b64Payload = $this->b64url($payloadJson);
         $message = self::DOMAIN.$b64Payload;

@@ -199,6 +199,65 @@ class NodeEventLoggerTest extends TestCase
         );
     }
 
+    public function test_service_id_selects_domain_separated_v2_signature(): void
+    {
+        [$publicKey, $secretKey] = $this->generateKeypair();
+        config(['app.genesis_ed25519_secret_key' => bin2hex($secretKey)]);
+
+        $payload = ['endpoint' => 'https://node.test'];
+        $event = $this->logger->log('REGISTER', $this->nodeId, $payload, 'directory-monolith');
+        $payloadHash = hash('sha256', NodeEventLogger::canonicalJson($payload));
+        $message = hash('sha256', implode(':', [
+            'iicp-event-v2',
+            'directory-monolith',
+            $event->event_id,
+            $event->event_type,
+            (string) $event->seq,
+            (string) $event->ts_ms,
+            $payloadHash,
+            $event->prev_hash,
+        ]), true);
+
+        $this->assertSame('directory-monolith', $event->service_id);
+        $this->assertTrue(sodium_crypto_sign_verify_detached(
+            sodium_hex2bin($event->signature),
+            $message,
+            $publicKey,
+        ));
+    }
+
+    public function test_service_id_v2_kat_matches_rust_byte_for_byte(): void
+    {
+        $key = str_repeat('11', 32).'d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737';
+        config(['app.genesis_ed25519_secret_key' => $key]);
+        $sign = new \ReflectionMethod(NodeEventLogger::class, 'sign');
+        $sign->setAccessible(true);
+        $sig = $sign->invoke(
+            $this->logger,
+            '474a7713-85c8-4d61-bea5-0ab16f3825a0',
+            'REGISTER',
+            1080,
+            1779195794150,
+            ['endpoint' => 'http://localhost:8090', 'region' => 'eu-central'],
+            NodeEventLogger::GENESIS_ROOT,
+            'directory-monolith',
+        );
+
+        $this->assertSame(
+            'd845a788503adff672f2d74e50eee3f23c86e7cfb1a041d4607765cafbcbcf78d8d7e10583c79263a573a1e48b05b679cc727016161aabe8a69f00101dba7d03',
+            $sig,
+        );
+    }
+
+    public function test_service_id_is_optional_and_invalid_values_fail_closed(): void
+    {
+        $legacy = $this->logger->log('REGISTER', $this->nodeId, []);
+        $this->assertNull($legacy->service_id);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->logger->log('REGISTER', $this->nodeId, [], 'ledger:evil');
+    }
+
     public function test_different_events_produce_different_signatures(): void
     {
         [$publicKey, $secretKey] = $this->generateKeypair();

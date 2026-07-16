@@ -155,7 +155,7 @@ class RegisterController extends Controller
             'limits.tokens_per_min' => ['required', 'integer', 'min:1'],
             'relay_capable' => ['sometimes', 'boolean'],
             // Detected backend server flavor (SDK-advertised) — node-detail field.
-            'backend' => ['sometimes', 'nullable', 'string', 'in:ollama,lmstudio,vllm,llamacpp,anthropic,custom'],
+            'backend' => ['sometimes', 'nullable', 'string', 'in:ollama,lmstudio,vllm,llamacpp,meshllm,anthropic,custom'],
             // CIP-D1: Provider opt-in policy block (spec S.12 §2.1)
             'policy' => ['sometimes', 'array'],
             'policy.allow_remote_inference' => ['sometimes', 'boolean'],
@@ -240,7 +240,17 @@ class RegisterController extends Controller
             'cx_public_key.key_id' => ['required_with:cx_public_key', 'string', 'max:32'],
             'cx_public_key.not_after' => ['sometimes', 'nullable', 'date'],
             'cx_public_key.hybrid_pq' => ['sometimes', 'nullable'],
+            'cx_public_key.features' => ['sometimes', 'array', 'max:16'],
+            'cx_public_key.features.*' => ['string', 'max:64'],
         ]);
+        // Laravel's nested-array validated projection can omit an optional
+        // additive list even when each item passed validation. Preserve the
+        // already-validated feature list explicitly for capability negotiation.
+        $cxKeyInput = $request->input('cx_public_key');
+        $cxFeatures = is_array($cxKeyInput) ? ($cxKeyInput['features'] ?? null) : null;
+        if (is_array($cxFeatures) && isset($validated['cx_public_key'])) {
+            $validated['cx_public_key']['features'] = array_values($cxFeatures);
+        }
 
         foreach (($validated['capabilities'] ?? []) as $idx => $capability) {
             $intent = (string) ($capability['intent'] ?? '');

@@ -123,7 +123,12 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
-    'iicp_version' => 'v1.10.69',
+    'iicp_version' => 'v1.10.74',
+
+    // Secret-free digest of the tracked deployable directory source. Release
+    // artifacts inject this value so equal version strings cannot hide a
+    // different live build. It is intentionally not a private commit hash.
+    'iicp_build_id' => env('IICP_BUILD_ID'),
 
     // #373 Phase B: whether the directory origin has IPv6 egress. DomainFactory
     // shared hosting does NOT — probing IPv6-literal node endpoints from there only

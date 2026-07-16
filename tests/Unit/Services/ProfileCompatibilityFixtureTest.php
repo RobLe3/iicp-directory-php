@@ -13,7 +13,7 @@ class ProfileCompatibilityFixtureTest extends TestCase
         $fixture = json_decode(file_get_contents($fixturePath), true, flags: JSON_THROW_ON_ERROR);
         $guard = new IntentPolicyGuard;
 
-        $this->assertSame('0.3.0-draft', $fixture['fixture_version']);
+        $this->assertSame('0.4.0-draft', $fixture['fixture_version']);
         $this->assertSame('pre-normative', $fixture['status']);
 
         foreach ($fixture['scenarios'] as $scenario) {
@@ -23,7 +23,7 @@ class ProfileCompatibilityFixtureTest extends TestCase
             if ($scenario['name'] === 'prohibited_policy') {
                 $this->assertTrue($isRefused, 'current public-mesh risk guard must refuse prohibited intent');
                 $this->assertSame('policy_refusal', $scenario['expected_reason']);
-            } elseif (in_array($scenario['name'], ['stable_chat', 'optional_extension', 'a2a_skill_bridge', 'mcp_tool_safe'], true)) {
+            } elseif (in_array($scenario['name'], ['stable_chat', 'schema_digest_match', 'optional_extension', 'required_extension_supported', 'a2a_skill_bridge', 'mcp_tool_safe'], true)) {
                 $this->assertFalse($isRefused, "ordinary fixture intent must remain eligible: {$scenario['name']}");
                 $this->assertSame('compatible', $scenario['expected_reason']);
             }

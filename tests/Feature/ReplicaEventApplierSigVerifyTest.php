@@ -47,10 +47,13 @@ class ReplicaEventApplierSigVerifyTest extends TestCase
         ], $overrides);
 
         $payloadHash = hash('sha256', $this->canonicalJson($ev['payload']));
-        $signingInput = implode(':', [
+        $fields = [
             $ev['event_id'], $ev['event_type'], (string) $ev['seq'], (string) $ev['ts_ms'], $payloadHash, $ev['prev_hash'],
-        ]);
-        $message = hash('sha256', $signingInput, true);
+        ];
+        if (array_key_exists('service_id', $ev) && $ev['service_id'] !== null) {
+            array_unshift($fields, 'iicp-event-v2', $ev['service_id']);
+        }
+        $message = hash('sha256', implode(':', $fields), true);
         $ev['sig'] = bin2hex(sodium_crypto_sign_detached($message, $this->secretKey));
 
         return $ev;
@@ -72,6 +75,26 @@ class ReplicaEventApplierSigVerifyTest extends TestCase
     {
         $r = $this->applier->apply($this->signedEvent(), $this->publicKey);
         $this->assertSame(ReplicaEventApplier::RESULT_APPLIED, $r['status'], 'valid sig + valid payload → applied');
+    }
+
+    public function test_service_id_v2_signature_accepts_unknown_opaque_origin(): void
+    {
+        $event = $this->signedEvent(['service_id' => 'future-research-service']);
+        $r = $this->applier->apply($event, $this->publicKey);
+
+        $this->assertSame(ReplicaEventApplier::RESULT_APPLIED, $r['status']);
+    }
+
+    public function test_service_id_tampering_and_invalid_identifier_are_rejected(): void
+    {
+        $event = $this->signedEvent(['service_id' => 'directory-monolith']);
+        $event['service_id'] = 'ledger-service';
+        $tampered = $this->applier->apply($event, $this->publicKey);
+        $this->assertSame(ReplicaEventApplier::RESULT_REJECTED, $tampered['status']);
+
+        $invalid = $this->signedEvent(['service_id' => 'invalid:service']);
+        $result = $this->applier->apply($invalid, $this->publicKey);
+        $this->assertSame(ReplicaEventApplier::RESULT_REJECTED, $result['status']);
     }
 
     public function test_invalid_signature_rejects_event(): void

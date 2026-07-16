@@ -75,6 +75,76 @@ class UptimeService
             ->orderBy('seq')
             ->get(['event_type', 'ts_ms']);
 
+        return $this->uptimeFromEvents($events, (int) (microtime(true) * 1000));
+    }
+
+    /**
+     * Load health-only lifecycle components for a discovery result set in a
+     * bounded number of queries.  Discovery renders these values as evidence;
+     * they must not turn into five database lookups per returned node.
+     *
+     * @param  array<int,string>  $nodeIds
+     * @return array<string,array{uptime: ?float, stability: ?float}>
+     */
+    public function healthScoresForNodes(array $nodeIds, int $windowSeconds = 86400): array
+    {
+        $ids = array_values(array_unique(array_filter($nodeIds, static fn ($id) => is_string($id) && $id !== '')));
+        if ($ids === []) {
+            return [];
+        }
+
+        $eventsByNode = NodeEvent::whereIn('node_id', $ids)
+            ->whereIn('event_type', array_merge(self::SESSION_START_TYPES, self::SESSION_END_TYPES))
+            ->orderBy('node_id')
+            ->orderBy('seq')
+            ->get(['node_id', 'event_type', 'ts_ms'])
+            ->groupBy('node_id');
+
+        $probeStatsByNode = TelemetryProbe::whereIn('node_id', $ids)
+            ->where('probe_type', 'reachability')
+            ->where('probed_at', '>=', now()->subSeconds($windowSeconds))
+            ->selectRaw('node_id, COUNT(*) as total, SUM(CASE WHEN passed THEN 1 ELSE 0 END) as passed')
+            ->groupBy('node_id')
+            ->get()
+            ->keyBy('node_id');
+
+        $nowMs = (int) (microtime(true) * 1000);
+        $windowStartMs = $nowMs - ($windowSeconds * 1000);
+        $scores = [];
+        foreach ($ids as $nodeId) {
+            $events = $eventsByNode->get($nodeId, collect());
+            if ($events->isEmpty()) {
+                $scores[$nodeId] = ['uptime' => null, 'stability' => null];
+
+                continue;
+            }
+
+            $uptime = $this->uptimeFromEvents($events, $nowMs);
+            $uptimeScore = null;
+            if ($uptime['first_seen_ms'] !== null) {
+                $observedSeconds = max(1, (int) floor(($nowMs - (int) $uptime['first_seen_ms']) / 1000));
+                $uptimeScore = round(max(0.0, min(1.0, $uptime['total_seconds'] / $observedSeconds)), 3);
+            }
+            $scores[$nodeId] = [
+                // Keep the single-node contract: an event stream without a
+                // signed session start has no auditable uptime denominator.
+                'uptime' => $uptimeScore,
+                'stability' => $this->stabilityFromEvents(
+                    $events,
+                    $probeStatsByNode->get($nodeId),
+                    $windowStartMs,
+                    $nowMs,
+                ),
+            ];
+        }
+
+        return $scores;
+    }
+
+    /** @return array<string,mixed> */
+    private function uptimeFromEvents($events, int $nowMs): array
+    {
+
         $cumulativeMs = 0;
         $sessionsCount = 0;
         $sessionStartMs = null;
@@ -95,7 +165,6 @@ class UptimeService
             }
         }
 
-        $nowMs = (int) (microtime(true) * 1000);
         $currentSessionMs = ($sessionStartMs !== null) ? max(0, $nowMs - $sessionStartMs) : 0;
         $totalSeconds = (int) (($cumulativeMs + $currentSessionMs) / 1000);
 
@@ -153,6 +222,17 @@ class UptimeService
 
         $nowMs = (int) (microtime(true) * 1000);
         $windowStartMs = $nowMs - ($windowSeconds * 1000);
+        $probeStats = TelemetryProbe::where('node_id', $nodeId)
+            ->where('probe_type', 'reachability')
+            ->where('probed_at', '>=', now()->subSeconds($windowSeconds))
+            ->selectRaw('COUNT(*) as total, SUM(CASE WHEN passed THEN 1 ELSE 0 END) as passed')
+            ->first();
+
+        return $this->stabilityFromEvents($events, $probeStats, $windowStartMs, $nowMs);
+    }
+
+    private function stabilityFromEvents($events, mixed $probeStats, int $windowStartMs, int $nowMs): float
+    {
         $firstSeenMs = (int) $events->first()->ts_ms;
         $effectiveStartMs = max($windowStartMs, $firstSeenMs);
         $effectiveWindowSeconds = max(1, (int) floor(($nowMs - $effectiveStartMs) / 1000));
@@ -160,11 +240,6 @@ class UptimeService
         $onlineSeconds = $this->onlineSecondsInWindow($events, $effectiveStartMs, $nowMs);
         $coverage = max(0.0, min(1.0, $onlineSeconds / $effectiveWindowSeconds));
 
-        $probeStats = TelemetryProbe::where('node_id', $nodeId)
-            ->where('probe_type', 'reachability')
-            ->where('probed_at', '>=', now()->subSeconds($windowSeconds))
-            ->selectRaw('COUNT(*) as total, SUM(CASE WHEN passed THEN 1 ELSE 0 END) as passed')
-            ->first();
         $probeTotal = (int) ($probeStats?->total ?? 0);
         $probeRate = $probeTotal > 0
             ? max(0.0, min(1.0, ((int) $probeStats->passed) / $probeTotal))

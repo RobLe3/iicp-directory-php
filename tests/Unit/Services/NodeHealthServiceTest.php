@@ -293,6 +293,41 @@ class NodeHealthServiceTest extends TestCase
         $this->assertLessThan($stableHealth['components']['stability'], $flappyHealth['components']['stability']);
     }
 
+    public function test_batch_health_matches_single_node_health_vectors(): void
+    {
+        $observed = $this->makeNode(['public_reachable' => true]);
+        $selfAttested = $this->makeNode(['public_reachable' => false, 'relay_capable' => true]);
+        $startMs = (int) (microtime(true) * 1000) - 3_600_000;
+        $this->seedLifecycleEvent($observed->id, 'REGISTER', $startMs);
+        $this->seedReachabilityProbe($observed->id, true, latencyMs: 40);
+
+        $single = [
+            $observed->id => $this->svc->forNode($observed),
+            $selfAttested->id => $this->svc->forNode($selfAttested),
+        ];
+        $batch = $this->svc->forNodes(collect([$observed, $selfAttested]));
+
+        foreach ([$observed->id, $selfAttested->id] as $nodeId) {
+            $this->assertSame($single[$nodeId]['score'], $batch[$nodeId]['score']);
+            $this->assertSame($single[$nodeId]['label'], $batch[$nodeId]['label']);
+            $this->assertSame($single[$nodeId]['confidence'], $batch[$nodeId]['confidence']);
+            $this->assertSame($single[$nodeId]['components'], $batch[$nodeId]['components']);
+        }
+    }
+
+    public function test_batch_health_preserves_missing_uptime_when_no_session_start_exists(): void
+    {
+        $node = $this->makeNode();
+        $this->seedLifecycleEvent($node->id, 'EVICT', (int) (microtime(true) * 1000) - 60_000);
+
+        $single = $this->svc->forNode($node);
+        $batch = $this->svc->forNodes(collect([$node]))[$node->id];
+
+        $this->assertNull($single['components']['uptime']);
+        $this->assertSame($single['components']['uptime'], $batch['components']['uptime']);
+        $this->assertSame($single['components']['stability'], $batch['components']['stability']);
+    }
+
     public function test_mesh_health_unavailable_when_no_active_nodes(): void
     {
         $mesh = $this->svc->meshHealth(new Collection);

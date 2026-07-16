@@ -54,6 +54,53 @@ class NodeHealthService
      */
     public function forNode(Node $node): array
     {
+        return $this->buildHealth(
+            $node,
+            $this->recentReachabilityProbe($node->id),
+            $this->recentLatencyProbe($node->id),
+            [
+                'uptime' => $this->uptime->uptimeScoreForNode($node->id),
+                'stability' => $this->uptime->stabilityScoreForNode($node->id),
+            ],
+        );
+    }
+
+    /**
+     * Batch health vectors for discovery and mesh summaries.  This preserves
+     * every per-node calculation while preventing N+1 probe/event queries as
+     * the public provider set grows.
+     *
+     * @param  Collection<int,Node>  $nodes
+     * @return array<string,array<string,mixed>> keyed by node ID
+     */
+    public function forNodes(Collection $nodes): array
+    {
+        $nodes = $nodes->values();
+        $ids = $nodes->pluck('id')->filter()->values()->all();
+        if ($ids === []) {
+            return [];
+        }
+
+        $reachByNode = $this->recentProbesByNode($ids, false);
+        $latencyByNode = $this->recentProbesByNode($ids, true);
+        $lifecycleByNode = $this->uptime->healthScoresForNodes($ids);
+
+        $health = [];
+        foreach ($nodes as $node) {
+            $health[$node->id] = $this->buildHealth(
+                $node,
+                $reachByNode[$node->id] ?? null,
+                $latencyByNode[$node->id] ?? null,
+                $lifecycleByNode[$node->id] ?? ['uptime' => null, 'stability' => null],
+            );
+        }
+
+        return $health;
+    }
+
+    /** @param array{uptime: ?float, stability: ?float} $lifecycle */
+    private function buildHealth(Node $node, ?TelemetryProbe $reachProbe, ?TelemetryProbe $latencyProbe, array $lifecycle): array
+    {
         if ($this->liveness($node) === 0.0) {
             return [
                 'score' => 0,
@@ -74,8 +121,8 @@ class NodeHealthService
             ];
         }
 
-        [$reach, $reachBasis] = $this->reachabilityScore($node);
-        [$lat, $latObserved, $latBasis] = $this->latencyScore($node);
+        [$reach, $reachBasis] = $this->reachabilityScore($node, $reachProbe);
+        [$lat, $latObserved, $latBasis] = $this->latencyScore($latencyProbe);
         $observed = $latObserved || $reachBasis === 'directory_observed';
 
         $score01 = self::W_REACHABILITY * $reach
@@ -102,8 +149,8 @@ class NodeHealthService
                 'latency' => round($lat, 3),
                 // Verified lifecycle evidence: null means no signed lifecycle
                 // evidence exists yet, which is more honest than a fabricated score.
-                'uptime' => $this->uptime->uptimeScoreForNode($node->id),
-                'stability' => $this->uptime->stabilityScoreForNode($node->id),
+                'uptime' => $lifecycle['uptime'],
+                'stability' => $lifecycle['stability'],
                 'freshness' => 1.0,
             ],
             'evaluated_at' => now()->toIso8601String(),
@@ -117,7 +164,7 @@ class NodeHealthService
      */
     public function meshHealth(Collection $activeNodes): array
     {
-        $healths = $activeNodes->map(fn (Node $n) => $this->forNode($n));
+        $healths = collect($this->forNodes($activeNodes))->values();
         $scores = $healths->pluck('score')
             ->reject(fn ($s) => $s === null)
             ->sort()
@@ -186,14 +233,8 @@ class NodeHealthService
      * A probe is "recent" when it is within the last 10 minutes — matches the
      * every-5-minute probe cadence with a 2× safety margin.
      */
-    private function reachabilityScore(Node $node): array
+    private function reachabilityScore(Node $node, ?TelemetryProbe $recentProbe): array
     {
-        $recentProbe = TelemetryProbe::where('node_id', $node->id)
-            ->where('probe_type', 'reachability')
-            ->where('probed_at', '>=', now()->subMinutes(10))
-            ->orderByDesc('probed_at')
-            ->first(['passed']);
-
         if ($recentProbe !== null) {
             return [$recentProbe->passed ? 1.0 : 0.0, 'directory_observed'];
         }
@@ -240,19 +281,50 @@ class NodeHealthService
      *
      * ≤ 50ms → 1.0, ≥ 500ms → 0.0; no operational data → neutral 0.5.
      */
-    private function latencyScore(Node $node): array
+    private function latencyScore(?TelemetryProbe $probe): array
     {
-        $probeLatency = TelemetryProbe::where('node_id', $node->id)
-            ->where('probe_type', 'reachability')
-            ->whereNotNull('latency_ms')
-            ->where('probed_at', '>=', now()->subMinutes(10))
-            ->orderByDesc('probed_at')
-            ->value('latency_ms');
+        $probeLatency = $probe?->latency_ms;
         if ($probeLatency !== null && (float) $probeLatency > 0) {
             return [$this->latencyCurve((float) $probeLatency), true, 'directory_probe'];
         }
 
         return [0.5, false, 'none'];
+    }
+
+    private function recentReachabilityProbe(string $nodeId): ?TelemetryProbe
+    {
+        return TelemetryProbe::where('node_id', $nodeId)
+            ->where('probe_type', 'reachability')
+            ->where('probed_at', '>=', now()->subMinutes(10))
+            ->orderByDesc('probed_at')
+            ->first(['node_id', 'passed', 'latency_ms', 'probed_at']);
+    }
+
+    private function recentLatencyProbe(string $nodeId): ?TelemetryProbe
+    {
+        return TelemetryProbe::where('node_id', $nodeId)
+            ->where('probe_type', 'reachability')
+            ->whereNotNull('latency_ms')
+            ->where('probed_at', '>=', now()->subMinutes(10))
+            ->orderByDesc('probed_at')
+            ->first(['node_id', 'passed', 'latency_ms', 'probed_at']);
+    }
+
+    /** @param array<int,string> $nodeIds @return array<string,TelemetryProbe> */
+    private function recentProbesByNode(array $nodeIds, bool $requireLatency): array
+    {
+        $query = TelemetryProbe::whereIn('node_id', $nodeIds)
+            ->where('probe_type', 'reachability')
+            ->where('probed_at', '>=', now()->subMinutes(10));
+        if ($requireLatency) {
+            $query->whereNotNull('latency_ms');
+        }
+
+        return $query->orderByDesc('probed_at')
+            ->get(['node_id', 'passed', 'latency_ms', 'probed_at'])
+            ->unique('node_id')
+            ->keyBy('node_id')
+            ->all();
     }
 
     private function latencyCurve(float $ms): float

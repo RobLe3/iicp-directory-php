@@ -58,6 +58,11 @@ class ReplicaEventApplier
         if (! $type || ! $eventId) {
             return $this->result(self::RESULT_REJECTED, 'missing event_type or event_id', $event);
         }
+        $serviceId = $event['service_id'] ?? null;
+        if ($serviceId !== null
+            && (! is_string($serviceId) || ! preg_match('/^[a-z0-9][a-z0-9._-]{0,63}$/', $serviceId))) {
+            return $this->result(self::RESULT_REJECTED, 'invalid service_id', ['event_id' => $eventId]);
+        }
 
         if ($verifyKey !== null) {
             $sig = $event['sig'] ?? null;
@@ -320,15 +325,22 @@ class ReplicaEventApplier
             return false;
         }
         $payloadHash = hash('sha256', $this->canonicalJson($event['payload'] ?? []));
-        $signingInput = implode(':', [
+        $fields = [
             (string) ($event['event_id'] ?? ''),
             (string) ($event['event_type'] ?? ''),
             (string) ($event['seq'] ?? ''),
             (string) ($event['ts_ms'] ?? ''),
             $payloadHash,
             (string) ($event['prev_hash'] ?? NodeEventLogger::GENESIS_ROOT),
-        ]);
-        $message = hash('sha256', $signingInput, true);
+        ];
+        $serviceId = $event['service_id'] ?? null;
+        if ($serviceId !== null) {
+            if (! is_string($serviceId) || ! preg_match('/^[a-z0-9][a-z0-9._-]{0,63}$/', $serviceId)) {
+                return false;
+            }
+            array_unshift($fields, 'iicp-event-v2', $serviceId);
+        }
+        $message = hash('sha256', implode(':', $fields), true);
         try {
             return sodium_crypto_sign_verify_detached(sodium_hex2bin($sigHex), $message, $pubKey);
         } catch (\SodiumException $e) {
