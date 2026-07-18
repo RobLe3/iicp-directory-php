@@ -182,14 +182,36 @@ class NodeRegistry
         // endpoint + heartbeat token already prove control) and is gated only
         // by E′ (token, adoption-gated Phase 4), not by an old-endpoint probe.
         $endpointChanged = ($data['endpoint'] ?? null) !== $node->endpoint;
-        if ($endpointChanged) {
-            $currentToken = $data['current_node_token'] ?? null;
-            $hasOwnership = $currentToken && password_verify($currentToken, $node->node_token_hash);
-            if (! $hasOwnership && $node->endpoint && $this->isEndpointAlive($node->endpoint)) {
-                throw new \InvalidArgumentException(
-                    'IICP-E050: endpoint change requires current_node_token or the previous endpoint to be unreachable'
-                );
-            }
+        $transportEndpointChanged = ($data['transport_endpoint'] ?? null) !== $node->transport_endpoint;
+        $storedRelayEndpoint = is_array($node->transport_metadata)
+            ? ($node->transport_metadata['relay_endpoint'] ?? null)
+            : null;
+        $incomingRelayEndpoint = array_key_exists('transport_metadata', $data) && is_array($data['transport_metadata'])
+            ? ($data['transport_metadata']['relay_endpoint'] ?? null)
+            : $storedRelayEndpoint;
+        $relayEndpointChanged = $incomingRelayEndpoint !== $storedRelayEndpoint;
+        $currentToken = $data['current_node_token'] ?? null;
+        $hasOwnership = $currentToken && password_verify($currentToken, $node->node_token_hash);
+        $strictSecured = (bool) config('app.iicp_e050_strict_secured', false);
+        $secured = filled($node->operator_pubkey) || filled($node->cx_public_key);
+        $oldEndpointAlive = false;
+        if ($endpointChanged && ! $hasOwnership && ! ($strictSecured && $secured) && $node->endpoint) {
+            $oldEndpointAlive = $this->isEndpointAlive($node->endpoint);
+        }
+        if (! E050OwnershipPolicy::allows(
+            $strictSecured,
+            $secured,
+            $endpointChanged,
+            $transportEndpointChanged,
+            $relayEndpointChanged,
+            (bool) $hasOwnership,
+            $oldEndpointAlive,
+        )) {
+            throw new \InvalidArgumentException(
+                $strictSecured && $secured
+                    ? 'IICP-E050: secured-node re-registration requires valid current_node_token'
+                    : 'IICP-E050: endpoint change requires current_node_token or the previous endpoint to be unreachable'
+            );
         }
 
         $node->update([
@@ -216,6 +238,9 @@ class NodeRegistry
             'public_reachable' => $publicReachable,
             'sdk_language' => $data['sdk_language'] ?? $node->sdk_language,
             'sdk_version' => $data['sdk_version'] ?? $node->sdk_version,
+            // REGISTER is authoritative for current support: omission withdraws
+            // an earlier pre-normative advertisement instead of leaving stale readiness.
+            'supported_receipt_profiles' => $data['supported_receipt_profiles'] ?? null,
             'auto_update_enabled' => $data['auto_update_enabled'] ?? $node->auto_update_enabled,
             'auto_update_interval_s' => $data['auto_update_interval_s'] ?? $node->auto_update_interval_s,
             'sdk_latest_seen' => $data['sdk_latest_seen'] ?? $node->sdk_latest_seen,
@@ -259,6 +284,7 @@ class NodeRegistry
             'public_reachable' => $publicReachable,
             'sdk_language' => $data['sdk_language'] ?? null,
             'sdk_version' => $data['sdk_version'] ?? null,
+            'supported_receipt_profiles' => $data['supported_receipt_profiles'] ?? null,
             'auto_update_enabled' => $data['auto_update_enabled'] ?? null,
             'auto_update_interval_s' => $data['auto_update_interval_s'] ?? null,
             'sdk_latest_seen' => $data['sdk_latest_seen'] ?? null,

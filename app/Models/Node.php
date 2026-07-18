@@ -87,6 +87,7 @@ class Node extends Model
         // SDK identification — free-form so future languages can self-tag
         'sdk_language',
         'sdk_version',
+        'supported_receipt_profiles',
         // #521 follow-up — optional updater evidence from provider heartbeats
         'auto_update_enabled',
         'auto_update_interval_s',
@@ -149,6 +150,7 @@ class Node extends Model
         'auto_update_enabled' => 'boolean',
         'auto_update_interval_s' => 'integer',
         'sdk_update_last_checked_at' => 'datetime',
+        'supported_receipt_profiles' => 'array',
         // RT-01b (#381) — per-node hourly reputation velocity ceiling
         'rep_hourly_gain' => 'float',
         'rep_hourly_window_start' => 'datetime',

@@ -128,6 +128,7 @@ class StatsController extends Controller
             // the capability-migration framework (iicp-dir §6.1) uses to decide when
             // an adoption-gated hard-enforcement stage is safe to start.
             'sdk_adoption' => $this->sdkAdoption(),
+            'receipt_profile_adoption' => $this->receiptProfileAdoption(),
             // Anonymous aggregate migration evidence. No caller, route, ticket,
             // endpoint or payload data is stored in these counters.
             'dispatch_discovery_adoption' => app(DispatchUsageCounter::class)->summary(),
@@ -167,6 +168,28 @@ class StatsController extends Controller
             'total_active' => $total,
             'by_language' => $byLanguage,
             'by_version' => $byVersion,
+        ];
+    }
+
+    /** Anonymous, heartbeating-node adoption counts for pre-normative receipts. */
+    private function receiptProfileAdoption(): array
+    {
+        $active = Node::where('available', true)
+            ->where('status', 'active')
+            ->where('last_seen', '>=', now()->subSeconds(90))
+            ->get(['supported_receipt_profiles']);
+
+        $ready = $active->filter(fn (Node $node) => in_array(
+            'consumer_cosignature_v1',
+            $node->supported_receipt_profiles ?? [],
+            true,
+        ))->count();
+
+        return [
+            'basis' => 'heartbeating_nodes',
+            'profile' => 'consumer_cosignature_v1',
+            'ready' => $ready,
+            'total_heartbeating' => $active->count(),
         ];
     }
 

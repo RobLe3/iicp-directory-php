@@ -112,6 +112,33 @@ class RegisterTest extends TestCase
             ->assertJsonPath('backend', 'meshllm');
     }
 
+    public function test_register_stores_only_supported_receipt_profile_and_projects_it_to_event(): void
+    {
+        $nodeId = (string) Str::uuid();
+        $payload = array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'supported_receipt_profiles' => ['consumer_cosignature_v1'],
+        ]);
+        $first = $this->postJson('/api/v1/register', $payload)->assertStatus(201);
+
+        $this->assertSame(['consumer_cosignature_v1'], Node::findOrFail($nodeId)->supported_receipt_profiles);
+        $event = NodeEvent::where('node_id', $nodeId)->where('event_type', 'REGISTER')->latest('seq')->firstOrFail();
+        $this->assertSame(['consumer_cosignature_v1'], $event->payload['supported_receipt_profiles']);
+
+        $withdrawn = array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'current_node_token' => $first->json('node_token'),
+        ]);
+        $this->postJson('/api/v1/register', $withdrawn)->assertStatus(201);
+        $this->assertNull(Node::findOrFail($nodeId)->supported_receipt_profiles);
+
+        $invalid = array_merge($this->validPayload, [
+            'endpoint' => 'https://another.example.com',
+            'supported_receipt_profiles' => ['unknown_v1'],
+        ]);
+        $this->postJson('/api/v1/register', $invalid)->assertStatus(422);
+    }
+
     public function test_reregister_replaces_stale_capability_models(): void
     {
         $nodeId = (string) Str::uuid();
@@ -1044,5 +1071,118 @@ class RegisterTest extends TestCase
         $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId, 'endpoint' => 'https://live.example.com']))->assertStatus(201);
         $this->postJson('/api/v1/register', array_merge($this->validPayload, ['node_id' => $nodeId, 'endpoint' => 'https://evil.example.com']))
             ->assertStatus(403)->assertJsonPath('error.code', 'IICP-E050');
+    }
+
+    public function test_strict_e050_secured_node_rejects_dead_endpoint_fallback(): void
+    {
+        config(['app.iicp_e050_strict_secured' => true]);
+        Http::fake([
+            'https://old.example.com/iicp/health' => Http::response('ok', 200),
+            'https://new.example.com/iicp/health' => Http::response('ok', 200),
+        ]);
+        $nodeId = (string) Str::uuid();
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'endpoint' => 'https://old.example.com',
+            'cx_public_key' => $this->cxKey,
+        ]))->assertStatus(201);
+
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'endpoint' => 'https://new.example.com',
+            'cx_public_key' => $this->cxKey,
+        ]))->assertStatus(403)->assertJsonPath('error.code', 'IICP-E050');
+    }
+
+    public function test_strict_e050_secured_node_rejects_secondary_route_change_without_token(): void
+    {
+        config(['app.iicp_e050_strict_secured' => true]);
+        $nodeId = (string) Str::uuid();
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'cx_public_key' => $this->cxKey,
+            'transport_endpoint' => 'iicp://node.example.com:9484',
+            'relay_endpoint' => 'https://relay-a.example.com',
+        ]))->assertStatus(201);
+
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'cx_public_key' => $this->cxKey,
+            'transport_endpoint' => 'iicp://node-b.example.com:9484',
+            'relay_endpoint' => 'https://relay-b.example.com',
+        ]))->assertStatus(403)->assertJsonPath('error.code', 'IICP-E050');
+    }
+
+    public function test_strict_e050_secured_node_accepts_routing_changes_with_token(): void
+    {
+        config(['app.iicp_e050_strict_secured' => true]);
+        $nodeId = (string) Str::uuid();
+        $token = $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'cx_public_key' => $this->cxKey,
+            'transport_endpoint' => 'iicp://node.example.com:9484',
+            'relay_endpoint' => 'https://relay-a.example.com',
+        ]))->assertStatus(201)->json('node_token');
+
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'cx_public_key' => $this->cxKey,
+            'transport_endpoint' => 'iicp://node-b.example.com:9484',
+            'relay_endpoint' => 'https://relay-b.example.com',
+            'current_node_token' => $token,
+        ]))->assertStatus(201);
+    }
+
+    public function test_strict_e050_secured_node_rejects_same_route_token_rotation_without_token(): void
+    {
+        config(['app.iicp_e050_strict_secured' => true]);
+        $nodeId = (string) Str::uuid();
+        $first = $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'cx_public_key' => $this->cxKey,
+        ]))->assertStatus(201);
+
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'cx_public_key' => $this->cxKey,
+        ]))->assertStatus(403)->assertJsonPath('error.code', 'IICP-E050');
+
+        // The rejected refresh must not rotate the stored credential.
+        $this->assertTrue(password_verify($first->json('node_token'), Node::findOrFail($nodeId)->node_token_hash));
+    }
+
+    public function test_strict_e050_secured_node_accepts_same_route_refresh_with_token(): void
+    {
+        config(['app.iicp_e050_strict_secured' => true]);
+        $nodeId = (string) Str::uuid();
+        $token = $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'cx_public_key' => $this->cxKey,
+        ]))->assertStatus(201)->json('node_token');
+
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'cx_public_key' => $this->cxKey,
+            'current_node_token' => $token,
+        ]))->assertStatus(201);
+    }
+
+    public function test_strict_e050_unsecured_node_keeps_soft_dead_endpoint_fallback(): void
+    {
+        config(['app.iicp_e050_strict_secured' => true]);
+        Http::fake([
+            'https://old.example.com/iicp/health' => Http::sequence()->push('ok', 200)->push('gone', 502),
+            'https://new.example.com/iicp/health' => Http::response('ok', 200),
+        ]);
+        $nodeId = (string) Str::uuid();
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'endpoint' => 'https://old.example.com',
+        ]))->assertStatus(201);
+
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'endpoint' => 'https://new.example.com',
+        ]))->assertStatus(201);
     }
 }

@@ -791,4 +791,27 @@ class StatsTest extends TestCase
         $this->assertIsArray($roundTripped['by_language']);
         $this->assertIsArray($roundTripped['by_version']);
     }
+
+    public function test_stats_includes_anonymous_receipt_profile_adoption(): void
+    {
+        foreach ([['consumer_cosignature_v1'], null] as $profiles) {
+            Node::create([
+                'id' => (string) Str::uuid(),
+                'endpoint' => 'https://node.example.com',
+                'region' => 'eu-central',
+                'node_token_hash' => password_hash('token', PASSWORD_BCRYPT),
+                'max_concurrent' => 4,
+                'tokens_per_min' => 10000,
+                'available' => true,
+                'status' => 'active',
+                'last_seen' => now(),
+                'supported_receipt_profiles' => $profiles,
+            ]);
+        }
+
+        $response = $this->getJson('/api/v1/stats')->assertOk();
+        $this->assertSame('consumer_cosignature_v1', $response->json('receipt_profile_adoption.profile'));
+        $this->assertSame(1, $response->json('receipt_profile_adoption.ready'));
+        $this->assertSame(2, $response->json('receipt_profile_adoption.total_heartbeating'));
+    }
 }

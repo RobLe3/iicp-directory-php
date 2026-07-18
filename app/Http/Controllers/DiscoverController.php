@@ -313,6 +313,7 @@ class DiscoverController extends Controller
             'privacy_routing_status' => $node['privacy_routing_status'] ?? null,
             'sdk_language' => $node['sdk_language'] ?? null,
             'sdk_version' => $node['sdk_version'] ?? null,
+            'consumer_cosignature_ready' => (bool) ($node['consumer_cosignature_ready'] ?? false),
             'sdk_status' => $node['sdk_status'] ?? null,
             'sdk_baseline_version' => $node['sdk_baseline_version'] ?? null,
             'upgrade_required' => $node['upgrade_required'] ?? null,

@@ -55,6 +55,19 @@ class DiscoverTest extends TestCase
         ]);
     }
 
+    public function test_discover_exposes_only_consumer_cosignature_readiness_boolean(): void
+    {
+        $this->createNode([
+            'supported_receipt_profiles' => ['consumer_cosignature_v1'],
+        ], [[
+            'intent' => 'urn:iicp:intent:llm:chat:v1', 'models' => ['m'], 'max_tokens' => 4096,
+        ]]);
+
+        $response = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')->assertOk();
+        $this->assertTrue($response->json('nodes.0.consumer_cosignature_ready'));
+        $this->assertStringNotContainsString('supported_receipt_profiles', $response->getContent());
+    }
+
     public function test_discover_includes_operator_display_name_for_bound_nodes_never_the_key(): void
     {
         // #463 — a delegation-verified node surfaces its operator's public display_name in discover;

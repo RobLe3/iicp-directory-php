@@ -220,6 +220,10 @@ class RegisterController extends Controller
             // C/C++/Java/Go SDKs can self-tag without a directory migration.
             'sdk_language' => ['sometimes', 'nullable', 'string', 'max:32', 'regex:/^[a-z0-9_-]+$/'],
             'sdk_version' => ['sometimes', 'nullable', 'string', 'max:32'],
+            // Pre-normative receipt-profile adoption signal. Stored for migration
+            // measurement only; it MUST NOT alter routing, trust, credits or settlement.
+            'supported_receipt_profiles' => ['sometimes', 'array', 'max:4'],
+            'supported_receipt_profiles.*' => ['string', 'in:consumer_cosignature_v1'],
             // Optional updater evidence. Advisory only: clients are untrusted, but
             // this lets the directory distinguish "old and self-updating" from
             // "old and stuck" without weakening SDK-baseline policy.
@@ -335,6 +339,7 @@ class RegisterController extends Controller
                 'pricing_credits_per_1000' => $node->pricing_credits_per_1000 ?? null,
             ],
             'policy_manifest' => $node->policy_manifest,
+            'supported_receipt_profiles' => $node->supported_receipt_profiles ?? [],
             // #438 — carry the node's capabilities so a replica can serve /v1/discover
             // for nodes registered AFTER its snapshot (the event log was otherwise
             // capability-less → post-bootstrap nodes invisible on replicas). Only the

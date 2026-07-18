@@ -2,6 +2,8 @@
 
 namespace Tests\Unit;
 
+use App\Services\JcsCanonicalizer;
+use InvalidArgumentException;
 use Tests\TestCase;
 
 class CipConsumerCosignatureFixtureTest extends TestCase
@@ -11,10 +13,7 @@ class CipConsumerCosignatureFixtureTest extends TestCase
     public function test_canonical_digest_and_dual_ed25519_signatures_are_portable(): void
     {
         $vector = $this->fixture()['canonical_vector'];
-        $canonical = json_encode(
-            $this->canonicalValue($vector['receipt']),
-            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
-        );
+        $canonical = app(JcsCanonicalizer::class)->canonicalize($vector['receipt']);
 
         $this->assertSame($vector['canonical_json_utf8'], $canonical);
         $this->assertSame($vector['canonical_json_sha256'], hash('sha256', $canonical));
@@ -60,6 +59,23 @@ class CipConsumerCosignatureFixtureTest extends TestCase
         }
     }
 
+    public function test_full_jcs_vectors_and_invalid_numbers_fail_closed(): void
+    {
+        $canonicalizer = app(JcsCanonicalizer::class);
+        foreach ($this->fixture()['jcs_vectors'] as $vector) {
+            $this->assertSame($vector['canonical_json_utf8'], $canonicalizer->canonicalize($vector['input']), $vector['name']);
+        }
+
+        foreach ([NAN, INF, 9007199254740992] as $invalid) {
+            try {
+                $canonicalizer->canonicalize(['invalid' => $invalid]);
+                $this->fail('Invalid JCS number was accepted');
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
     /** @return array<string,mixed> */
     private function fixture(): array
     {
@@ -71,24 +87,6 @@ class CipConsumerCosignatureFixtureTest extends TestCase
     private function decodeBase64Url(string $value): string
     {
         return base64_decode(strtr($value.str_repeat('=', (4 - strlen($value) % 4) % 4), '-_', '+/'), true);
-    }
-
-    private function canonicalValue(mixed $value): mixed
-    {
-        if (is_float($value) && $value == 0.0) {
-            return 0;
-        }
-        if (is_array($value) && array_is_list($value)) {
-            return array_map(fn ($item) => $this->canonicalValue($item), $value);
-        }
-        if (is_array($value)) {
-            ksort($value, SORT_STRING);
-            foreach ($value as $key => $item) {
-                $value[$key] = $this->canonicalValue($item);
-            }
-        }
-
-        return $value;
     }
 
     /** @param array<string,string> $value

@@ -123,7 +123,7 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
-    'iicp_version' => 'v1.10.74',
+    'iicp_version' => 'v1.10.75',
 
     // Secret-free digest of the tracked deployable directory source. Release
     // artifacts inject this value so equal version strings cannot hide a
@@ -134,6 +134,11 @@ return [
     // shared hosting does NOT — probing IPv6-literal node endpoints from there only
     // records false negatives, so iicp:probe-nodes skips them unless this is set.
     'iicp_probe_ipv6_egress' => (bool) env('IICP_PROBE_IPV6_EGRESS', false),
+
+    // #534 Phase-4 gate. False preserves the migration-safe E050 fallback.
+    // It must not be enabled until the sustained SDK-adoption gate passes and
+    // an explicitly authorized production cutover is canaried.
+    'iicp_e050_strict_secured' => (bool) env('IICP_E050_STRICT_SECURED', false),
 
     // #310 founder recognition (§5.4). The founder-era anchor: founder tier windows
     // (Genesis-50 ≤3mo / Founders-500 ≤6mo / Founders-1000 ≤12mo) are measured from this

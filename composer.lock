@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "1fa460d2186e8803fad3f4d0238039ea",
+    "content-hash": "7b9f9c526c04c4e26a8141ffd8164ade",
     "packages": [
         {
             "name": "brick/math",
@@ -6108,6 +6108,49 @@
                 "source": "https://github.com/tijsverkoyen/CssToInlineStyles/tree/v2.4.0"
             },
             "time": "2025-12-02T11:56:42+00:00"
+        },
+        {
+            "name": "truschery/kanon",
+            "version": "v1.0.1",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/truschery/kanon.git",
+                "reference": "abd8fbd3ca39a6a05a40e1d1e49cf868a887dc60"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/truschery/kanon/zipball/abd8fbd3ca39a6a05a40e1d1e49cf868a887dc60",
+                "reference": "abd8fbd3ca39a6a05a40e1d1e49cf868a887dc60",
+                "shasum": ""
+            },
+            "require": {
+                "php": "^8.2"
+            },
+            "require-dev": {
+                "pestphp/pest": "^3.0"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Truschery\\Kanon\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "truschery",
+                    "email": "truschery.work@gmail.com"
+                }
+            ],
+            "description": "PHP implementation of JSON Canonicalization Scheme (RFC 8785)",
+            "support": {
+                "issues": "https://github.com/truschery/kanon/issues",
+                "source": "https://github.com/truschery/kanon/tree/v1.0.1"
+            },
+            "time": "2026-03-12T10:22:47+00:00"
         },
         {
             "name": "vlucas/phpdotenv",

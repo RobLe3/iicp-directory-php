@@ -264,6 +264,13 @@ class NodeScorer
                 // C / C++ / Java / Go / WASM SDKs.
                 'sdk_language' => $node->sdk_language,
                 'sdk_version' => $node->sdk_version,
+                // Pre-normative migration evidence only. Never expose the raw
+                // mutable profile list or use it as a routing/trust signal.
+                'consumer_cosignature_ready' => in_array(
+                    'consumer_cosignature_v1',
+                    $node->supported_receipt_profiles ?? [],
+                    true,
+                ),
                 // IICP-CX S.16 §3.2 — canonical X25519 public key surfaced under the
                 // same name used by REGISTER/storage so CX-Consumers can encrypt task
                 // payloads E2E to the node (#360). null = node does not support CX and
