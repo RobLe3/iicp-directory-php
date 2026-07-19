@@ -7,6 +7,7 @@ namespace App\Http\Controllers;
 use App\Models\Operator;
 use App\Services\DataSubjectRightsService;
 use App\Services\OperatorIdentityLifecycleService;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -194,11 +195,21 @@ class OperatorSelfServiceController extends Controller
 
         $trackingId = (string) ($validated['tracking_id'] ?? 'dsr-'.Str::uuid());
         $selector = ['operator_pubkey' => $validated['operator_pub']];
-        $result = match ($action) {
-            'export' => $dsr->export($selector, $trackingId),
-            'restrict' => $dsr->restrict($selector, $trackingId),
-            'anonymize' => $dsr->anonymize($selector, $trackingId),
-        };
+        try {
+            $result = match ($action) {
+                'export' => $dsr->export($selector, $trackingId),
+                'restrict' => $dsr->restrict($selector, $trackingId),
+                'anonymize' => $dsr->anonymize($selector, $trackingId),
+            };
+        } catch (QueryException $e) {
+            // The unique tracking ID is the transaction-level replay guard.
+            // Preserve rollback and expose the same stable conflict as the Rust
+            // directory rather than leaking a storage-shaped HTTP 500.
+            if (($e->errorInfo[1] ?? null) === 1062 || str_contains(strtolower($e->getMessage()), 'unique')) {
+                return $this->error('IICP-E060', 'tracking_id has already been used', 409);
+            }
+            throw $e;
+        }
 
         return response()->json($result)->header('Cache-Control', 'no-store');
     }

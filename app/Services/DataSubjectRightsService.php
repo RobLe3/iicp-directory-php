@@ -291,7 +291,19 @@ class DataSubjectRightsService
             ->orderBy('node_id')
             ->limit(500)
             ->get($columns)
-            ->map(fn ($row) => (array) $row)
+            ->map(function ($row) {
+                $record = (array) $row;
+                foreach (['models', 'input_modalities'] as $jsonColumn) {
+                    if (isset($record[$jsonColumn]) && is_string($record[$jsonColumn])) {
+                        $decoded = json_decode($record[$jsonColumn], true);
+                        if (json_last_error() === JSON_ERROR_NONE) {
+                            $record[$jsonColumn] = $decoded;
+                        }
+                    }
+                }
+
+                return $record;
+            })
             ->all();
     }
 

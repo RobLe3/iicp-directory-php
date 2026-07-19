@@ -10,6 +10,7 @@ use App\Models\DataSubjectAction;
 use App\Models\Node;
 use App\Models\NodeEvent;
 use App\Models\Operator;
+use App\Services\DataSubjectRightsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -135,6 +136,26 @@ class DataSubjectRightsCommandTest extends TestCase
             'prev_hash' => hash('sha256', 'prev'),
             'signature' => 'sig',
         ]);
+    }
+
+    public function test_related_record_contract_is_complete_and_mirrored(): void
+    {
+        $seed = file_get_contents(base_path('parity/dsr-related-records-v1.json'));
+        $rust = file_get_contents(base_path('../iicp-directory-rs/parity/dsr-related-records-v1.json'));
+        $this->assertNotFalse($seed);
+        $this->assertSame($seed, $rust);
+
+        $contract = json_decode($seed, true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame('iicp.directory.dsr-related-records-parity.v1', $contract['schema']);
+        $this->assertSame(500, $contract['record_limit_per_family']);
+        $this->assertCount(11, $contract['record_families']);
+        $export = app(DataSubjectRightsService::class)->export(['node_id' => $this->nodeId]);
+        $this->assertEqualsCanonicalizing(array_keys($contract['record_families']), array_keys($export['records']));
+        foreach ($contract['record_families'] as $family => $fields) {
+            if ($export['records'][$family] !== []) {
+                $this->assertEqualsCanonicalizing($fields, array_keys($export['records'][$family][0]));
+            }
+        }
     }
 
     public function test_export_redacts_operator_key_and_secrets_but_lists_records(): void

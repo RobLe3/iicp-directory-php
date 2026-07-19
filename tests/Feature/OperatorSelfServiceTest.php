@@ -5,6 +5,7 @@
 namespace Tests\Feature;
 
 use App\Http\Controllers\OperatorSelfServiceController;
+use App\Models\DataSubjectAction;
 use App\Models\Node;
 use App\Models\Operator;
 use App\Models\PolicyKeyLifecycleRecord;
@@ -113,6 +114,28 @@ class OperatorSelfServiceTest extends TestCase
             ->assertOk()
             ->assertJsonPath('action', 'restrict');
         $this->assertSame(['dsr' => 'restricted'], Operator::where('operator_pubkey', $this->pub)->value('provenance'));
+    }
+
+    public function test_duplicate_dsr_tracking_id_is_a_conflict_and_rolls_back(): void
+    {
+        DataSubjectAction::create([
+            'tracking_id' => 'dsr-duplicate-test',
+            'action' => 'restrict',
+            'subject_hash' => hash('sha256', 'prior-subject'),
+            'selector' => ['node_id' => 'redacted'],
+        ]);
+
+        $body = $this->signedBody('dsr_restrict', [
+            'tracking_id' => 'dsr-duplicate-test',
+            'confirm' => true,
+        ]);
+        $this->postJson('/api/v1/operator/dsr/restrict', $body)
+            ->assertConflict()
+            ->assertJsonPath('error.code', 'IICP-E060');
+
+        $operator = Operator::where('operator_pubkey', $this->pub)->firstOrFail();
+        $this->assertSame(Operator::IDENTITY_ACTIVE, $operator->identity_status);
+        $this->assertNull($operator->provenance);
     }
 
     public function test_anonymize_removes_operator_identity(): void
