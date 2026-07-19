@@ -1130,7 +1130,7 @@
     },
     {
       "path": "tests/Feature/HeartbeatTest.php",
-      "sha256": "f8ad2db9679182964bcb5181748cc1ac772c9c8d8c75c6e248d5a0edfadadf87"
+      "sha256": "e9a990e1192c8fb4f6ed7a05a2bf54ca99db51ebf28ff798c5f7332e2c9f3f48"
     },
     {
       "path": "tests/Feature/IssueProbeTokenCommandTest.php",

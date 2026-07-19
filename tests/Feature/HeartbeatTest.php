@@ -79,6 +79,41 @@ class HeartbeatTest extends TestCase
         $this->assertNull($this->node->fresh()->liveness_verified_at);
     }
 
+    public function test_previous_challenge_response_cannot_be_replayed(): void
+    {
+        $key = bin2hex(random_bytes(32));
+        $this->node->update(['node_hmac_key' => $key]);
+
+        $firstChallenge = $this->withToken($this->plainToken)
+            ->postJson('/api/v1/heartbeat', ['node_id' => $this->node->id])
+            ->assertStatus(200)
+            ->json('challenge');
+        $firstAnswer = hash_hmac('sha256', $firstChallenge, $key);
+
+        $secondChallenge = $this->withToken($this->plainToken)
+            ->postJson('/api/v1/heartbeat', [
+                'node_id' => $this->node->id,
+                'challenge_response' => $firstAnswer,
+            ])
+            ->assertStatus(200)
+            ->json('challenge');
+        $this->assertNotSame($firstChallenge, $secondChallenge);
+        $this->assertNotNull($this->node->fresh()->liveness_verified_at);
+
+        // Remove the prior success marker so replay acceptance cannot hide behind it.
+        $this->node->update(['liveness_verified_at' => null]);
+        $thirdChallenge = $this->withToken($this->plainToken)
+            ->postJson('/api/v1/heartbeat', [
+                'node_id' => $this->node->id,
+                'challenge_response' => $firstAnswer,
+            ])
+            ->assertStatus(200)
+            ->json('challenge');
+
+        $this->assertNotSame($secondChallenge, $thirdChallenge);
+        $this->assertNull($this->node->fresh()->liveness_verified_at);
+    }
+
     public function test_heartbeat_updates_last_seen(): void
     {
         $before = $this->node->last_seen;
