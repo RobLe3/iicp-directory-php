@@ -446,6 +446,7 @@ class DataSubjectRightsService
     {
         foreach ($operatorPubkeys as $pubkey) {
             Operator::where('operator_pubkey', $pubkey)->first()?->update([
+                'identity_status' => 'restricted',
                 'display_name' => null,
                 'attested_created_at' => null,
                 'operator_integrity_hash' => null,

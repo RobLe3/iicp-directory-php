@@ -141,13 +141,22 @@ class DataSubjectRightsCommandTest extends TestCase
     public function test_related_record_contract_is_complete_and_mirrored(): void
     {
         $seed = file_get_contents(base_path('parity/dsr-related-records-v1.json'));
-        $rust = file_get_contents(base_path('../iicp-directory-rs/parity/dsr-related-records-v1.json'));
         $this->assertNotFalse($seed);
-        $this->assertSame($seed, $rust);
+
+        // The monorepo verifies the mirrored Rust fixture byte-for-byte.  The
+        // dedicated PHP repository intentionally has no Rust sibling, so its
+        // own contract validation must remain independently runnable there.
+        $rustPath = base_path('../iicp-directory-rs/parity/dsr-related-records-v1.json');
+        if (is_file($rustPath)) {
+            $rust = file_get_contents($rustPath);
+            $this->assertNotFalse($rust);
+            $this->assertSame($seed, $rust);
+        }
 
         $contract = json_decode($seed, true, 512, JSON_THROW_ON_ERROR);
         $this->assertSame('iicp.directory.dsr-related-records-parity.v1', $contract['schema']);
         $this->assertSame(500, $contract['record_limit_per_family']);
+        $this->assertSame('restricted', $contract['restricted_identity_status']);
         $this->assertCount(11, $contract['record_families']);
         $export = app(DataSubjectRightsService::class)->export(['node_id' => $this->nodeId]);
         $this->assertEqualsCanonicalizing(array_keys($contract['record_families']), array_keys($export['records']));
@@ -199,6 +208,7 @@ class DataSubjectRightsCommandTest extends TestCase
         $this->assertNull($node->transport_endpoint);
 
         $operator = Operator::where('operator_pubkey', $this->operatorPubkey)->firstOrFail();
+        $this->assertSame('restricted', $operator->identity_status);
         $this->assertNull($operator->display_name);
         $this->assertSame(['dsr' => 'restricted'], $operator->provenance);
 
@@ -232,6 +242,7 @@ class DataSubjectRightsCommandTest extends TestCase
         $this->assertSame(1, NodeEvent::where('node_id', $this->nodeId)->count(), 'signed event log is retained');
 
         $this->assertSame(0, Operator::where('operator_pubkey', $this->operatorPubkey)->count());
+        $this->assertSame(1, Operator::where('operator_pubkey', 'like', 'dsr_%')->where('identity_status', 'restricted')->count());
         $this->assertSame(1, DataSubjectAction::where('tracking_id', 'DSR-ANON-1')->count());
     }
 
