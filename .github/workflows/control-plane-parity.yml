@@ -9,7 +9,7 @@ jobs:
   php-control-plane:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
@@ -21,4 +21,4 @@ jobs:
       # before each mirror release. Cross-repository checkout is deliberately
       # avoided here because the default Actions token cannot read another
       # private repository without an additional secret.
-      - run: python3 scripts/check_seed_parity.py --manifest parity/seed-manifest-v1.10.75.1.json --php-dir .
+      - run: python3 scripts/check_seed_parity.py --manifest parity/seed-manifest-v1.10.76.1.json --php-dir .

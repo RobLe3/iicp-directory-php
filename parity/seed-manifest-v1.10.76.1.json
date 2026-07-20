@@ -1,5 +1,5 @@
 {
-  "manifest_version": "v1.10.75.1",
+  "manifest_version": "v1.10.76.1",
   "seed_runtime_version": "v1.10.76",
   "mirror_policy": "strict_source_mirror",
   "excluded_paths": [
@@ -26,7 +26,7 @@
     },
     {
       "path": ".github/workflows/control-plane-parity.yml",
-      "sha256": "d6c46133a97d61a333c8c43779953baa1e36192dffe247628bf50d3ac9df88d7"
+      "sha256": "2736eaabde8f822aa801c28073471d80895d91325865c9419dc8e853e7026faa"
     },
     {
       "path": ".gitignore",
