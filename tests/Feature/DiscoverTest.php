@@ -597,9 +597,16 @@ class DiscoverTest extends TestCase
     public function test_discover_exposes_safe_origin_cache_state(): void
     {
         $url = '/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&region=cache-contract-unique';
+        Cache::flush();
 
         $first = $this->getJson($url)->assertOk();
         $first->assertHeader('X-IICP-Discover-Origin-Cache', 'miss');
+        $missTiming = $first->headers->get('Server-Timing');
+        $this->assertMatchesRegularExpression('/iicp_cache;dur=\d+\.\d{3}/', $missTiming);
+        $this->assertMatchesRegularExpression('/iicp_db;dur=\d+\.\d{3}/', $missTiming);
+        $this->assertMatchesRegularExpression('/iicp_score;dur=\d+\.\d{3}/', $missTiming);
+        $this->assertMatchesRegularExpression('/iicp_operator;dur=\d+\.\d{3}/', $missTiming);
+        $this->assertStringNotContainsString('cache-contract-unique', $missTiming);
 
         // A cache header alone is not enough evidence: prove a warm origin
         // request does not re-enter the node scorer/health path. Database-cache
@@ -609,6 +616,10 @@ class DiscoverTest extends TestCase
         DB::enableQueryLog();
         $second = $this->getJson($url)->assertOk();
         $second->assertHeader('X-IICP-Discover-Origin-Cache', 'hit');
+        $hitTiming = $second->headers->get('Server-Timing');
+        $this->assertMatchesRegularExpression('/iicp_cache;dur=\d+\.\d{3}/', $hitTiming);
+        $this->assertStringNotContainsString('iicp_db', $hitTiming);
+        $this->assertStringNotContainsString('iicp_score', $hitTiming);
         $this->assertSame($first->json('nodes'), $second->json('nodes'));
 
         $servingStateSelects = collect(DB::getQueryLog())

@@ -1,6 +1,6 @@
 {
   "manifest_version": "v1.10.75.1",
-  "seed_runtime_version": "v1.10.75",
+  "seed_runtime_version": "v1.10.76",
   "mirror_policy": "strict_source_mirror",
   "excluded_paths": [
     ".env.testing",
@@ -518,7 +518,7 @@
     },
     {
       "path": "config/app.php",
-      "sha256": "cab62bcfc83d83d09191b9495c670f24ccdfbce2e37c1ac7a7a93a8493f8f4bd"
+      "sha256": "7bf3719dc8778b279b1a356c6e3141d3e152927be2846cec46c4f849cbd0fc6d"
     },
     {
       "path": "config/auth.php",
@@ -903,6 +903,10 @@
     {
       "path": "parity/contract-v1.10.75.json",
       "sha256": "180b69970f366b0e0c4f1f8e2e67c6b30636faf5764b3ce4626771570220e485"
+    },
+    {
+      "path": "parity/contract-v1.10.76.json",
+      "sha256": "195909e0cefd0307f28780921202a65e8d794e8861b851549423ddbc473dd8bf"
     },
     {
       "path": "parity/dispatch-route-ticket-v1.json",

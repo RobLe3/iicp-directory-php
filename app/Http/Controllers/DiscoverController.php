@@ -29,6 +29,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Node;
 use App\Models\Operator;
+use App\Services\DiscoveryPhaseTiming;
 use App\Services\DispatchUsageCounter;
 use App\Services\IntentPolicyGuard;
 use App\Services\NodeScorer;
@@ -72,8 +73,8 @@ class DiscoverController extends Controller
      * Compute a discover() result and stamp it with a query-time signal.
      *
      * The `query_ms` field is exposed so REACH probes can attribute latency to
-     * the directory vs the network. It is wall-clock from start of scoring to
-     * JSON encode; the upper bound is enforced by middleware timeouts.
+     * the directory vs the network. It covers cache lookup and result assembly;
+     * the Server-Timing phases provide the bounded, content-free breakdown.
      */
     public function __invoke(Request $request): JsonResponse
     {
@@ -159,6 +160,7 @@ class DiscoverController extends Controller
 
         $span = OtelTracer::startSpan($request, 'iicp.directory.discover');
         $start = microtime(true);
+        $timing = new DiscoveryPhaseTiming;
 
         // Cache discover results very briefly only. This endpoint carries the
         // currently usable serving endpoint; for Quick Tunnel / relay/browser
@@ -171,25 +173,28 @@ class DiscoverController extends Controller
         // response header with the body, so REACH treats it as current evidence
         // only when Cloudflare did not serve an edge HIT.
         $originCacheState = 'hit';
-        $nodes = Cache::remember($cacheKey, self::ORIGIN_CACHE_SECONDS, function () use ($validated, $includeInternal, &$originCacheState) {
-            $originCacheState = 'miss';
-            $scored = $this->scorer->discover(
-                intent: $validated['intent'],
-                qos: $validated['qos'] ?? null,
-                region: $validated['region'] ?? null,
-                model: $validated['model'] ?? null,
-                minReputation: isset($validated['min_reputation']) ? (float) $validated['min_reputation'] : 0.0,
-                limit: $validated['limit'] ?? self::DEFAULT_LIMIT,
-                maxMultiplier: isset($validated['max_multiplier']) ? (float) $validated['max_multiplier'] : null,
-                minQualityScore: isset($validated['min_quality_score']) ? (float) $validated['min_quality_score'] : null,
-                cipCapable: isset($validated['cip_capable']) ? (bool) $validated['cip_capable'] : null,
-                includeInternal: $includeInternal,
-                modality: $validated['modality'] ?? null,
-                relayCapable: isset($validated['relay_capable']) ? (bool) $validated['relay_capable'] : null,
-                scoreVersion: $validated['score_version'] ?? null,
-            );
+        $nodes = $timing->measure('cache', function () use ($cacheKey, $validated, $includeInternal, &$originCacheState, $timing) {
+            return Cache::remember($cacheKey, self::ORIGIN_CACHE_SECONDS, function () use ($validated, $includeInternal, &$originCacheState, $timing) {
+                $originCacheState = 'miss';
+                $scored = $this->scorer->discover(
+                    intent: $validated['intent'],
+                    qos: $validated['qos'] ?? null,
+                    region: $validated['region'] ?? null,
+                    model: $validated['model'] ?? null,
+                    minReputation: isset($validated['min_reputation']) ? (float) $validated['min_reputation'] : 0.0,
+                    limit: $validated['limit'] ?? self::DEFAULT_LIMIT,
+                    maxMultiplier: isset($validated['max_multiplier']) ? (float) $validated['max_multiplier'] : null,
+                    minQualityScore: isset($validated['min_quality_score']) ? (float) $validated['min_quality_score'] : null,
+                    cipCapable: isset($validated['cip_capable']) ? (bool) $validated['cip_capable'] : null,
+                    includeInternal: $includeInternal,
+                    modality: $validated['modality'] ?? null,
+                    relayCapable: isset($validated['relay_capable']) ? (bool) $validated['relay_capable'] : null,
+                    scoreVersion: $validated['score_version'] ?? null,
+                    timing: $timing,
+                );
 
-            return $this->withOperatorNames($scored);
+                return $timing->measure('operator_enrichment', fn () => $this->withOperatorNames($scored));
+            });
         });
 
         $queryMs = round((microtime(true) - $start) * 1000);
@@ -198,7 +203,6 @@ class DiscoverController extends Controller
             ->setAttribute('iicp.discover.query_ms', $queryMs)
             ->setAttribute('iicp.discover.origin_cache_state', $originCacheState)
             ->setAttribute('iicp.discover.cip_capable_filter', isset($validated['cip_capable']) ? (bool) $validated['cip_capable'] : false);
-        $span->end();
 
         // Cache-Control: discover is public+unauthenticated, but node serving
         // URLs are live routing state. Keep edge staleness below one heartbeat
@@ -215,7 +219,7 @@ class DiscoverController extends Controller
             ? DispatchUsageCounter::PUBLIC_VIEW
             : DispatchUsageCounter::LEGACY_DISPATCH);
 
-        return response()->json([
+        $response = $timing->measure('response_build', fn () => response()->json([
             'nodes' => $responseNodes,
             'count' => count($nodes),
             'relay_available' => $relayAvailable,
@@ -245,7 +249,14 @@ class DiscoverController extends Controller
                     'dispatch_route' => 'present',
                     'public_presentation' => 'use view=public or /api/v1/registry/*',
                 ],
-        ])->header(
+        ]));
+        $timing->set('total', (microtime(true) - $start) * 1000);
+        foreach ($timing->values() as $phase => $duration) {
+            $span->setAttribute('iicp.discover.phase_'.$phase.'_ms', $duration);
+        }
+        $span->end();
+
+        return $response->header(
             'Cache-Control',
             sprintf(
                 'public, max-age=%d, s-maxage=%d, stale-while-revalidate=%d',
@@ -256,6 +267,7 @@ class DiscoverController extends Controller
         )
             ->header('X-IICP-Discover-Data-Class', $dataClass)
             ->header('X-IICP-Discover-Origin-Cache', $originCacheState)
+            ->header('Server-Timing', $timing->serverTiming())
             ->header('Vary', 'Accept-Encoding');
     }
 

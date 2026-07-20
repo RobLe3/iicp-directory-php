@@ -122,6 +122,7 @@ class NodeScorer
         ?string $modality = null,
         ?bool $relayCapable = null,
         ?string $scoreVersion = null,
+        ?DiscoveryPhaseTiming $timing = null,
     ): array {
         $cutoff = Carbon::now()->subSeconds(self::EXPIRY_SECONDS);
 
@@ -163,7 +164,11 @@ class NodeScorer
                 'reputation',
             ]);
 
-        $nodes = $query->get();
+        $nodes = $timing !== null
+            ? $timing->measure('database_hydration', fn () => $query->get())
+            : $query->get();
+
+        $scoringStarted = hrtime(true);
 
         // #494: nodes reporting health_models=[] have no model capacity right now.
         // Exclude them from all discover results (null = not yet reported → keep; [] = explicitly empty → drop).
@@ -243,7 +248,7 @@ class NodeScorer
 
         $healthByNode = $this->health->forNodes($scored->pluck('node'));
 
-        return $scored->map(function (array $item) use ($model, $scoreVersion, $healthByNode): array {
+        $result = $scored->map(function (array $item) use ($model, $scoreVersion, $healthByNode): array {
             $node = $item['node'];
             $registeredModels = $this->registeredModels($node);
             $liveModels = $this->liveModels($node, $registeredModels);
@@ -359,6 +364,12 @@ class NodeScorer
 
             return $out;
         })->all();
+
+        if ($timing !== null) {
+            $timing->set('scoring', (hrtime(true) - $scoringStarted) / 1_000_000);
+        }
+
+        return $result;
     }
 
     /**
