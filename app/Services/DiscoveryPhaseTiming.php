@@ -22,8 +22,21 @@ final class DiscoveryPhaseTiming
         'total' => 'iicp_total',
     ];
 
+    /** @var array<string,string> */
+    private const PROFILE_METRICS = [
+        'eligibility' => 'iicp_eligibility',
+        'ranking' => 'iicp_ranking',
+        'health_enrichment' => 'iicp_health',
+        'projection' => 'iicp_projection',
+    ];
+
     /** @var array<string,float> */
     private array $durations = [];
+
+    /** @var array<string,float> */
+    private array $profileDurations = [];
+
+    public function __construct(private readonly bool $profileEnabled = false) {}
 
     /** @template T @param callable():T $operation @return T */
     public function measure(string $phase, callable $operation): mixed
@@ -47,6 +60,23 @@ final class DiscoveryPhaseTiming
         $this->durations[$phase] = round(max(0.0, $milliseconds), 3);
     }
 
+    /** @template T @param callable():T $operation @return T */
+    public function profile(string $phase, callable $operation): mixed
+    {
+        if (! array_key_exists($phase, self::PROFILE_METRICS)) {
+            throw new \InvalidArgumentException('Unknown discovery profile phase.');
+        }
+        if (! $this->profileEnabled) {
+            return $operation();
+        }
+        $started = hrtime(true);
+        try {
+            return $operation();
+        } finally {
+            $this->profileDurations[$phase] = round((hrtime(true) - $started) / 1_000_000, 3);
+        }
+    }
+
     /** @return array<string,float> */
     public function values(): array
     {
@@ -63,5 +93,24 @@ final class DiscoveryPhaseTiming
         }
 
         return implode(', ', $parts);
+    }
+
+    /**
+     * Opt-in, content-free detail for disposable diagnosis only.
+     * The regular Server-Timing contract remains unchanged.
+     */
+    public function profileHeader(): ?string
+    {
+        if (! $this->profileEnabled || $this->profileDurations === []) {
+            return null;
+        }
+        $parts = [];
+        foreach (self::PROFILE_METRICS as $phase => $metric) {
+            if (array_key_exists($phase, $this->profileDurations)) {
+                $parts[] = sprintf('%s;dur=%.3f', $metric, $this->profileDurations[$phase]);
+            }
+        }
+
+        return $parts === [] ? null : implode(', ', $parts);
     }
 }

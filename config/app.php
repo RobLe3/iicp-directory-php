@@ -140,6 +140,10 @@ return [
     // an explicitly authorized production cutover is canaried.
     'iicp_e050_strict_secured' => (bool) env('IICP_E050_STRICT_SECURED', false),
 
+    // Disabled by default. Only the loopback-only disposable discovery profiler
+    // enables fixed-name subphase timings; public timing remains aggregate-only.
+    'iicp_discovery_profile' => (bool) env('IICP_DISCOVERY_PROFILE', false),
+
     // #310 founder recognition (§5.4). The founder-era anchor: founder tier windows
     // (Genesis-50 ≤3mo / Founders-500 ≤6mo / Founders-1000 ≤12mo) are measured from this
     // instant. Maintainer-ratified 2026-06-06 = 1780704000000 (2026-06-06T00:00:00Z).

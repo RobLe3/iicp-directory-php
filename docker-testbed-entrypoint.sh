@@ -39,6 +39,7 @@ upsert IICP_REPLICA_ED25519_SECRET_KEY "${IICP_REPLICA_ED25519_SECRET_KEY}"
 upsert IICP_REPLICA_MODE "${IICP_REPLICA_MODE}"
 upsert IICP_SEED_URL "${IICP_SEED_URL}"
 upsert IICP_SKIP_LIVENESS_CHECK "${IICP_SKIP_LIVENESS_CHECK}"
+upsert IICP_DISCOVERY_PROFILE "${IICP_DISCOVERY_PROFILE}"
 
 # DID document contains '#key-1' which breaks the '#'-delimited sed in upsert().
 # Write it verbatim with single-quote quoting (JSON contains no single quotes).

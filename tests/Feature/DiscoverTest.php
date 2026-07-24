@@ -628,6 +628,23 @@ class DiscoverTest extends TestCase
         $this->assertCount(0, $servingStateSelects, 'warm discovery must not recompute node scoring or health evidence');
     }
 
+    public function test_discovery_profile_header_is_opt_in_and_content_free(): void
+    {
+        config()->set('app.iicp_discovery_profile', true);
+        Cache::flush();
+
+        $response = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1&region=profile-contract-unique');
+
+        $response->assertOk();
+        $profile = $response->headers->get('X-IICP-Discovery-Profile');
+        $this->assertMatchesRegularExpression('/iicp_eligibility;dur=\d+\.\d{3}/', $profile);
+        $this->assertMatchesRegularExpression('/iicp_ranking;dur=\d+\.\d{3}/', $profile);
+        $this->assertMatchesRegularExpression('/iicp_health;dur=\d+\.\d{3}/', $profile);
+        $this->assertMatchesRegularExpression('/iicp_projection;dur=\d+\.\d{3}/', $profile);
+        $this->assertStringNotContainsString('profile-contract-unique', $profile);
+        $this->assertStringNotContainsString('urn:', $profile);
+    }
+
     // --- ADR-021 model filter tests (CIP-D2 / #162) ---
 
     public function test_model_filter_returns_only_nodes_advertising_the_model(): void

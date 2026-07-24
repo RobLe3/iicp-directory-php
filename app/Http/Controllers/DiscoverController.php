@@ -160,7 +160,7 @@ class DiscoverController extends Controller
 
         $span = OtelTracer::startSpan($request, 'iicp.directory.discover');
         $start = microtime(true);
-        $timing = new DiscoveryPhaseTiming;
+        $timing = new DiscoveryPhaseTiming((bool) config('app.iicp_discovery_profile', false));
 
         // Cache discover results very briefly only. This endpoint carries the
         // currently usable serving endpoint; for Quick Tunnel / relay/browser
@@ -255,6 +255,11 @@ class DiscoverController extends Controller
             $span->setAttribute('iicp.discover.phase_'.$phase.'_ms', $duration);
         }
         $span->end();
+
+        $profileHeader = $timing->profileHeader();
+        if ($profileHeader !== null) {
+            $response->header('X-IICP-Discovery-Profile', $profileHeader);
+        }
 
         return $response->header(
             'Cache-Control',

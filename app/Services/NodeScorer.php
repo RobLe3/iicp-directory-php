@@ -170,85 +170,51 @@ class NodeScorer
 
         $scoringStarted = hrtime(true);
 
-        // #494: nodes reporting health_models=[] have no model capacity right now.
-        // Exclude them from all discover results (null = not yet reported → keep; [] = explicitly empty → drop).
-        $nodes = $nodes->filter(function (Node $node) {
-            $hm = $node->health_models;
-
-            return $hm === null || count($hm) > 0;
-        });
-
-        // #561: backend/model readiness is not the same as network reachability.
-        // Unknown or degraded/cold backends stay discoverable for compatibility
-        // and transparent UI display. Only an explicit `draining` report is an
-        // admission guard: the node is asking clients to avoid starting new work.
-        $nodes = self::filterBackendAdmission($nodes);
-
-        // When ?model= is specified, exclude nodes that don't advertise the model at all.
-        // Nodes with model_match=0.0 scored below MIN_SCORE anyway, but filtering early
-        // is cheaper and makes intent obvious in the code path.
-        // #494: also exclude nodes whose reported health_models (if not null) don't include
-        // the requested model — they registered it but the runtime can't serve it right now.
-        if ($model !== null) {
-            $nodes = $nodes->filter(function (Node $node) use ($model) {
-                // If the node has reported health_models (not null), trust them over static
-                // capabilities: the runtime is the authority on what it can serve right now.
-                if ($node->health_models !== null) {
-                    return in_array($model, $node->health_models, true);
-                }
-                // Backward compat: no health_models reported yet — fall back to static caps.
-                foreach ($node->capabilities as $cap) {
-                    if (in_array($model, $cap->models ?? [], true)) {
-                        return true;
+        $eligible = function () use ($nodes, $model, $qos, $minReputation) {
+            // #494: nodes reporting health_models=[] have no model capacity right now.
+            $nodes = $nodes->filter(fn (Node $node) => $node->health_models === null || count($node->health_models) > 0);
+            // #561: only explicit backend draining blocks new admission.
+            $nodes = self::filterBackendAdmission($nodes);
+            if ($model !== null) {
+                $nodes = $nodes->filter(function (Node $node) use ($model) {
+                    if ($node->health_models !== null) {
+                        return in_array($model, $node->health_models, true);
                     }
-                }
+                    foreach ($node->capabilities as $cap) {
+                        if (in_array($model, $cap->models ?? [], true)) {
+                            return true;
+                        }
+                    }
 
-                return false;
-            });
-        }
+                    return false;
+                });
+            }
+            if ($qos === 'realtime') {
+                $nodes = $nodes->filter(fn (Node $node) => $node->reputation !== null
+                    && $node->reputation->completed_tasks_count >= 1000 && $node->reputation->score >= 0.8);
+            } elseif ($qos === 'interactive') {
+                $nodes = $nodes->filter(fn (Node $node) => ($node->reputation?->completed_tasks_count ?? 0) >= 100);
+            }
+            if ($minReputation > 0.0) {
+                $nodes = $nodes->filter(fn (Node $node) => ($node->reputation?->score ?? 0.5) >= $minReputation);
+            }
 
-        // Probation tier filter — spec §11.3 / #117:
-        //   realtime  → requires completed_tasks_count ≥ 1000 AND reputation_score ≥ 0.8
-        //   interactive → requires completed_tasks_count ≥ 100
-        //   batch / best-effort → no probation filter
-        if ($qos === 'realtime') {
-            $nodes = $nodes->filter(function (Node $node) {
-                $rep = $node->reputation;
+            return $nodes;
+        };
+        $nodes = $timing !== null ? $timing->profile('eligibility', $eligible) : $eligible();
 
-                return $rep !== null
-                    && $rep->completed_tasks_count >= 1000
-                    && $rep->score >= 0.8;
-            });
-        } elseif ($qos === 'interactive') {
-            $nodes = $nodes->filter(
-                fn (Node $node) => ($node->reputation?->completed_tasks_count ?? 0) >= 100
-            );
-        }
-
-        // min_reputation filter: exclude nodes below the consumer-requested threshold.
-        // Default 0.0 = no filter (backward compatible).
-        if ($minReputation > 0.0) {
-            $nodes = $nodes->filter(
-                fn (Node $node) => ($node->reputation?->score ?? 0.5) >= $minReputation
-            );
-        }
-
-        $scored = $nodes
+        $rank = fn () => $nodes
             ->map(fn (Node $node) => $this->scoreNode($node, $region, $model))
             ->filter(fn (array $item) => $item['score'] >= self::MIN_SCORE)
-            ->when($maxMultiplier !== null, fn ($c) => $c->filter(
-                fn (array $item) => $item['node']->credit_cost_multiplier <= $maxMultiplier
-            ))
-            ->when($minQualityScore !== null, fn ($c) => $c->filter(
-                fn (array $item) => $item['score'] >= $minQualityScore
-            ))
-            ->sortByDesc('score')
-            ->take($limit)
-            ->values();
+            ->when($maxMultiplier !== null, fn ($c) => $c->filter(fn (array $item) => $item['node']->credit_cost_multiplier <= $maxMultiplier))
+            ->when($minQualityScore !== null, fn ($c) => $c->filter(fn (array $item) => $item['score'] >= $minQualityScore))
+            ->sortByDesc('score')->take($limit)->values();
+        $scored = $timing !== null ? $timing->profile('ranking', $rank) : $rank();
 
-        $healthByNode = $this->health->forNodes($scored->pluck('node'));
+        $enrichHealth = fn () => $this->health->forNodes($scored->pluck('node'));
+        $healthByNode = $timing !== null ? $timing->profile('health_enrichment', $enrichHealth) : $enrichHealth();
 
-        $result = $scored->map(function (array $item) use ($model, $scoreVersion, $healthByNode): array {
+        $project = fn () => $scored->map(function (array $item) use ($model, $scoreVersion, $healthByNode): array {
             $node = $item['node'];
             $registeredModels = $this->registeredModels($node);
             $liveModels = $this->liveModels($node, $registeredModels);
@@ -364,6 +330,7 @@ class NodeScorer
 
             return $out;
         })->all();
+        $result = $timing !== null ? $timing->profile('projection', $project) : $project();
 
         if ($timing !== null) {
             $timing->set('scoring', (hrtime(true) - $scoringStarted) / 1_000_000);

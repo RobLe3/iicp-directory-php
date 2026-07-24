@@ -170,7 +170,7 @@
     },
     {
       "path": "app/Http/Controllers/DiscoverController.php",
-      "sha256": "ee114dc20ed966eeb57376ee426e4a887a1492a6f2d41ec33ac61a7642cc32a1"
+      "sha256": "a85c403eb646434e40fd8437570ecef64d58f9f0a04024cefd5ab6976adb19e7"
     },
     {
       "path": "app/Http/Controllers/DispatchRouteTicketController.php",
@@ -374,7 +374,7 @@
     },
     {
       "path": "app/Services/DiscoveryPhaseTiming.php",
-      "sha256": "28f6c4896474e6dc38f08fa1a428b7456ef36dcae0c62a39a8e4cf91ceeead6c"
+      "sha256": "181933d71e0f5a356805c932d3d90d067d874f53436d1616ca5ee46ede177351"
     },
     {
       "path": "app/Services/DispatchRouteSelectionService.php",
@@ -450,7 +450,7 @@
     },
     {
       "path": "app/Services/NodeScorer.php",
-      "sha256": "0da1efeab36f7510b289ca31a6943d347b27ce3f4b8bb09dd224123d55e4751b"
+      "sha256": "620b5b8b8ffb007c7de1ae0f21b6d0c0c62638473beb4d2eab35b9808b1adcbf"
     },
     {
       "path": "app/Services/OperatorDelegationVerifier.php",
@@ -518,7 +518,7 @@
     },
     {
       "path": "config/app.php",
-      "sha256": "7bf3719dc8778b279b1a356c6e3141d3e152927be2846cec46c4f849cbd0fc6d"
+      "sha256": "294c17b295d32e163678ef93b4ac3ce5a2ded5173e028ebaa466711c0c34ac85"
     },
     {
       "path": "config/auth.php",
@@ -866,7 +866,7 @@
     },
     {
       "path": "docker-testbed-entrypoint.sh",
-      "sha256": "96bc427a2359df1797ac462505040666f33baf3658b54aef95457f3e94449bf8"
+      "sha256": "74b80890e58e0917e9ab608e45a5e05e70871d15e497ee30494e362590ae22eb"
     },
     {
       "path": "openapi.yaml",
@@ -1086,7 +1086,7 @@
     },
     {
       "path": "tests/Feature/DiscoverTest.php",
-      "sha256": "8499d1547549d66d5a8c661f95314ef0c37ad3334c92462e67c3eb79b4ee9be4"
+      "sha256": "95a8894b3580fd259faa14f67e7ab0cc82a5d723cbc908d4fd8bf32ef0790893"
     },
     {
       "path": "tests/Feature/DispatchRouteTicketTest.php",
@@ -1342,7 +1342,7 @@
     },
     {
       "path": "tests/Unit/DiscoveryPhaseTimingTest.php",
-      "sha256": "ec16eaa942ab4787a9cfcaf5bd9bdf65b19e25f2250419c0df53dbd14323e72c"
+      "sha256": "e5c590d0e505e350728f25f350858379d736948680025288ed4ec9dbe686b23d"
     },
     {
       "path": "tests/Unit/E050OwnershipPolicyTest.php",

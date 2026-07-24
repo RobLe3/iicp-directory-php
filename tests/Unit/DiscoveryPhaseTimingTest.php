@@ -41,4 +41,27 @@ class DiscoveryPhaseTimingTest extends TestCase
             $this->assertFalse($executed);
         }
     }
+
+    public function test_profile_header_is_disabled_by_default(): void
+    {
+        $timing = new DiscoveryPhaseTiming;
+        $this->assertSame('result', $timing->profile('eligibility', fn () => 'result'));
+
+        $this->assertNull($timing->profileHeader());
+    }
+
+    public function test_enabled_profile_header_contains_only_fixed_numeric_subphases(): void
+    {
+        $timing = new DiscoveryPhaseTiming(true);
+        foreach (['eligibility', 'ranking', 'health_enrichment', 'projection'] as $phase) {
+            $timing->profile($phase, fn () => null);
+        }
+
+        $header = $timing->profileHeader();
+        $this->assertMatchesRegularExpression(
+            '/^iicp_eligibility;dur=\d+\.\d{3}, iicp_ranking;dur=\d+\.\d{3}, iicp_health;dur=\d+\.\d{3}, iicp_projection;dur=\d+\.\d{3}$/',
+            $header
+        );
+        $this->assertStringNotContainsString('node', $header);
+    }
 }
