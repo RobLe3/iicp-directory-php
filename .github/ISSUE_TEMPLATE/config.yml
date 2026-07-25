@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/RobLe3/iicp-directory-php/security/advisories/new
+    about: Report vulnerabilities privately. Do not disclose them in a public issue.
+  - name: Protocol or cross-component proposal
+    url: https://github.com/RobLe3/IICP/issues/new
+    about: Propose normative or ecosystem-wide changes in the public protocol repository.

@@ -26,11 +26,11 @@
     },
     {
       "path": ".github/workflows/control-plane-parity.yml",
-      "sha256": "2736eaabde8f822aa801c28073471d80895d91325865c9419dc8e853e7026faa"
+      "sha256": "c78e24ec911eb12df232d93de5f50c724086796a08a93903d833b11ab2c6ddba"
     },
     {
       "path": ".gitignore",
-      "sha256": "495b10ae5aee366d995bf9a18c2342d0c432e8ba4a5c689855db8917edacd71a"
+      "sha256": "37379b7c823915d31ecdf817ec55cbf687358deee762cb0f36832e8bed0f24a7"
     },
     {
       "path": ".npmrc",
@@ -514,7 +514,7 @@
     },
     {
       "path": "composer.lock",
-      "sha256": "89d2383e5b9c2c6cf5959bc6a937d0eb466eaaed1cbe4ab6680a725b9f951a27"
+      "sha256": "970cbab9c70895d8b312675b29e32c360bc95a26d21cb36aadd4120d0002d540"
     },
     {
       "path": "config/app.php",

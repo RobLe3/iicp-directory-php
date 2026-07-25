@@ -1,0 +1,36 @@
+name: Bug report
+description: Report reproducible PHP directory behavior.
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, production data, private endpoints, operator records, task payloads or unmitigated vulnerabilities.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed behavior
+      description: Describe the behavior using a local or disposable environment.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide minimal content-free steps or a failing test.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification performed
+      description: List tests, PHP version and database used.
+    validations:
+      required: true

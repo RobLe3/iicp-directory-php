@@ -1,7 +1,8 @@
 # Security policy
 
-Do not report vulnerabilities in public issues. Use GitHub private
-vulnerability reporting when available or contact community@iicp.network.
+Do not report vulnerabilities in public issues. Use
+[GitHub private vulnerability reporting](https://github.com/RobLe3/iicp-directory-php/security/advisories/new)
+or contact community@iicp.network.
 
 Never submit credentials, production database contents, operator records,
 private endpoints, or task payloads. The directory is a control plane and must

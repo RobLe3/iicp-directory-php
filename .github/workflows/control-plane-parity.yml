@@ -5,17 +5,28 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: control-plane-parity-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   php-control-plane:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: shivammathur/setup-php@b604ade2a87db23f8871b7182e69ec5e75effb45 # v2
         with:
           php-version: '8.3'
           extensions: mbstring, pdo_mysql, sqlite3
       - run: mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
+      # The exact truschery/kanon compatibility pin is intentional; Composer
+      # reports it as a publishing warning, so validation is not run --strict.
+      - run: composer validate --no-interaction
       - run: composer install --no-interaction --prefer-dist
+      - run: composer audit --locked --no-interaction
       - run: php artisan test --compact
       # The pinned manifest is generated and verified from the seed workspace
       # before each mirror release. Cross-repository checkout is deliberately
