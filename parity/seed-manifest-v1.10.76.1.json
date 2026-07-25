@@ -4,6 +4,7 @@
   "mirror_policy": "strict_source_mirror",
   "excluded_paths": [
     ".env.testing",
+    ".github/",
     "README.md",
     "parity/seed-manifest-*.json"
   ],
@@ -23,10 +24,6 @@
     {
       "path": ".gitattributes",
       "sha256": "855e9681c91a312f0a7680f6ddfe6d87890e638f3cf22f726bab837d20dced58"
-    },
-    {
-      "path": ".github/workflows/control-plane-parity.yml",
-      "sha256": "c78e24ec911eb12df232d93de5f50c724086796a08a93903d833b11ab2c6ddba"
     },
     {
       "path": ".gitignore",
