@@ -1,0 +1,9 @@
+# syntax=docker/dockerfile:1.7
+
+FROM nginxinc/nginx-unprivileged:1.28-alpine@sha256:7377697a821c131a924a7105fafbe7414db4e9fcc77a6f08f776f33f141ec3f8
+COPY --chown=101:101 operator/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --chown=101:101 public /app/public
+USER 101:101
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:8080/iicp/health || exit 1
