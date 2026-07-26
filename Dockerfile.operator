@@ -2,7 +2,8 @@
 
 FROM composer:2.8@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd62ac72a02577c AS vendor
 WORKDIR /source
-COPY . .
+COPY composer.json composer.lock ./
+COPY app ./app
 RUN composer install \
     --no-dev \
     --no-interaction \
@@ -13,13 +14,20 @@ RUN composer install \
 
 FROM php:8.3-fpm-alpine@sha256:9fcec48321d890240d700ccdc2b475420c87d398826e68c3d8830b8fca663e5c AS runtime
 
-RUN apk add --no-cache fcgi \
+RUN apk add --no-cache fcgi c-ares=1.34.8-r0 \
     && docker-php-ext-install -j"$(getconf _NPROCESSORS_ONLN)" opcache pcntl pdo_mysql \
     && addgroup -g 10001 -S iicp \
     && adduser -u 10001 -S -D -H -G iicp iicp
 
 WORKDIR /app
-COPY --chown=root:root . .
+COPY --chown=root:root app /app/app
+COPY --chown=root:root bootstrap /app/bootstrap
+COPY --chown=root:root config /app/config
+COPY --chown=root:root database /app/database
+COPY --chown=root:root public /app/public
+COPY --chown=root:root resources /app/resources
+COPY --chown=root:root routes /app/routes
+COPY --chown=root:root artisan composer.json composer.lock VERSION /app/
 COPY --from=vendor --chown=root:root /source/vendor /app/vendor
 COPY --chown=root:root operator/php-fpm.conf /usr/local/etc/php-fpm.d/zz-iicp.conf
 COPY --chown=root:root operator/php.ini /usr/local/etc/php/conf.d/zz-iicp.ini

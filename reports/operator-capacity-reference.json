@@ -1,0 +1,45 @@
+{
+  "content_free": true,
+  "deployment_authorized": false,
+  "measured_at": "2026-07-26T13:08:39.125256Z",
+  "not_an_sla": true,
+  "production_database_used": false,
+  "production_endpoint_used": false,
+  "schema": "iicp.directory.operator-capacity.v1",
+  "synthetic_nodes": 100,
+  "workloads": [
+    {
+      "concurrency": 1,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 4.963,
+        "p95": 6.326,
+        "p99": 78.356
+      },
+      "requests": 40,
+      "throughput_requests_per_second": 143.468
+    },
+    {
+      "concurrency": 8,
+      "errors": 20,
+      "latency_ms": {
+        "p50": 11.426,
+        "p95": 18.099,
+        "p99": 18.655
+      },
+      "requests": 40,
+      "throughput_requests_per_second": 554.229
+    },
+    {
+      "concurrency": 32,
+      "errors": 40,
+      "latency_ms": {
+        "p50": 67.364,
+        "p95": 84.777,
+        "p99": 84.998
+      },
+      "requests": 40,
+      "throughput_requests_per_second": 395.425
+    }
+  ]
+}

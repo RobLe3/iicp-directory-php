@@ -7,7 +7,7 @@ does not authorize production use.
 ## Supported baseline
 
 - PHP 8.3 operator image built from `Dockerfile.operator`;
-- unprivileged nginx 1.28 edge image;
+- unprivileged nginx 1.29 edge image;
 - MariaDB 11.4;
 - one PHP-FPM application container and one scheduler container;
 - database-backed cache/session state and synchronous queues;
@@ -16,6 +16,12 @@ does not authorize production use.
 Default resource guidance is 1 CPU/512 MiB for PHP-FPM, 1 CPU/1 GiB for
 MariaDB, and 0.5 CPU/128 MiB for nginx. These are starting values, not an SLA.
 Measure the reference workload before raising concurrency.
+
+CI builds both images twice and compares content manifests covering application
+files, installed Alpine packages, and runtime versions. It also fails on
+fixable HIGH/CRITICAL Trivy findings in the two hardened Dockerfiles or images.
+This proves clean-checkout content reproducibility for the resolved pinned
+inputs; it does not claim byte-identical OCI metadata across builders.
 
 ## Secret preparation and rotation
 
@@ -60,6 +66,9 @@ backup/restore commands, never the PHP or nginx services.
    ingress before allowing registrations.
 
 The application and scheduler never apply migrations implicitly.
+
+Run `scripts/run_operator_capacity_reference.sh` to create the content-free
+synthetic profile described in `reports/operator-capacity-reference.md`.
 
 ## Upgrade
 

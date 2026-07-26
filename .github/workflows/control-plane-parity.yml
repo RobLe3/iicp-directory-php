@@ -84,7 +84,48 @@ jobs:
         run: |
           docker build -f Dockerfile.operator -t iicp-directory-operator:test .
           docker build -f Dockerfile.operator-nginx -t iicp-directory-operator-nginx:test .
+      - name: Scan application image configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: Dockerfile.operator
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+      - name: Scan proxy image configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: Dockerfile.operator-nginx
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+      - name: Scan application image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: iicp-directory-operator:test
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Scan proxy image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: iicp-directory-operator-nginx:test
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
       - name: Verify non-root, read-only and fail-closed runtime
         run: ./scripts/test_operator_image.sh
+      - name: Verify clean-build application/runtime reproducibility
+        run: |
+          docker build --no-cache -f Dockerfile.operator -t iicp-directory-operator:repro .
+          docker build --no-cache -f Dockerfile.operator-nginx -t iicp-directory-operator-nginx:repro .
+          ./scripts/test_operator_reproducibility.sh \
+            iicp-directory-operator:test iicp-directory-operator:repro
+          ./scripts/test_operator_reproducibility.sh \
+            iicp-directory-operator-nginx:test iicp-directory-operator-nginx:repro
       - name: Rehearse disposable operator lifecycle
         run: IICP_IMAGE_TAG=test ./scripts/rehearse_operator_stack.sh --skip-build
+      - name: Smoke-test synthetic capacity harness
+        run: |
+          IICP_IMAGE_TAG=test IICP_CAPACITY_SAMPLES=4 IICP_CAPACITY_CONCURRENCY=1,4 \
+            IICP_CAPACITY_FAIL_ON_ERRORS=1 \
+            ./scripts/run_operator_capacity_reference.sh "$RUNNER_TEMP/operator-capacity-smoke.json"
