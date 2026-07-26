@@ -10,6 +10,8 @@ on:
       - 'composer.json'
       - 'composer.lock'
       - '.github/workflows/mutation-testing.yml'
+      - 'app/Services/NodeReadinessPolicy.php'
+      - 'tests/Unit/NodeReadinessPolicyCharacterizationTest.php'
 
 permissions:
   contents: read
@@ -74,6 +76,12 @@ jobs:
             paths: >-
               app/Services/AvailabilityWindowPolicy.php
               tests/Unit/NodeScorerAvailabilityWindowCharacterizationTest.php
+          - scope: node-readiness
+            min_msi: 60
+            max_timeouts: 0
+            paths: >-
+              app/Services/NodeReadinessPolicy.php
+              tests/Unit/NodeReadinessPolicyCharacterizationTest.php
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2

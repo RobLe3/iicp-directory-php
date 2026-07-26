@@ -7,6 +7,7 @@ use App\Models\Node;
 use App\Services\AvailabilityWindowPolicy;
 use App\Services\CapabilityEvidencePolicy;
 use App\Services\NodeHealthService;
+use App\Services\NodeReadinessPolicy;
 use App\Services\NodeScorer;
 use Illuminate\Database\Eloquent\Collection;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -26,6 +27,7 @@ class NodeScorerCapabilityEvidenceCharacterizationTest extends TestCase
             $this->createMock(NodeHealthService::class),
             $policy,
             new AvailabilityWindowPolicy,
+            new NodeReadinessPolicy,
         );
 
         $summary = $scorer->capabilitySummary($node);

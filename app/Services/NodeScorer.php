@@ -34,7 +34,7 @@ class NodeScorer
     private const EXPIRY_SECONDS = 90;
 
     /** Current SDK baseline for strict demotion of downlevel/unkeyed nodes. */
-    public const SDK_BASELINE_VERSION = '0.7.68';
+    public const SDK_BASELINE_VERSION = NodeReadinessPolicy::SDK_BASELINE_VERSION;
 
     private const BACKEND_STATES = ['ok', 'degraded', 'draining'];
 
@@ -110,6 +110,7 @@ class NodeScorer
         private NodeHealthService $health,
         private CapabilityEvidencePolicy $capabilityEvidence,
         private AvailabilityWindowPolicy $availabilityWindows,
+        private NodeReadinessPolicy $readiness,
     ) {}
 
     public function discover(
@@ -490,7 +491,7 @@ class NodeScorer
 
     public static function complianceSignals(Node $node): array
     {
-        $sdkStatus = self::sdkStatus($node->sdk_version);
+        $sdkStatus = (new NodeReadinessPolicy)->sdkStatus($node->sdk_version);
         $keyReady = $node->cx_public_key !== null;
 
         return [
@@ -1095,59 +1096,9 @@ class NodeScorer
             );
     }
 
-    private static function readinessMultiplier(Node $node): float
-    {
-        $multiplier = 1.0;
-        if (self::sdkStatus($node->sdk_version) !== 'current') {
-            $multiplier -= 0.08;
-        }
-        if ($node->cx_public_key === null) {
-            $multiplier -= 0.07;
-        }
-
-        return max(0.75, $multiplier);
-    }
-
     public static function sdkStatus(?string $version): string
     {
-        if ($version === null || trim($version) === '') {
-            return 'unknown';
-        }
-
-        return self::versionAtLeast($version, self::SDK_BASELINE_VERSION) ? 'current' : 'downlevel';
-    }
-
-    private static function versionAtLeast(string $version, string $baseline): bool
-    {
-        $a = self::versionParts($version);
-        $b = self::versionParts($baseline);
-        $n = max(count($a), count($b));
-        for ($i = 0; $i < $n; $i++) {
-            $x = $a[$i] ?? 0;
-            $y = $b[$i] ?? 0;
-            if ($x > $y) {
-                return true;
-            }
-            if ($x < $y) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /** @return list<int> */
-    private static function versionParts(string $version): array
-    {
-        $out = [];
-        foreach (explode('.', ltrim(trim($version), 'vV')) as $part) {
-            if (! preg_match('/^\d+/', $part, $m)) {
-                break;
-            }
-            $out[] = (int) $m[0];
-        }
-
-        return $out;
+        return (new NodeReadinessPolicy)->sdkStatus($version);
     }
 
     private static function directoryObservedReachable(?array $health): ?bool
@@ -1281,7 +1232,7 @@ class NodeScorer
         // Strict demotion, not spec watering-down: downlevel or non-key-ready
         // nodes remain visible for transition, but do not rank as peers with
         // current SDK + CX evidence.
-        $score *= self::readinessMultiplier($node);
+        $score *= $this->readiness->multiplier($node);
 
         return ['node' => $node, 'score' => $score];
     }
@@ -1312,7 +1263,7 @@ class NodeScorer
         $price = $node->pricing_credits_per_1000 !== null
             ? max(0.0, min(1.0, 1.0 - ($node->pricing_credits_per_1000 / 10.0)))
             : 0.5;
-        $policy = self::readinessMultiplier($node);
+        $policy = $this->readiness->multiplier($node);
 
         $score = 0.25 * $healthScore
             + 0.20 * $capabilityFit
