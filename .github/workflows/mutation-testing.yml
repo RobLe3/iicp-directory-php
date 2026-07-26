@@ -1,0 +1,78 @@
+name: Targeted mutation testing
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '27 3 * * 1'
+  pull_request:
+    paths:
+      - 'infection.json5'
+      - 'composer.json'
+      - 'composer.lock'
+      - '.github/workflows/mutation-testing.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-testing-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  targeted-mutation:
+    if: github.event_name != 'pull_request' || github.head_ref == 'quality/coverage-mutation-ratchets'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scope: jwt-authorization
+            paths: >-
+              app/Services/JwtService.php
+              app/Services/ConsumerTokenService.php
+              tests/Unit/JwtServiceTest.php
+              tests/Unit/ConsumerTokenServiceTest.php
+              tests/Feature/ConsumerTokenTest.php
+              tests/Feature/ProbeTokenAuthTest.php
+              tests/Feature/ReplicaTokenRoundTripTest.php
+          - scope: signed-events
+            paths: >-
+              app/Services/NodeEventLogger.php
+              tests/Unit/NodeEventLoggerTest.php
+          - scope: credits
+            paths: >-
+              app/Services/CreditService.php
+              tests/Unit/CreditServiceRetryTest.php
+              tests/Feature/CreditBalancePrecisionTest.php
+              tests/Feature/CreditHarvestRegressionTest.php
+              tests/Feature/CreditSummaryTest.php
+              tests/Feature/CreditTtlExpiryTest.php
+              tests/Feature/CreditsAwardTest.php
+              tests/Feature/CreditsReadTest.php
+              tests/Feature/EconomicIntegrityAuditCommandTest.php
+          - scope: discovery-scoring
+            paths: >-
+              app/Services/NodeScorer.php
+              tests/Feature/DiscoverTest.php
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: '8.3'
+          coverage: xdebug
+          extensions: mbstring, pdo_sqlite, sqlite3
+      - run: mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs build
+      - run: composer install --no-interaction --prefer-dist
+      - name: Mutate ${{ matrix.scope }}
+        run: |
+          ./vendor/bin/infection --no-progress --threads=2 \
+            --min-msi=0 --min-covered-msi=0 \
+            --logger-text="build/infection-${{ matrix.scope }}.log" \
+            --logger-summary-json="build/infection-${{ matrix.scope }}.json" \
+            ${{ matrix.paths }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mutation-${{ matrix.scope }}
+          path: build/infection-${{ matrix.scope }}.*
+          retention-days: 14
