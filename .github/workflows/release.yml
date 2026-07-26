@@ -1,0 +1,82 @@
+name: Immutable public release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  verify-and-release:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_DATABASE: iicp_release
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      APP_ENV: testing
+      APP_KEY: base64:+Ks8E2HpJxEHq4rM2oNxGTVmAqFZXbmGiJvHaJXwXn4=
+      CACHE_STORE: array
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_DATABASE: iicp_release
+      DB_USERNAME: root
+      DB_PASSWORD: root
+      QUEUE_CONNECTION: sync
+      SESSION_DRIVER: array
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, pcntl, pdo_mysql, sodium, sqlite3
+      - run: mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
+      - run: composer validate --no-interaction
+      - run: composer install --no-interaction --prefer-dist
+      - run: composer audit --locked --no-interaction
+      - run: php artisan test --compact
+        env:
+          DB_CONNECTION: sqlite
+          DB_DATABASE: ':memory:'
+      - run: php artisan migrate:fresh --force
+      - run: php artisan test --compact tests/Feature/NodeEventLoggerConcurrencyTest.php tests/Feature/CreditLedgerConcurrencyTest.php
+      - name: Verify immutable tag and build artifacts
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && {
+            echo "release already exists; assets are immutable" >&2
+            exit 1
+          }
+          ./scripts/build_release_artifacts.sh "$version" dist
+          (cd dist && sha256sum --check SHA256SUMS)
+      - name: Attest source archive
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: dist/iicp-directory-php-${{ github.ref_name }}.tar.gz
+      - name: Publish immutable GitHub release
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/iicp-directory-php-"$GITHUB_REF_NAME".tar.gz \
+            dist/RELEASE-MANIFEST.json \
+            dist/SHA256SUMS \
+            --verify-tag \
+            --title "IICP PHP Directory $GITHUB_REF_NAME" \
+            --notes-file "releases/$GITHUB_REF_NAME.md"

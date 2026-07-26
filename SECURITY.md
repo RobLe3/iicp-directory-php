@@ -8,5 +8,6 @@ Never submit credentials, production database contents, operator records,
 private endpoints, or task payloads. The directory is a control plane and must
 not receive or log task payloads.
 
-Supported security fixes target the current main branch until a formal release
-support policy is published.
+Supported security fixes target the latest immutable release. Critical fixes
+are backported to the immediately previous release for 90 days when feasible.
+See `RELEASE_POLICY.md`; never rewrite a release tag to deliver a fix.
