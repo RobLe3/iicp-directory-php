@@ -3,6 +3,19 @@
 These instructions are implementation-neutral examples. Adapt paths, retention
 and access controls to the operator's environment.
 
+## Verify a public source release
+
+Before preparing an operator artifact, verify both checksum and provenance:
+
+```bash
+sha256sum --check SHA256SUMS
+gh attestation verify iicp-directory-php-v1.10.77.tar.gz \
+  --repo RobLe3/iicp-directory-php
+```
+
+The verified public archive is the source input. A retained private-hub copy is
+not release authority. Verification does not authorize production deployment.
+
 ## Backup before a migration
 
 ```bash

@@ -32,6 +32,7 @@ jobs:
       - run: composer install --no-interaction --prefer-dist
       - run: composer audit --locked --no-interaction
       - run: php artisan test --compact
+      - run: python3 scripts/verify_release.py --version "$(cat VERSION)" --allow-untagged
       # Preserve the reviewed extraction snapshot without treating current public
       # development as a live mirror of a private tree.
       - run: python3 scripts/check_seed_parity.py --manifest parity/seed-manifest-v1.10.76.2.json --php-dir . --git-revision c489d4e02a636b337ba4237f8543f83675162db0
