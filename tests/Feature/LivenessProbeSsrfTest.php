@@ -3,7 +3,7 @@
 namespace Tests\Feature;
 
 use App\Rules\RoutableEndpoint;
-use App\Services\NodeRegistry;
+use App\Services\NodeEndpointVerifier;
 use ReflectionMethod;
 use Tests\TestCase;
 
@@ -44,10 +44,10 @@ class LivenessProbeSsrfTest extends TestCase
         // The guard intentionally no-ops in local/testing (parity with RoutableEndpoint);
         // force production so these tests exercise the real resolve/validate/pin logic.
         config(['app.env' => 'production']);
-        $m = new ReflectionMethod(NodeRegistry::class, 'safeProbeTarget');
+        $m = new ReflectionMethod(NodeEndpointVerifier::class, 'safeProbeTarget');
         $m->setAccessible(true);
 
-        return $m->invoke(app(NodeRegistry::class), $endpoint);
+        return $m->invoke(app(NodeEndpointVerifier::class), $endpoint);
     }
 
     public function test_literal_internal_endpoint_is_refused(): void
