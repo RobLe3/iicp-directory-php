@@ -6,11 +6,8 @@ namespace App\Services;
 
 use App\Models\Node;
 use App\Models\Operator;
-use App\Rules\RoutableEndpoint;
 use Illuminate\Database\UniqueConstraintViolationException;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -41,9 +38,8 @@ class NodeRegistry
         private JwtService $jwt,
         private OperatorDelegationVerifier $delegationVerifier,
         private NodePricingPolicy $pricing,
+        private NodeEndpointVerifier $endpointVerifier,
     ) {}
-
-    private const LIVENESS_TIMEOUT_S = 5;
 
     private const DEFAULT_MAX_ACTIVE_NODES_PER_SOURCE_IP = 20;
 
@@ -51,7 +47,7 @@ class NodeRegistry
     {
         $isDeclaredReachable = $this->isDeclaredReachable($data);
         if (! $isDeclaredReachable) {
-            $this->assertLive($data['endpoint']);
+            $this->endpointVerifier->assertReachable($data['endpoint']);
         }
         $publicReachable = $this->computePublicReachable($isDeclaredReachable);
 
@@ -197,7 +193,7 @@ class NodeRegistry
         $secured = filled($node->operator_pubkey) || filled($node->cx_public_key);
         $oldEndpointAlive = false;
         if ($endpointChanged && ! $hasOwnership && ! ($strictSecured && $secured) && $node->endpoint) {
-            $oldEndpointAlive = $this->isEndpointAlive($node->endpoint);
+            $oldEndpointAlive = $this->endpointVerifier->isAlive($node->endpoint);
         }
         if (! E050OwnershipPolicy::allows(
             $strictSecured,
@@ -631,150 +627,6 @@ class NodeRegistry
      */
     public function isEndpointAlive(string $endpoint): bool
     {
-        if (config('iicp.registry.skip_liveness_check', false)) {
-            return false;
-        }
-
-        // IICP-E035 SSRF guard (#535): resolve + validate before dialing. An unsafe
-        // or unresolvable target is treated as GONE (not "alive") — and never dialed.
-        $target = $this->safeProbeTarget($endpoint);
-        if ($target === null) {
-            return false;
-        }
-
-        try {
-            $response = Http::timeout(self::LIVENESS_TIMEOUT_S)
-                ->withoutVerifying()
-                ->withOptions($target[1])
-                ->get($endpoint.'/iicp/health');
-
-            return $response->successful();
-        } catch (\Throwable $e) {
-            return false;
-        }
-    }
-
-    /**
-     * IICP-E035 SSRF guard (#535): resolve the endpoint host and reject if ANY resolved
-     * IP is internal / reserved / link-local (cloud-metadata) / CGNAT. RoutableEndpoint
-     * blocks dangerous *literal* hosts at registration but never resolves DNS names, so a
-     * name that resolves to an internal IP — or DNS-rebinds between validation and probe
-     * — would otherwise reach the liveness probe. We resolve + validate here, immediately
-     * before the dial, and pin curl's resolution to the validated IP so a rebind cannot
-     * redirect the connection.
-     *
-     * @return array{0:string,1:array<string,mixed>}|null [pinnedIp, http-options] or null if unsafe/unresolvable
-     */
-    private function safeProbeTarget(string $endpoint): ?array
-    {
-        // Consistent with RoutableEndpoint::validate — the SSRF resolve/validate/pin is
-        // a production concern; local/testing use Http::fake or fixed non-resolving hosts.
-        if (config('app.env') === 'local' || config('app.env') === 'testing') {
-            return ['', []];
-        }
-
-        $bare = $this->probeHost($endpoint);
-        if ($bare === null) {
-            return null;
-        }
-
-        $ips = $this->probeIps($bare);
-        if ($ips === [] || $this->hasBlockedProbeIp($ips)) {
-            return null;
-        }
-
-        $scheme = parse_url($endpoint, PHP_URL_SCHEME) ?: 'https';
-        $port = parse_url($endpoint, PHP_URL_PORT) ?: ($scheme === 'https' ? 443 : 80);
-        $pin = $ips[0];
-
-        return [$pin, ['curl' => [CURLOPT_RESOLVE => ["{$bare}:{$port}:{$pin}"]]]];
-    }
-
-    private function probeHost(string $endpoint): ?string
-    {
-        $host = parse_url($endpoint, PHP_URL_HOST);
-        if (! is_string($host) || $host === '') {
-            return null;
-        }
-
-        return trim($host, '[]'); // strip IPv6 literal brackets
-    }
-
-    private function probeIps(string $bare): array
-    {
-        if (filter_var($bare, FILTER_VALIDATE_IP)) {
-            return [$bare];
-        }
-
-        $ips = $this->ipv4Records($bare);
-        $aaaa = @dns_get_record($bare, DNS_AAAA);
-        if (is_array($aaaa)) {
-            $ips = array_merge($ips, $this->ipv6Records($aaaa));
-        }
-
-        return $ips;
-    }
-
-    private function ipv4Records(string $host): array
-    {
-        $records = @gethostbynamel($host);
-
-        return is_array($records) ? $records : [];
-    }
-
-    private function ipv6Records(array $records): array
-    {
-        return array_values(array_filter(array_map(
-            fn (array $rec) => empty($rec['ipv6']) ? null : $rec['ipv6'],
-            $records
-        )));
-    }
-
-    private function hasBlockedProbeIp(array $ips): bool
-    {
-        foreach ($ips as $ip) {
-            if (RoutableEndpoint::ipIsBlocked($ip)) {
-                return true; // ANY internal address → reject the whole host
-            }
-        }
-
-        return false;
-    }
-
-    private function assertLive(string $endpoint): void
-    {
-        if (config('iicp.registry.skip_liveness_check', false)) {
-            return;
-        }
-
-        // IICP-E035 SSRF guard (#535): a DNS endpoint that resolves to an internal
-        // address (or is unresolvable) must not be probed or registered.
-        $target = $this->safeProbeTarget($endpoint);
-        if ($target === null) {
-            throw ValidationException::withMessages([
-                'endpoint' => 'IICP-E035: endpoint host resolves to a non-routable / internal '
-                    .'address, or is unresolvable.',
-            ]);
-        }
-
-        try {
-            $response = Http::timeout(self::LIVENESS_TIMEOUT_S)
-                ->withoutVerifying()
-                ->withOptions($target[1])
-                ->get($endpoint.'/iicp/health');
-
-            if ($response->failed()) {
-                // #331 Phase B / IICP-E036: directory-side dial-back failed.
-                throw ValidationException::withMessages([
-                    'endpoint' => 'IICP-E036: endpoint unreachable from directory (HTTP '
-                        .$response->status().'). Verify port-forwarding / public_endpoint.',
-                ]);
-            }
-        } catch (ConnectionException $e) {
-            throw ValidationException::withMessages([
-                'endpoint' => 'IICP-E036: endpoint unreachable from directory (cannot reach '
-                    .$endpoint.'). Verify port-forwarding / public_endpoint.',
-            ]);
-        }
+        return $this->endpointVerifier->isAlive($endpoint);
     }
 }

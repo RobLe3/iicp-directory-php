@@ -18,14 +18,16 @@ class IicpRegistryConfigTest extends TestCase
 
     public function test_node_registry_reads_config_instead_of_environment(): void
     {
-        $source = file_get_contents(__DIR__.'/../../app/Services/NodeRegistry.php');
+        $registrySource = file_get_contents(__DIR__.'/../../app/Services/NodeRegistry.php');
+        $verifierSource = file_get_contents(__DIR__.'/../../app/Services/NodeEndpointVerifier.php');
 
-        $this->assertIsString($source);
-        $this->assertStringNotContainsString('env(', $source);
-        $this->assertSame(2, substr_count($source, "config('iicp.registry.skip_liveness_check'"));
+        $this->assertIsString($registrySource);
+        $this->assertIsString($verifierSource);
+        $this->assertStringNotContainsString('env(', $registrySource.$verifierSource);
+        $this->assertSame(2, substr_count($verifierSource, "config('iicp.registry.skip_liveness_check'"));
         $this->assertStringContainsString(
             "'iicp.registry.max_active_nodes_per_source_ip'",
-            $source,
+            $registrySource,
         );
     }
 
