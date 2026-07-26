@@ -2,11 +2,10 @@
 
 namespace Tests\Unit;
 
-use App\Services\AvailabilityWindowPolicy;
 use App\Services\CapabilityEvidencePolicy;
 use App\Services\NodeEligibilityPolicy;
 use App\Services\NodeHealthService;
-use App\Services\NodeReadinessPolicy;
+use App\Services\NodeRankingPolicy;
 use App\Services\NodeScorer;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -23,9 +22,8 @@ class NodeScorerAddressFamilyCharacterizationTest extends TestCase
         $scorer = new NodeScorer(
             $this->createMock(NodeHealthService::class),
             new CapabilityEvidencePolicy,
-            new AvailabilityWindowPolicy,
-            new NodeReadinessPolicy,
             new NodeEligibilityPolicy,
+            app(NodeRankingPolicy::class),
         );
         $method = new ReflectionMethod($scorer, 'detectAddressFamily');
 

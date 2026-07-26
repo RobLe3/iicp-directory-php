@@ -7,21 +7,18 @@ use App\Models\Node;
 use App\Models\Reputation;
 use App\Services\AvailabilityWindowPolicy;
 use App\Services\CapabilityEvidencePolicy;
-use App\Services\NodeEligibilityPolicy;
-use App\Services\NodeHealthService;
+use App\Services\NodeRankingPolicy;
 use App\Services\NodeReadinessPolicy;
-use App\Services\NodeScorer;
 use Illuminate\Database\Eloquent\Collection;
 use PHPUnit\Framework\TestCase;
-use ReflectionMethod;
 
 class NodeRankingPolicyCharacterizationTest extends TestCase
 {
     public function test_standard_score_preserves_all_weights_and_region_match(): void
     {
-        $result = $this->score($this->node(), 'eu-west', null);
+        $result = $this->ranking()->score($this->node(), 'eu-west', null);
 
-        $this->assertSame(0.878, $result['score']);
+        $this->assertSame(0.878, $result);
     }
 
     public function test_model_aware_score_preserves_price_and_exact_model_weights(): void
@@ -29,9 +26,9 @@ class NodeRankingPolicyCharacterizationTest extends TestCase
         $node = $this->node();
         $node->pricing_credits_per_1000 = 2.0;
 
-        $result = $this->score($node, 'eu-west', 'model-a');
+        $result = $this->ranking()->score($node, 'eu-west', 'model-a');
 
-        $this->assertEqualsWithDelta(0.88, $result['score'], 0.000001);
+        $this->assertEqualsWithDelta(0.88, $result, 0.000001);
     }
 
     public function test_missing_reputation_and_pricing_keep_neutral_defaults_and_readiness_demotion(): void
@@ -41,9 +38,9 @@ class NodeRankingPolicyCharacterizationTest extends TestCase
         $node->sdk_version = null;
         $node->cx_public_key = null;
 
-        $result = $this->score($node, null, 'missing-model');
+        $result = $this->ranking()->score($node, null, 'missing-model');
 
-        $this->assertEqualsWithDelta(0.578, $result['score'], 0.000001);
+        $this->assertEqualsWithDelta(0.578, $result, 0.000001);
     }
 
     public function test_over_capacity_is_clamped_to_zero(): void
@@ -51,9 +48,9 @@ class NodeRankingPolicyCharacterizationTest extends TestCase
         $node = $this->node();
         $node->active_jobs = 12;
 
-        $result = $this->score($node, 'other-region', null);
+        $result = $this->ranking()->score($node, 'other-region', null);
 
-        $this->assertSame(0.644, $result['score']);
+        $this->assertSame(0.644, $result);
     }
 
     public function test_shadow_v2_preserves_components_and_rounding(): void
@@ -65,9 +62,7 @@ class NodeRankingPolicyCharacterizationTest extends TestCase
             'components' => ['latency' => 0.73],
         ];
         $summary = (new CapabilityEvidencePolicy)->summary($node);
-        $method = new ReflectionMethod(NodeScorer::class, 'routingScoreV2');
-
-        $result = $method->invoke($this->scorer(), $node, $health, $summary, 'model-a');
+        $result = $this->ranking()->shadowV2($node, $health, $summary, 'model-a');
 
         $this->assertSame([
             'routing_score_v2' => 0.7859,
@@ -84,21 +79,12 @@ class NodeRankingPolicyCharacterizationTest extends TestCase
         ], $result);
     }
 
-    private function score(Node $node, ?string $region, ?string $model): array
+    private function ranking(): NodeRankingPolicy
     {
-        $method = new ReflectionMethod(NodeScorer::class, 'scoreNode');
-
-        return $method->invoke($this->scorer(), $node, $region, $model);
-    }
-
-    private function scorer(): NodeScorer
-    {
-        return new NodeScorer(
-            $this->createMock(NodeHealthService::class),
+        return new NodeRankingPolicy(
             new CapabilityEvidencePolicy,
             new AvailabilityWindowPolicy,
             new NodeReadinessPolicy,
-            new NodeEligibilityPolicy,
         );
     }
 
