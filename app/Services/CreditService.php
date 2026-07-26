@@ -10,8 +10,11 @@ use App\Models\CreditTransaction;
 use App\Models\Node;
 use App\Models\Operator;
 use Carbon\Carbon;
+use Closure;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Credit ledger for the cooperative inference billing system (Phase 5, ADR-019).
@@ -70,8 +73,10 @@ class CreditService
 
     public function award(string $nodeId, float $amount, ?string $reason = null): float
     {
-        return DB::transaction(function () use ($nodeId, $amount, $reason): float {
+        return $this->transactionWithRetry('award', function () use ($nodeId, $amount, $reason): float {
+            $node = Node::query()->where('id', $nodeId)->lockForUpdate()->firstOrFail();
             $credit = Credit::firstOrCreate(['node_id' => $nodeId], ['balance' => 0]);
+            $credit->refresh();
             $credit->increment('balance', $amount);
 
             CreditTransaction::create([
@@ -85,7 +90,8 @@ class CreditService
 
             $newBalance = (float) $credit->fresh()?->balance;
             // W-042 / db-D2prime: dual-write to nodes.credit_balance
-            Node::where('id', $nodeId)->update(['credit_balance' => $newBalance]);
+            $node->credit_balance = $newBalance;
+            $node->save();
 
             return $newBalance;
         });
@@ -93,7 +99,11 @@ class CreditService
 
     public function debit(string $nodeId, float $amount, string $taskId, ?string $reason = null): bool
     {
-        return DB::transaction(function () use ($nodeId, $amount, $taskId, $reason): bool {
+        return $this->transactionWithRetry('debit', function () use ($nodeId, $amount, $taskId, $reason): bool {
+            $node = Node::query()->where('id', $nodeId)->lockForUpdate()->first();
+            if (! $node) {
+                return false;
+            }
             $credit = Credit::where('node_id', $nodeId)->lockForUpdate()->first();
 
             if (! $credit || $credit->balance < $amount) {
@@ -111,9 +121,8 @@ class CreditService
             ]);
 
             // W-042 / db-D2prime: dual-write to nodes.credit_balance
-            Node::where('id', $nodeId)->update([
-                'credit_balance' => (float) $credit->fresh()?->balance,
-            ]);
+            $node->credit_balance = (float) $credit->fresh()?->balance;
+            $node->save();
 
             return true;
         });
@@ -147,7 +156,7 @@ class CreditService
             ];
         }
 
-        return DB::transaction(function () use ($consumer, $amount, $taskId, $reason): array {
+        return $this->transactionWithRetry('operator_wallet_debit', function () use ($consumer, $amount, $taskId, $reason): array {
             $candidates = [];
             foreach ($this->operatorSpendableNodes($consumer->operator_pubkey) as $candidate) {
                 /** @var Node|null $locked */
@@ -239,7 +248,22 @@ class CreditService
      */
     public function maybeAllocateFreeCredits(string $nodeId, string $ipAddress = '0.0.0.0'): ?float
     {
-        return DB::transaction(function () use ($nodeId, $ipAddress): ?float {
+        // Materialize the unique gate outside the mutation transaction. The row
+        // contains no allocation until the locked transaction below succeeds,
+        // and having it present gives every competing node the same first lock.
+        CreditIpGate::query()->insertOrIgnore([
+            'ip_address' => $ipAddress,
+            'allocation_count' => 0,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return $this->transactionWithRetry('free_allocation', function () use ($nodeId, $ipAddress): ?float {
+            $ipGate = CreditIpGate::where('ip_address', $ipAddress)->lockForUpdate()->firstOrFail();
+            $node = Node::query()->where('id', $nodeId)->lockForUpdate()->first();
+            if (! $node) {
+                return null;
+            }
             $credit = Credit::where('node_id', $nodeId)->lockForUpdate()->first();
 
             $balance = $credit ? (float) $credit->balance : 0.0;
@@ -254,7 +278,6 @@ class CreditService
             }
 
             // Gate 2: per-source-IP 6h window (RT-02b bypass mitigation)
-            $ipGate = CreditIpGate::where('ip_address', $ipAddress)->lockForUpdate()->first();
             if ($ipGate?->last_allocation_at &&
                 $ipGate->last_allocation_at->diffInHours(now()) < self::FREE_CREDITS_PERIOD_HOURS) {
                 return null;
@@ -282,16 +305,13 @@ class CreditService
             ]);
 
             // W-042 / db-D2prime: dual-write to nodes.credit_balance + free_credit_last_allocation_at
-            Node::where('id', $nodeId)->update([
-                'credit_balance' => (float) $credit->fresh()?->balance,
-                'free_credit_last_allocation_at' => $credit->fresh()?->free_credit_last_allocation_at,
-            ]);
+            $node->credit_balance = (float) $credit->fresh()?->balance;
+            $node->free_credit_last_allocation_at = $credit->fresh()?->free_credit_last_allocation_at;
+            $node->save();
 
-            // Update IP gate (fetch-then-save for SQLite/MySQL compat; inside the transaction lock)
-            $ipGateNew = CreditIpGate::firstOrNew(['ip_address' => $ipAddress]);
-            $ipGateNew->last_allocation_at = now();
-            $ipGateNew->allocation_count = ($ipGateNew->allocation_count ?? 0) + 1;
-            $ipGateNew->save();
+            $ipGate->last_allocation_at = now();
+            $ipGate->allocation_count = ($ipGate->allocation_count ?? 0) + 1;
+            $ipGate->save();
 
             return self::FREE_CREDITS_AMOUNT;
         });
@@ -521,7 +541,11 @@ class CreditService
             ->pluck('node_id');
 
         foreach ($idleNodeIds as $nodeId) {
-            DB::transaction(function () use ($nodeId, &$expiredNodes, &$expiredCredits): void {
+            $this->transactionWithRetry('ttl_expiry', function () use ($nodeId, &$expiredNodes, &$expiredCredits): void {
+                $node = Node::query()->where('id', $nodeId)->lockForUpdate()->first();
+                if (! $node) {
+                    return;
+                }
                 $credit = Credit::where('node_id', $nodeId)->lockForUpdate()->first();
                 $balance = $this->balance($nodeId);
                 if ($balance <= 0.0) {
@@ -531,7 +555,8 @@ class CreditService
                 if ($credit) {
                     $credit->update(['balance' => 0]);
                 }
-                Node::where('id', $nodeId)->update(['credit_balance' => 0]);
+                $node->credit_balance = 0;
+                $node->save();
 
                 CreditTransaction::create([
                     'node_id' => $nodeId,
@@ -549,5 +574,45 @@ class CreditService
             'expired_nodes' => $expiredNodes,
             'expired_credits' => round($expiredCredits, 4),
         ];
+    }
+
+    /**
+     * Execute one ledger mutation with bounded, content-free deadlock retries.
+     *
+     * @template T
+     *
+     * @param  Closure():T  $callback
+     * @return T
+     */
+    private function transactionWithRetry(string $operation, Closure $callback): mixed
+    {
+        $maximumAttempts = 5;
+        for ($attempt = 1; $attempt <= $maximumAttempts; $attempt++) {
+            try {
+                return DB::transaction($callback);
+            } catch (QueryException $exception) {
+                if (! $this->isConcurrencyFailure($exception) || $attempt === $maximumAttempts) {
+                    throw $exception;
+                }
+
+                Log::warning('credit_ledger_transaction_retry', [
+                    'operation' => $operation,
+                    'attempt' => $attempt,
+                    'maximum_attempts' => $maximumAttempts,
+                ]);
+                usleep((10_000 * $attempt) + random_int(0, 5000));
+            }
+        }
+
+        throw new \LogicException('unreachable credit transaction retry state');
+    }
+
+    private function isConcurrencyFailure(QueryException $exception): bool
+    {
+        $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
+        $driverCode = (int) ($exception->errorInfo[1] ?? 0);
+
+        return in_array($sqlState, ['40001', '40P01'], true)
+            || in_array($driverCode, [1205, 1213], true);
     }
 }
