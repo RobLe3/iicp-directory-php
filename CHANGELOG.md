@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.10.80.1 — 2026-07-26
+
+- Made registry and replica non-secret settings safe under Laravel
+  configuration caching while preserving established environment names and
+  defaults.
+- Added an allowlisted runtime-only secret provider for replica signing,
+  conformance badges and the development DID document so those values remain
+  outside the serialized configuration cache.
+- Continued characterization-first decomposition with capability-evidence,
+  availability-window, SDK/CX readiness and node-pricing policies.
+- Added isolated mutation gates for the extracted policies; readiness measured
+  80.43% MSI and pricing measured 81.25% MSI against 60% floors.
+- No schema, public protocol behavior, production database, deployment or
+  unpublished website change is authorized by this release.
+
 ## v1.10.79.1 — 2026-07-26
 
 - Removed avoidable Eloquent model hydration from the selected-node lifecycle
