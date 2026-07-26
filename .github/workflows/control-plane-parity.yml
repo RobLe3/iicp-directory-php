@@ -23,7 +23,7 @@ jobs:
         with:
           php-version: '8.3'
           extensions: mbstring
-      - uses: actions/setup-python@a309420fd9c39444b776ae9cdf0bf0e8e897c99d # v6.2.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.12'
       - run: mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
