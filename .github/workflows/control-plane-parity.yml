@@ -15,6 +15,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  php-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring
+      - uses: actions/setup-python@a309420fd9c39444b776ae9cdf0bf0e8e897c99d # v6.2.0
+        with:
+          python-version: '3.12'
+      - run: mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
+      - run: composer install --no-interaction --prefer-dist
+      - run: composer quality:static
+      - run: composer quality:format
+      - run: python3 scripts/check_semgrep_suppressions.py
+      - run: python3 -m unittest scripts/test_semgrep_suppression_policy.py
+      - run: python3 -m pip install 'semgrep==1.164.0'
+      - run: semgrep scan --config .semgrep/php-security.yml --severity ERROR --error app routes config database
+
   php-control-plane:
     runs-on: ubuntu-latest
     steps:

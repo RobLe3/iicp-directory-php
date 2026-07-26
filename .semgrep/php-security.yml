@@ -1,0 +1,37 @@
+rules:
+  - id: iicp.php.dangerous-dynamic-execution
+    message: Dynamic PHP evaluation is prohibited in the directory control plane.
+    severity: ERROR
+    languages: [php]
+    pattern-either:
+      - pattern: eval($CODE)
+      - pattern: assert($CODE)
+    metadata:
+      confidence: HIGH
+      category: security
+      cwe: CWE-95
+
+  - id: iicp.php.unsafe-deserialization
+    message: Native PHP deserialization is prohibited; use a validated structured format.
+    severity: ERROR
+    languages: [php]
+    pattern: unserialize(...)
+    metadata:
+      confidence: HIGH
+      category: security
+      cwe: CWE-502
+
+  - id: iicp.php.process-execution
+    message: Process execution is prohibited in request/runtime PHP code.
+    severity: ERROR
+    languages: [php]
+    pattern-either:
+      - pattern: system(...)
+      - pattern: exec(...)
+      - pattern: shell_exec(...)
+      - pattern: passthru(...)
+      - pattern: proc_open(...)
+    metadata:
+      confidence: HIGH
+      category: security
+      cwe: CWE-78

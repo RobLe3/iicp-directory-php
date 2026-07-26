@@ -1,0 +1,373 @@
+parameters:
+	ignoreErrors:
+		-
+			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
+			identifier: larastan.noEnvCallsOutsideOfConfig
+			count: 4
+			path: app/Console/Commands/ReplicaPreflightCommand.php
+
+		-
+			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
+			identifier: larastan.noEnvCallsOutsideOfConfig
+			count: 1
+			path: app/Console/Commands/ReplicaStartCommand.php
+
+		-
+			message: '#^Called ''pluck'' on Laravel collection, but could have been retrieved as a query\.$#'
+			identifier: larastan.noUnnecessaryCollectionCall
+			count: 1
+			path: app/Http/Controllers/AuditReportController.php
+
+		-
+			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
+			identifier: larastan.noEnvCallsOutsideOfConfig
+			count: 1
+			path: app/Http/Controllers/ConformanceController.php
+
+		-
+			message: '#^Constant App\\Http\\Controllers\\ConformanceController\:\:MAX_EXPIRY_DAYS is unused\.$#'
+			identifier: classConstant.unused
+			count: 1
+			path: app/Http/Controllers/ConformanceController.php
+
+		-
+			message: '#^Access to an undefined property App\\Models\\Node\:\:\$node_id\.$#'
+			identifier: property.notFound
+			count: 2
+			path: app/Http/Controllers/ConsumerTokenController.php
+
+		-
+			message: '#^Access to an undefined property App\\Models\\Node\|Illuminate\\Database\\Eloquent\\Collection\<int, App\\Models\\Node\>\:\:\$node_id\.$#'
+			identifier: property.notFound
+			count: 2
+			path: app/Http/Controllers/ConsumerTokenController.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$score\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Http/Controllers/CreditsController.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>score" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: app/Http/Controllers/CreditsController.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$score\.$#'
+			identifier: property.notFound
+			count: 2
+			path: app/Http/Controllers/HeartbeatController.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>score" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 2
+			path: app/Http/Controllers/HeartbeatController.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$completed_tasks_count\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Http/Controllers/NodeController.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$input_modalities\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Http/Controllers/NodeController.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$intent\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Http/Controllers/NodeController.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$max_tokens\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Http/Controllers/NodeController.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$models\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Http/Controllers/NodeController.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$observed_latency_ms\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Http/Controllers/NodeController.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$score\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Http/Controllers/NodeController.php
+
+		-
+			message: '#^Parameter \#1 \$callback of method Illuminate\\Database\\Eloquent\\Collection\<int,Illuminate\\Database\\Eloquent\\Model\>\:\:map\(\) contains unresolvable type\.$#'
+			identifier: argument.unresolvableType
+			count: 1
+			path: app/Http/Controllers/NodeController.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>completed_tasks_count" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: app/Http/Controllers/NodeController.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>score" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: app/Http/Controllers/NodeController.php
+
+		-
+			message: '#^Match expression does not handle remaining value\: string$#'
+			identifier: match.unhandled
+			count: 1
+			path: app/Http/Controllers/OperatorSelfServiceController.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$completed_tasks_count\.$#'
+			identifier: property.notFound
+			count: 3
+			path: app/Http/Controllers/RegistryController.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$observed_latency_ms\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Http/Controllers/RegistryController.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$score\.$#'
+			identifier: property.notFound
+			count: 2
+			path: app/Http/Controllers/RegistryController.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>completed_tasks_count" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 3
+			path: app/Http/Controllers/RegistryController.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>score" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 2
+			path: app/Http/Controllers/RegistryController.php
+
+		-
+			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
+			identifier: larastan.noEnvCallsOutsideOfConfig
+			count: 1
+			path: app/Http/Controllers/ReplicasController.php
+
+		-
+			message: '#^Constant App\\Http\\Controllers\\ReplicasController\:\:ALLOWED_TRUST_TIERS is unused\.$#'
+			identifier: classConstant.unused
+			count: 1
+			path: app/Http/Controllers/ReplicasController.php
+
+		-
+			message: '#^Strict comparison using \!\=\= between float and null will always evaluate to true\.$#'
+			identifier: notIdentical.alwaysTrue
+			count: 2
+			path: app/Http/Controllers/SnapshotController.php
+
+		-
+			message: '#^Strict comparison using \!\=\= between numeric\-string and null will always evaluate to true\.$#'
+			identifier: notIdentical.alwaysTrue
+			count: 1
+			path: app/Http/Controllers/SnapshotController.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>sample_count" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 2
+			path: app/Http/Controllers/StatsController.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>value" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 2
+			path: app/Http/Controllers/StatsController.php
+
+		-
+			message: '#^Property App\\Http\\Controllers\\TelemetryController\:\:\$eventLogger is never read, only written\.$#'
+			identifier: property.onlyWritten
+			count: 1
+			path: app/Http/Controllers/TelemetryController.php
+
+		-
+			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
+			identifier: larastan.noEnvCallsOutsideOfConfig
+			count: 4
+			path: app/Http/Middleware/LoadRedirect.php
+
+		-
+			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
+			identifier: larastan.noEnvCallsOutsideOfConfig
+			count: 3
+			path: app/Http/Middleware/ReplicaModeRedirect.php
+
+		-
+			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
+			identifier: larastan.noEnvCallsOutsideOfConfig
+			count: 1
+			path: app/Http/Middleware/SignReplicaResponse.php
+
+		-
+			message: '#^Strict comparison using \!\=\= between Carbon\\Carbon and null will always evaluate to true\.$#'
+			identifier: notIdentical.alwaysTrue
+			count: 1
+			path: app/Models/Replica.php
+
+		-
+			message: '#^Using nullsafe method call on non\-nullable type Illuminate\\Http\\Request\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 2
+			path: app/Rules/RoutableEndpoint.php
+
+		-
+			message: '#^Expression on left side of \?\? is not nullable\.$#'
+			identifier: nullCoalesce.expr
+			count: 1
+			path: app/Services/CreditService.php
+
+		-
+			message: '#^Using nullsafe property access on non\-nullable type App\\Models\\CreditIpGate\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: app/Services/CreditService.php
+
+		-
+			message: '#^Strict comparison using \!\=\= between string and null will always evaluate to true\.$#'
+			identifier: notIdentical.alwaysTrue
+			count: 1
+			path: app/Services/DataSubjectRightsService.php
+
+		-
+			message: '#^Template type T of method App\\Services\\DiscoveryPhaseTiming\:\:measure\(\) is not referenced in a parameter\.$#'
+			identifier: method.templateTypeNotInParameter
+			count: 1
+			path: app/Services/DiscoveryPhaseTiming.php
+
+		-
+			message: '#^Template type T of method App\\Services\\DiscoveryPhaseTiming\:\:profile\(\) is not referenced in a parameter\.$#'
+			identifier: method.templateTypeNotInParameter
+			count: 1
+			path: app/Services/DiscoveryPhaseTiming.php
+
+		-
+			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
+			identifier: larastan.noEnvCallsOutsideOfConfig
+			count: 3
+			path: app/Services/NodeRegistry.php
+
+		-
+			message: '#^Method App\\Services\\NodeRegistry\:\:isNattedDeclaration\(\) is unused\.$#'
+			identifier: method.unused
+			count: 1
+			path: app/Services/NodeRegistry.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$completed_tasks_count\.$#'
+			identifier: property.notFound
+			count: 4
+			path: app/Services/NodeScorer.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$end_time\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Services/NodeScorer.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$input_modalities\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Services/NodeScorer.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$observed_latency_ms\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Services/NodeScorer.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$score\.$#'
+			identifier: property.notFound
+			count: 5
+			path: app/Services/NodeScorer.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$share\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Services/NodeScorer.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$start_time\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Services/NodeScorer.php
+
+		-
+			message: '#^Offset ''label'' on non\-empty\-array on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: app/Services/NodeScorer.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>completed_tasks_count" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 4
+			path: app/Services/NodeScorer.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>score" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 5
+			path: app/Services/NodeScorer.php
+
+		-
+			message: '#^Call to function is_array\(\) with array will always evaluate to true\.$#'
+			identifier: function.alreadyNarrowedType
+			count: 1
+			path: app/Services/RelayBindTicketService.php
+
+		-
+			message: '#^Offset ''endpoint'' on non\-empty\-array on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: app/Services/ReplicaEventApplier.php
+
+		-
+			message: '#^Property App\\Services\\ReputationService\:\:\$eventLogger is never read, only written\.$#'
+			identifier: property.onlyWritten
+			count: 1
+			path: app/Services/ReputationService.php
+
+		-
+			message: '#^Binary operation "/" between int and \-7171200\|\-5184000\|\-1987200\|0\|604800\|1987200\|2592000\|5184000\|7171200\|7776000 results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: app/Services/UptimeService.php
+
+		-
+			message: '#^Call to function is_string\(\) with string will always evaluate to true\.$#'
+			identifier: function.alreadyNarrowedType
+			count: 1
+			path: app/Services/UptimeService.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>total" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: app/Services/UptimeService.php

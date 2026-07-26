@@ -9,6 +9,11 @@ Before opening a pull request, run:
 composer validate
 composer install --no-interaction --prefer-dist
 composer audit --locked
+composer quality:static
+composer quality:format
+python3 scripts/check_semgrep_suppressions.py
+semgrep scan --config .semgrep/php-security.yml --severity ERROR --error \
+  app routes config database
 php artisan test --compact
 python3 scripts/verify_release.py --version "$(cat VERSION)" --allow-untagged
 python3 scripts/check_seed_parity.py \
@@ -16,6 +21,9 @@ python3 scripts/check_seed_parity.py \
   --php-dir . \
   --git-revision c489d4e02a636b337ba4237f8543f83675162db0
 ```
+
+Semgrep CE must be version `1.164.0`. See `docs/QUALITY_GATES.md` for exact
+installation, baseline, severity, suppression, and dependency-update policy.
 
 Protocol changes require a corresponding proposal in the IICP specification
 repository. Do not include production configuration or real operator data.
