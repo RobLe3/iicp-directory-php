@@ -163,6 +163,7 @@ class Node extends Model
 
     protected $hidden = ['node_token_hash', 'proxy_token_hash', 'node_hmac_key'];
 
+    /** @return HasMany<Capability, $this> */
     public function capabilities(): HasMany
     {
         return $this->hasMany(Capability::class);

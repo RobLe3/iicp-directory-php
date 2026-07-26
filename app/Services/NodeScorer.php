@@ -106,7 +106,10 @@ class NodeScorer
 
     private const P5_W_MODEL = 0.10;
 
-    public function __construct(private NodeHealthService $health) {}
+    public function __construct(
+        private NodeHealthService $health,
+        private CapabilityEvidencePolicy $capabilityEvidence,
+    ) {}
 
     public function discover(
         string $intent,
@@ -216,8 +219,8 @@ class NodeScorer
 
         $project = fn () => $scored->map(function (array $item) use ($model, $scoreVersion, $healthByNode): array {
             $node = $item['node'];
-            $registeredModels = $this->registeredModels($node);
-            $liveModels = $this->liveModels($node, $registeredModels);
+            $registeredModels = $this->capabilityEvidence->registeredModels($node);
+            $liveModels = $this->capabilityEvidence->liveModels($node, $registeredModels);
             $health = $healthByNode[$node->id] ?? $this->health->forNode($node);
             $capabilitySummary = $this->capabilitySummary($node, $registeredModels, $liveModels);
             $routingSignals = self::routingSignals($node, $health);
@@ -1253,7 +1256,7 @@ class NodeScorer
         $reputationScore = $node->reputation?->score ?? 0.5;
 
         if ($requestedModel !== null) {
-            $modelMatch = $this->computeModelMatch($node, $requestedModel);
+            $modelMatch = $this->capabilityEvidence->exactModelMatch($node, $requestedModel);
             // W_PRICE: cheaper nodes score higher; 0.5 neutral when pricing unavailable
             $priceScore = $node->pricing_credits_per_1000 !== null
                 ? max(0.0, 1.0 - ($node->pricing_credits_per_1000 / 10.0))
@@ -1291,62 +1294,13 @@ class NodeScorer
      */
     public function capabilitySummary(Node $node, ?array $registeredModels = null, ?array $liveModels = null): array
     {
-        $registeredModels ??= $this->registeredModels($node);
-        $liveModels ??= $this->liveModels($node, $registeredModels);
-        $families = array_values(array_unique(array_map(fn (string $m) => $this->modelFamily($m), $liveModels)));
-        $families = array_values(array_filter($families, fn (string $f) => $f !== 'unknown'));
-
-        return [
-            'model_count_registered' => count($registeredModels),
-            'model_count_live' => count($liveModels),
-            'model_family_count' => count($families),
-            'modalities' => $node->capabilities
-                ->flatMap(fn ($c) => $c->input_modalities ?: ['text'])->unique()->values()->all(),
-            'context_window_max' => $node->capabilities->pluck('max_tokens')->filter()->max(),
-            'quality_evidence' => count($liveModels) > 0 ? 'self_declared' : 'none',
-        ];
-    }
-
-    /** @return list<string> */
-    private function registeredModels(Node $node): array
-    {
-        return $node->capabilities->flatMap(fn ($c) => $c->models ?? [])->unique()->values()->all();
-    }
-
-    /** @param list<string> $registeredModels @return list<string> */
-    private function liveModels(Node $node, array $registeredModels): array
-    {
-        return $node->health_models !== null
-            ? array_values(array_intersect($registeredModels, $node->health_models))
-            : $registeredModels;
-    }
-
-    private function modelFamily(string $model): string
-    {
-        $m = strtolower($model);
-        foreach (['llama', 'qwen', 'mistral', 'deepseek', 'phi', 'gemma', 'nomic', 'mixtral', 'codellama'] as $family) {
-            if (str_contains($m, $family)) {
-                return $family;
-            }
-        }
-
-        return 'unknown';
-    }
-
-    private function capabilityFitScore(array $summary, ?string $requestedModel): float
-    {
-        $breadth = min(1.0, log(1 + max(0, (int) $summary['model_count_live']), 2) / log(9, 2));
-        $modality = in_array('text', $summary['modalities'] ?? [], true) ? 1.0 : 0.5;
-        $qualityEvidence = ($summary['quality_evidence'] ?? 'none') === 'none' ? 0.0 : 0.5;
-        $exactModel = $requestedModel === null ? 0.5 : 1.0;
-
-        return round(0.45 * $exactModel + 0.30 * $breadth + 0.15 * $modality + 0.10 * $qualityEvidence, 4);
+        return $this->capabilityEvidence->summary($node, $registeredModels, $liveModels);
     }
 
     private function routingScoreV2(Node $node, array $health, array $capabilitySummary, ?string $requestedModel): array
     {
         $healthScore = max(0.0, min(1.0, ((float) ($health['score'] ?? 0)) / 100.0));
-        $capabilityFit = $this->capabilityFitScore($capabilitySummary, $requestedModel);
+        $capabilityFit = $this->capabilityEvidence->fitScore($capabilitySummary, $requestedModel);
         $loadScore = 1.0 - min($node->load, 1.0);
         $capacityScore = $node->max_concurrent > 0
             ? max(0.0, 1.0 - ($node->active_jobs / $node->max_concurrent))
@@ -1381,17 +1335,6 @@ class NodeScorer
                 'policy_fit' => round($policy, 4),
             ],
         ];
-    }
-
-    private function computeModelMatch(Node $node, string $model): float
-    {
-        foreach ($node->capabilities as $cap) {
-            if (in_array($model, $cap->models ?? [], true)) {
-                return 1.0;
-            }
-        }
-
-        return 0.0;
     }
 
     private function computeAvailability(Node $node): float

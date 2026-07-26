@@ -73,30 +73,6 @@ parameters:
 			path: app/Http/Controllers/NodeController.php
 
 		-
-			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$input_modalities\.$#'
-			identifier: property.notFound
-			count: 1
-			path: app/Http/Controllers/NodeController.php
-
-		-
-			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$intent\.$#'
-			identifier: property.notFound
-			count: 1
-			path: app/Http/Controllers/NodeController.php
-
-		-
-			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$max_tokens\.$#'
-			identifier: property.notFound
-			count: 1
-			path: app/Http/Controllers/NodeController.php
-
-		-
-			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$models\.$#'
-			identifier: property.notFound
-			count: 1
-			path: app/Http/Controllers/NodeController.php
-
-		-
 			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$observed_latency_ms\.$#'
 			identifier: property.notFound
 			count: 1
@@ -105,12 +81,6 @@ parameters:
 		-
 			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$score\.$#'
 			identifier: property.notFound
-			count: 1
-			path: app/Http/Controllers/NodeController.php
-
-		-
-			message: '#^Parameter \#1 \$callback of method Illuminate\\Database\\Eloquent\\Collection\<int,Illuminate\\Database\\Eloquent\\Model\>\:\:map\(\) contains unresolvable type\.$#'
-			identifier: argument.unresolvableType
 			count: 1
 			path: app/Http/Controllers/NodeController.php
 
@@ -284,12 +254,6 @@ parameters:
 
 		-
 			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$end_time\.$#'
-			identifier: property.notFound
-			count: 1
-			path: app/Services/NodeScorer.php
-
-		-
-			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$input_modalities\.$#'
 			identifier: property.notFound
 			count: 1
 			path: app/Services/NodeScorer.php
