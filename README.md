@@ -38,11 +38,15 @@ composer install --no-interaction --prefer-dist
 php artisan test --compact
 python3 scripts/check_seed_parity.py \
   --manifest parity/seed-manifest-v1.10.76.2.json \
-  --php-dir .
+  --php-dir . \
+  --git-revision c489d4e02a636b337ba4237f8543f83675162db0
 ```
 
-The versioned parity manifests identify the reviewed seed contract. They do
-not certify live operational equivalence on another host.
+The versioned parity manifests identify and preserve the reviewed extraction
+snapshot at the pinned public Git revision. Current development is authoritative
+in this public repository; it is not required to remain a live mirror of a
+private tree. The manifests do not certify live operational equivalence on
+another host.
 
 ### Version namespaces
 
