@@ -4,12 +4,12 @@ namespace Tests\Unit;
 
 use App\Models\Capability;
 use App\Models\Node;
+use App\Services\CapabilityEvidencePolicy;
 use App\Services\NodeHealthService;
 use App\Services\NodeScorer;
 use Illuminate\Database\Eloquent\Collection;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use ReflectionMethod;
 
 class NodeScorerCapabilityEvidenceCharacterizationTest extends TestCase
 {
@@ -20,23 +20,22 @@ class NodeScorerCapabilityEvidenceCharacterizationTest extends TestCase
         float $expectedFit,
     ): void {
         $node = $this->node($healthModels);
-        $scorer = new NodeScorer($this->createMock(NodeHealthService::class));
+        $policy = new CapabilityEvidencePolicy;
+        $scorer = new NodeScorer($this->createMock(NodeHealthService::class), $policy);
 
         $summary = $scorer->capabilitySummary($node);
-        $fit = new ReflectionMethod($scorer, 'capabilityFitScore');
 
         $this->assertSame($expectedSummary, $summary);
-        $this->assertSame($expectedFit, $fit->invoke($scorer, $summary, 'qwen2.5:0.5b'));
+        $this->assertSame($expectedFit, $policy->fitScore($summary, 'qwen2.5:0.5b'));
     }
 
     public function test_current_exact_model_match_contract(): void
     {
         $node = $this->node(['qwen2.5:0.5b']);
-        $scorer = new NodeScorer($this->createMock(NodeHealthService::class));
-        $match = new ReflectionMethod($scorer, 'computeModelMatch');
+        $policy = new CapabilityEvidencePolicy;
 
-        $this->assertSame(1.0, $match->invoke($scorer, $node, 'qwen2.5:0.5b'));
-        $this->assertSame(0.0, $match->invoke($scorer, $node, 'missing:model'));
+        $this->assertSame(1.0, $policy->exactModelMatch($node, 'qwen2.5:0.5b'));
+        $this->assertSame(0.0, $policy->exactModelMatch($node, 'missing:model'));
     }
 
     public static function capabilityEvidenceCases(): array

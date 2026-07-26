@@ -2,6 +2,7 @@
 
 namespace Tests\Unit;
 
+use App\Services\CapabilityEvidencePolicy;
 use App\Services\NodeHealthService;
 use App\Services\NodeScorer;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -16,7 +17,7 @@ class NodeScorerAddressFamilyCharacterizationTest extends TestCase
         ?string $transportEndpoint,
         string $expected,
     ): void {
-        $scorer = new NodeScorer($this->createMock(NodeHealthService::class));
+        $scorer = new NodeScorer($this->createMock(NodeHealthService::class), new CapabilityEvidencePolicy);
         $method = new ReflectionMethod($scorer, 'detectAddressFamily');
 
         $this->assertSame($expected, $method->invoke($scorer, $endpoint, $transportEndpoint));
