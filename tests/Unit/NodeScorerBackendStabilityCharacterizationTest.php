@@ -5,6 +5,7 @@
 namespace Tests\Unit;
 
 use App\Models\Node;
+use App\Services\BackendStabilityPolicy;
 use App\Services\NodeScorer;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
@@ -115,5 +116,22 @@ class NodeScorerBackendStabilityCharacterizationTest extends TestCase
         $this->assertNull($normalized['retry_after_s']);
         $this->assertNull($normalized['drain_until']);
         $this->assertSame('Backend reports instability separate from network reachability.', $normalized['summary']);
+    }
+
+    #[DataProvider('admissionStates')]
+    public function test_only_draining_blocks_admission(?array $report, bool $expected): void
+    {
+        $node = new Node;
+        $node->backend_stability = $report;
+
+        $this->assertSame($expected, BackendStabilityPolicy::allowsAdmission($node));
+    }
+
+    public static function admissionStates(): iterable
+    {
+        yield 'not reported' => [null, true];
+        yield 'ready' => [['backend_state' => 'ok', 'reason_class' => 'ok'], true];
+        yield 'degraded' => [['backend_state' => 'degraded', 'reason_class' => 'backend_cold'], true];
+        yield 'draining' => [['backend_state' => 'draining', 'reason_class' => 'backend_loading'], false];
     }
 }
