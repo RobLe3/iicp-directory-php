@@ -36,29 +36,6 @@ class NodeScorer
     /** Current SDK baseline for strict demotion of downlevel/unkeyed nodes. */
     public const SDK_BASELINE_VERSION = NodeReadinessPolicy::SDK_BASELINE_VERSION;
 
-    private const BACKEND_STATES = ['ok', 'degraded', 'draining'];
-
-    private const BACKEND_REASONS = ['ok', 'backend_cold', 'backend_loading', 'backend_unstable', 'observer_error'];
-
-    private const BACKEND_ROUTING_GUARDS = [
-        'ok' => 'none',
-        'degraded' => 'observe_only',
-        'draining' => 'avoid_for_admission',
-    ];
-
-    private const BACKEND_STATE_SUMMARIES = [
-        'ok' => 'Backend reports ready for new work.',
-        'draining' => 'Backend is draining; discovery should avoid assigning new work for now.',
-    ];
-
-    private const BACKEND_REASON_SUMMARIES = [
-        'backend_cold' => 'Backend is reachable but cold; first request may warm it up.',
-        'backend_loading' => 'Backend is loading or unloading a model.',
-        'backend_unstable' => 'Backend reports instability separate from network reachability.',
-        'observer_error' => 'Backend reports degraded readiness.',
-        'ok' => 'Backend reports degraded readiness.',
-    ];
-
     /**
      * ADR-047 (#411) — reachability tiers. A heartbeating node with a routable
      * serving surface (any of the 8 ADR-043 §9 exposure_mode categories) is
@@ -676,69 +653,12 @@ class NodeScorer
      */
     public static function backendStability(Node $node): array
     {
-        $raw = is_array($node->backend_stability) ? $node->backend_stability : null;
-        if ($raw === null || $raw === []) {
-            return self::unknownBackendStability();
-        }
-
-        $state = self::coerceBackendToken($raw['backend_state'] ?? null, self::BACKEND_STATES, 'degraded');
-        $reason = self::coerceBackendToken($raw['reason_class'] ?? null, self::BACKEND_REASONS, 'observer_error');
-
-        return [
-            'backend_state' => $state,
-            'reason_class' => $reason,
-            'routing_guard' => self::BACKEND_ROUTING_GUARDS[$state] ?? 'none',
-            'evidence' => 'self_reported',
-            'retry_after_s' => self::optionalBackendInt($raw, 'retry_after_s'),
-            'drain_until' => self::optionalBackendInt($raw, 'drain_until'),
-            'summary' => self::backendSummaryText($state, $reason),
-        ];
-    }
-
-    /** @return array<string,mixed> */
-    private static function unknownBackendStability(): array
-    {
-        return [
-            'backend_state' => 'unknown',
-            'reason_class' => 'not_reported',
-            'routing_guard' => 'none',
-            'evidence' => 'not_reported',
-            'retry_after_s' => null,
-            'drain_until' => null,
-            'summary' => 'Backend stability has not been reported yet.',
-        ];
-    }
-
-    /** @param list<string> $allowed */
-    private static function coerceBackendToken(mixed $value, array $allowed, string $fallback): string
-    {
-        $token = is_string($value) ? $value : $fallback;
-
-        return in_array($token, $allowed, true) ? $token : $fallback;
-    }
-
-    /** @param array<string,mixed> $raw */
-    private static function optionalBackendInt(array $raw, string $field): ?int
-    {
-        return isset($raw[$field]) && is_numeric($raw[$field])
-            ? max(0, (int) $raw[$field])
-            : null;
-    }
-
-    private static function backendSummaryText(string $state, string $reason): string
-    {
-        if ($state === 'degraded') {
-            return self::BACKEND_REASON_SUMMARIES[$reason] ?? 'Backend reports degraded readiness.';
-        }
-
-        return self::BACKEND_STATE_SUMMARIES[$state] ?? 'Backend stability has not been reported yet.';
+        return BackendStabilityPolicy::summarize($node);
     }
 
     private static function filterBackendAdmission($nodes)
     {
-        return $nodes->reject(
-            fn (Node $node) => self::backendStability($node)['routing_guard'] === 'avoid_for_admission'
-        );
+        return $nodes->filter(fn (Node $node) => BackendStabilityPolicy::allowsAdmission($node));
     }
 
     /**
