@@ -531,6 +531,16 @@
         "web"
       ],
       "rationale": "Unversioned federation liveness convention, not a protocol data operation."
+    },
+    {
+      "method": "GET",
+      "uri": "iicp/ready",
+      "classification": "operator_observability",
+      "openapi_path": null,
+      "middleware": [
+        "web"
+      ],
+      "rationale": "Content-free deployment readiness probe outside the versioned protocol contract."
     }
   ]
 }

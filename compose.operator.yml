@@ -1,0 +1,136 @@
+name: iicp-directory-operator
+
+x-app-environment: &app-environment
+  APP_ENV: production
+  APP_DEBUG: "false"
+  APP_URL: ${IICP_APP_URL:?set IICP_APP_URL}
+  APP_KEY_FILE: /run/secrets/app_key
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: ${IICP_LOG_LEVEL:-warning}
+  DB_CONNECTION: mysql
+  DB_HOST: db
+  DB_PORT: "3306"
+  DB_DATABASE: ${IICP_DB_DATABASE:?set IICP_DB_DATABASE}
+  DB_USERNAME: ${IICP_DB_USERNAME:?set IICP_DB_USERNAME}
+  DB_PASSWORD_FILE: /run/secrets/db_password
+  CACHE_STORE: database
+  SESSION_DRIVER: database
+  QUEUE_CONNECTION: sync
+  IICP_SCHEDULER_ENABLED: "true"
+
+x-app-runtime: &app-runtime
+  image: iicp-directory-operator:${IICP_IMAGE_TAG:-local}
+  environment: *app-environment
+  secrets:
+    - app_key
+    - db_password
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=32m
+    - /app/bootstrap/cache:rw,noexec,nosuid,size=16m,uid=10001,gid=10001
+  volumes:
+    - app_storage:/app/storage
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 256
+  mem_limit: ${IICP_APP_MEMORY:-512m}
+  cpus: ${IICP_APP_CPUS:-1.0}
+  restart: unless-stopped
+
+services:
+  db:
+    image: mariadb:11.4@sha256:a794d9eb009e20de605858a11f32f63b4075cbd197c650436f0e3b457e4caed7
+    environment:
+      MARIADB_DATABASE: ${IICP_DB_DATABASE:?set IICP_DB_DATABASE}
+      MARIADB_USER: ${IICP_DB_USERNAME:?set IICP_DB_USERNAME}
+      MARIADB_PASSWORD_FILE: /run/secrets/db_password
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
+    secrets:
+      - db_password
+      - db_root_password
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: ${IICP_DB_MEMORY:-1g}
+    cpus: ${IICP_DB_CPUS:-1.0}
+    restart: unless-stopped
+
+  migrate:
+    <<: *app-runtime
+    profiles: ["tools"]
+    command: ["php", "artisan", "migrate", "--force", "--no-interaction"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    <<: *app-runtime
+    build:
+      context: .
+      dockerfile: Dockerfile.operator
+    depends_on:
+      db:
+        condition: service_healthy
+
+  scheduler:
+    <<: *app-runtime
+    command: ["php", "artisan", "schedule:work", "--no-interaction"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    image: iicp-directory-operator-nginx:${IICP_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile.operator-nginx
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${IICP_OPERATOR_PORT:-8080}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: ${IICP_WEB_MEMORY:-128m}
+    cpus: ${IICP_WEB_CPUS:-0.5}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/iicp/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  app_storage:
+  db_data:
+
+secrets:
+  app_key:
+    file: ${IICP_APP_KEY_FILE:?set IICP_APP_KEY_FILE}
+  db_password:
+    file: ${IICP_DB_PASSWORD_FILE:?set IICP_DB_PASSWORD_FILE}
+  db_root_password:
+    file: ${IICP_DB_ROOT_PASSWORD_FILE:?set IICP_DB_ROOT_PASSWORD_FILE}

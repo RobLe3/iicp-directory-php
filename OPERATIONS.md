@@ -18,6 +18,29 @@ secret-file inputs are limited to the names explicitly loaded by
 `APP_URL`, `DB_HOST`, `DB_DATABASE`, and `DB_USERNAME` separately. Do not put
 secret values in an image layer, Compose file, command line, or Git.
 
+### Disposable operator stack
+
+`compose.operator.yml` separates MariaDB, PHP-FPM, nginx, the scheduler, and
+the explicit one-shot migration service. Start or upgrade only in this order:
+
+```bash
+docker compose -f compose.operator.yml up -d db
+docker compose -f compose.operator.yml --profile tools run --rm migrate
+docker compose -f compose.operator.yml up -d app scheduler web
+```
+
+Secret paths and non-secret settings are required inputs; `operator/example.env`
+documents only the non-secret names. The web service binds to loopback by
+default. Put a reviewed TLS reverse proxy in front of it for remote access.
+
+Run `scripts/rehearse_operator_stack.sh` to create and destroy a fully
+disposable stack. It verifies clean migration, fixed liveness/readiness,
+fail-closed candidate configuration, database failure/recovery, backup,
+restore, and restored migration status. The generated report and SQL backup
+remain in a private temporary directory only with `--keep`; never commit them.
+Set `IICP_OPERATOR_REHEARSAL_OUTPUT` to copy only the content-free JSON result
+to a chosen private path before cleanup.
+
 ## Verify a public source release
 
 Before preparing an operator artifact, verify both checksum and provenance:
