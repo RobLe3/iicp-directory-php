@@ -4,14 +4,11 @@ namespace Tests\Unit;
 
 use App\Models\AvailabilityWindow;
 use App\Models\Node;
-use App\Services\CapabilityEvidencePolicy;
-use App\Services\NodeHealthService;
-use App\Services\NodeScorer;
+use App\Services\AvailabilityWindowPolicy;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Collection;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use ReflectionMethod;
 
 class NodeScorerAvailabilityWindowCharacterizationTest extends TestCase
 {
@@ -33,13 +30,9 @@ class NodeScorerAvailabilityWindowCharacterizationTest extends TestCase
             fn (array $window) => new AvailabilityWindow($window),
             $windows,
         )));
-        $scorer = new NodeScorer(
-            $this->createMock(NodeHealthService::class),
-            new CapabilityEvidencePolicy,
-        );
-        $method = new ReflectionMethod($scorer, 'computeAvailability');
+        $policy = new AvailabilityWindowPolicy;
 
-        $this->assertSame($expected, $method->invoke($scorer, $node));
+        $this->assertSame($expected, $policy->score($node));
     }
 
     public static function availabilityCases(): array
