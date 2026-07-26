@@ -21,15 +21,13 @@ x-app-environment: &app-environment
 x-app-runtime: &app-runtime
   image: iicp-directory-operator:${IICP_IMAGE_TAG:-local}
   environment: *app-environment
-  secrets:
-    - app_key
-    - db_password
   read_only: true
   tmpfs:
     - /tmp:rw,noexec,nosuid,size=32m
     - /app/bootstrap/cache:rw,noexec,nosuid,size=16m,uid=10001,gid=10001
   volumes:
     - app_storage:/app/storage
+    - runtime_secrets:/run/secrets:ro
   cap_drop:
     - ALL
   security_opt:
@@ -40,15 +38,41 @@ x-app-runtime: &app-runtime
   restart: unless-stopped
 
 services:
+  secret-init:
+    image: alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        umask 077
+        cp /run/secrets/app_key_input /prepared/app_key
+        cp /run/secrets/db_password_input /prepared/db_password
+        chmod 0400 /prepared/app_key /prepared/db_password
+        chown 10001:10001 /prepared/app_key /prepared/db_password
+    secrets:
+      - app_key_input
+      - db_password_input
+    volumes:
+      - runtime_secrets:/prepared
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
   db:
     image: mariadb:11.4@sha256:a794d9eb009e20de605858a11f32f63b4075cbd197c650436f0e3b457e4caed7
     environment:
       MARIADB_DATABASE: ${IICP_DB_DATABASE:?set IICP_DB_DATABASE}
       MARIADB_USER: ${IICP_DB_USERNAME:?set IICP_DB_USERNAME}
-      MARIADB_PASSWORD_FILE: /run/secrets/db_password
+      MARIADB_PASSWORD_FILE: /run/secrets/db_password_input
       MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
     secrets:
-      - db_password
+      - db_password_input
       - db_root_password
     volumes:
       - db_data:/var/lib/mysql
@@ -78,6 +102,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      secret-init:
+        condition: service_completed_successfully
     restart: "no"
 
   app:
@@ -88,6 +114,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      secret-init:
+        condition: service_completed_successfully
 
   scheduler:
     <<: *app-runtime
@@ -95,6 +123,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      secret-init:
+        condition: service_completed_successfully
 
   web:
     image: iicp-directory-operator-nginx:${IICP_IMAGE_TAG:-local}
@@ -126,11 +156,12 @@ services:
 volumes:
   app_storage:
   db_data:
+  runtime_secrets:
 
 secrets:
-  app_key:
+  app_key_input:
     file: ${IICP_APP_KEY_FILE:?set IICP_APP_KEY_FILE}
-  db_password:
+  db_password_input:
     file: ${IICP_DB_PASSWORD_FILE:?set IICP_DB_PASSWORD_FILE}
   db_root_password:
     file: ${IICP_DB_ROOT_PASSWORD_FILE:?set IICP_DB_ROOT_PASSWORD_FILE}
