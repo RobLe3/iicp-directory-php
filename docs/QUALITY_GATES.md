@@ -47,3 +47,22 @@ rules. `ERROR` findings fail CI. A false positive may be suppressed only on the
 affected line with the rule ID plus both `reason=...` and `issue=#N` (or a full
 GitHub issue URL). `scripts/check_semgrep_suppressions.py` rejects unaccountable
 suppressions. Prefer fixing or refining the rule over suppression.
+
+## Coverage and mutation policy
+
+The ordinary parity workflow records application-only Clover coverage and
+enforces both the reviewed repository floor and 80% coverage of changed
+executable PHP lines. Generated files, dependencies, tests, configuration,
+routes, and database scaffolding are outside the `app/` coverage denominator.
+The report is retained for 14 days.
+
+Targeted mutation testing is scheduled/manual rather than paid by every pull
+request. Its four scopes cover JWT/authorization, signed event logging,
+credits/economic integrity, and discovery/scoring. Reports are retained for 14
+days. A surviving mutant must be classified as an equivalent mutant, a test
+gap, or an intentional policy choice before thresholds change. Do not add
+assertion-free tests or tests that merely execute lines to inflate a metric.
+
+Coverage and mutation floors are ratchets. Lowering one requires a dedicated
+pull request, measured before/after evidence, maintainer review, and an issue
+explaining why strengthening tests first is not practical.
