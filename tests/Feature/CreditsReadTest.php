@@ -53,7 +53,7 @@ class CreditsReadTest extends TestCase
         $this->node->update(['credit_balance' => 2.5]);
 
         // JWT auth: GET endpoints carry no node_id body; JWT is the primary path.
-        $this->jwt = app(JwtService::class)->issue($this->node->id);
+        $this->jwt = app(JwtService::class)->issueNode($this->node->id);
     }
 
     // ── balance ──────────────────────────────────────────────────────────────

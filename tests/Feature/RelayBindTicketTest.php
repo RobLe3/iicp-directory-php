@@ -34,7 +34,7 @@ class RelayBindTicketTest extends TestCase
         ]);
         $resp->assertStatus(201);
 
-        return [$resp->json('node_id'), app(JwtService::class)->issue($resp->json('node_id'))];
+        return [$resp->json('node_id'), app(JwtService::class)->issueNode($resp->json('node_id'))];
     }
 
     public function test_relay_ticket_requires_node_auth(): void

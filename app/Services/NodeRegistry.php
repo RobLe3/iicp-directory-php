@@ -88,7 +88,7 @@ class NodeRegistry
                 'proxy_token' => $plainProxyToken,
                 'node_hmac_key' => $hmacKey,
                 'expires_at' => null,
-                'jwt_token' => $this->jwt->issue($node->id),
+                'jwt_token' => $this->jwt->issueNode($node->id),
                 'jwt_expires_at' => now()->addSeconds(3600)->toIso8601String(),
                 'directory' => config('app.url'),
                 'observed_source_ip' => $observedIp,

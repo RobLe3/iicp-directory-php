@@ -79,7 +79,7 @@ class FounderRecognitionE2ETest extends TestCase
 
         // 6. Operator wallet: give the bound node a balance → summary aggregates it by operator_id.
         $node->update(['credit_balance' => 5.0]);
-        $jwt = app(JwtService::class)->issue($nodeId);
+        $jwt = app(JwtService::class)->issueNode($nodeId);
         $this->withToken($jwt)->getJson('/api/v1/credits/summary')->assertStatus(200)
             ->assertJsonPath('operator_wallet.total_balance', 5)
             ->assertJsonPath('operator_wallet.node_count', 1);

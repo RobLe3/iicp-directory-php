@@ -56,7 +56,7 @@ class CreditSummaryTest extends TestCase
         Credit::create(['node_id' => $this->node->id, 'balance' => 11.0]);
         $this->node->update(['credit_balance' => 11.0]);
 
-        $this->jwt = app(JwtService::class)->issue($this->node->id);
+        $this->jwt = app(JwtService::class)->issueNode($this->node->id);
     }
 
     public function test_summary_reports_earned_spent_balance_and_reconciles(): void

@@ -5,10 +5,10 @@
 namespace App\Http\Controllers;
 
 use App\Models\Replica;
+use App\Services\JwtService;
 use App\Services\NodeEventLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -37,13 +37,14 @@ class ReplicasController extends Controller
         '169.254.0.0/16',
     ];
 
-    private const REPLICA_TOKEN_TTL_DAYS = 90;
-
     private const HTTP_TIMEOUT_SECONDS = 5;
 
     private const ALLOWED_TRUST_TIERS = ['low', 'medium', 'high'];
 
-    public function __construct(private NodeEventLogger $eventLogger) {}
+    public function __construct(
+        private NodeEventLogger $eventLogger,
+        private JwtService $jwt,
+    ) {}
 
     public function register(Request $request): JsonResponse
     {
@@ -78,11 +79,11 @@ class ReplicasController extends Controller
         // DIR-FED-13: idempotency on `did`. Re-registration rotates the token.
         $existing = Replica::where('did', $did)->first();
         if ($existing !== null) {
-            $newToken = $this->issueReplicaToken($existing->replica_id);
+            $newToken = $this->jwt->issueReplica($existing->replica_id);
             $existing->update([
                 'endpoint' => $endpoint,
                 'replica_token_hash' => hash('sha256', $newToken),
-                'expires_at' => now()->addDays(self::REPLICA_TOKEN_TTL_DAYS),
+                'expires_at' => now()->addSeconds(JwtService::REPLICA_TTL_SECONDS),
                 'last_seen_at' => now(),
             ]);
 
@@ -91,7 +92,7 @@ class ReplicasController extends Controller
 
         // First-time registration
         $replicaId = (string) Str::uuid();
-        $replicaToken = $this->issueReplicaToken($replicaId);
+        $replicaToken = $this->jwt->issueReplica($replicaId);
 
         $replica = Replica::create([
             'replica_id' => $replicaId,
@@ -99,7 +100,7 @@ class ReplicasController extends Controller
             'endpoint' => $endpoint,
             'trust_tier' => 'low', // always 'low' on first registration per spec §7.1
             'replica_token_hash' => hash('sha256', $replicaToken),
-            'expires_at' => now()->addDays(self::REPLICA_TOKEN_TTL_DAYS),
+            'expires_at' => now()->addSeconds(JwtService::REPLICA_TTL_SECONDS),
         ]);
 
         // Emit REPLICA_REGISTERED event so other replicas mirror this registration
@@ -288,34 +289,6 @@ class ReplicasController extends Controller
         $decoded = json_decode($body, true);
 
         return is_array($decoded) ? $decoded : null;
-    }
-
-    /**
-     * Issue a JWT with role: replica, scoped to GET /v1/events. 90-day TTL.
-     * The plaintext token is returned ONCE; only its SHA-256 hash is stored.
-     */
-    private function issueReplicaToken(string $replicaId): string
-    {
-        $header = $this->b64url(json_encode(['alg' => 'HS256', 'typ' => 'JWT']));
-        $now = time();
-        $payload = $this->b64url(json_encode([
-            'sub' => $replicaId,
-            'role' => 'replica',
-            'scope' => 'GET /v1/events',
-            'iss' => 'iicp.network',
-            'iat' => $now,
-            'exp' => $now + (self::REPLICA_TOKEN_TTL_DAYS * 86400),
-        ]));
-        $signingInput = "{$header}.{$payload}";
-        $secret = config('app.jwt_secret') ?: config('app.key');
-        $sig = $this->b64url(hash_hmac('sha256', $signingInput, $secret, true));
-
-        return "{$signingInput}.{$sig}";
-    }
-
-    private function b64url(string $input): string
-    {
-        return rtrim(strtr(base64_encode($input), '+/', '-_'), '=');
     }
 
     private function genesisHash(): string

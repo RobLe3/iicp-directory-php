@@ -6,6 +6,7 @@ use App\Models\Capability;
 use App\Models\Node;
 use App\Models\NodeEvent;
 use App\Models\Replica;
+use App\Services\JwtService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Tests\TestCase;
@@ -25,9 +26,16 @@ class SnapshotEndpointTest extends TestCase
         parent::setUp();
 
         $replicaId = 'rep-'.str_repeat('a', 32);
-        $this->validToken = $this->issueJwt(['sub' => $replicaId, 'role' => 'replica', 'exp' => time() + 3600]);
-        $this->expiredToken = $this->issueJwt(['sub' => $replicaId, 'role' => 'replica', 'exp' => time() - 60]);
-        $this->invalidRoleToken = $this->issueJwt(['sub' => 'some-node-id', 'role' => 'node', 'exp' => time() + 3600]);
+        $this->validToken = app(JwtService::class)->issueReplica($replicaId);
+        $this->expiredToken = $this->issueJwt([
+            'sub' => $replicaId,
+            'role' => 'replica',
+            'scope' => 'GET /v1/events',
+            'iss' => 'iicp.network',
+            'iat' => time() - 7200,
+            'exp' => time() - 60,
+        ]);
+        $this->invalidRoleToken = app(JwtService::class)->issueNode('some-node-id');
 
         Replica::create([
             'replica_id' => $replicaId,
@@ -80,7 +88,7 @@ class SnapshotEndpointTest extends TestCase
     {
         $resp = $this->withHeaders(['Authorization' => "Bearer {$this->invalidRoleToken}"])->getJson('/api/v1/snapshot');
         $resp->assertStatus(401);
-        $resp->assertJsonPath('error.message', 'Token is not a replica token');
+        $resp->assertJsonPath('error.message', 'Invalid replica token');
     }
 
     public function test_returns_snapshot_for_authenticated_replica(): void
