@@ -41,6 +41,19 @@ remain in a private temporary directory only with `--keep`; never commit them.
 Set `IICP_OPERATOR_REHEARSAL_OUTPUT` to copy only the content-free JSON result
 to a chosen private path before cleanup.
 
+For a real immutable previous-to-next check, run:
+
+```bash
+IICP_OPERATOR_UPGRADE_OUTPUT=/private/path/result.json \
+  scripts/rehearse_operator_upgrade.sh \
+  --previous-tag v1.10.78.1 --next-tag v1.10.79.1
+```
+
+This builds both tags in detached worktrees, upgrades through the explicit
+one-shot migration, restores the pre-upgrade database while rolling the
+application images back, verifies the previous migration status, then moves
+forward again. It is disposable and does not authorize production adoption.
+
 ## Verify a public source release
 
 Before preparing an operator artifact, verify both checksum and provenance:

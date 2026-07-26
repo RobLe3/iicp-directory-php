@@ -63,6 +63,7 @@ jobs:
       - run: python3 scripts/check_semgrep_suppressions.py
       - run: python3 -m unittest scripts/test_semgrep_suppression_policy.py
       - run: python3 -m unittest scripts/test_coverage_floor.py
+      - run: python3 -m unittest scripts/test_operator_upgrade_rehearsal.py
       - run: python3 -m pip install 'semgrep==1.164.0'
       - run: semgrep scan --config .semgrep/php-security.yml --severity ERROR --error app routes config database
 
