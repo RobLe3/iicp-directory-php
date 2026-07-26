@@ -30,8 +30,6 @@ jobs:
       - run: composer install --no-interaction --prefer-dist
       - run: composer audit --locked --no-interaction
       - run: php artisan test --compact
-      # The pinned manifest is generated and verified from the seed workspace
-      # before each mirror release. Cross-repository checkout is deliberately
-      # avoided here because the default Actions token cannot read another
-      # private repository without an additional secret.
-      - run: python3 scripts/check_seed_parity.py --manifest parity/seed-manifest-v1.10.76.1.json --php-dir .
+      # The pinned manifest records the reviewed source and contract snapshot.
+      # Verification is self-contained and needs no private repository access.
+      - run: python3 scripts/check_seed_parity.py --manifest parity/seed-manifest-v1.10.76.2.json --php-dir .
