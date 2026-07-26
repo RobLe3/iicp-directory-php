@@ -19,7 +19,7 @@ class OpenApiMetadataTest extends TestCase
         );
         $this->assertStringNotContainsString('name: MIT', $openApi);
         $this->assertMatchesRegularExpression(
-            '/The info\.version value versions this\s+documented OpenAPI contract/',
+            '/The\s+info\.version value versions this\s+documented OpenAPI contract/',
             $openApi,
         );
 

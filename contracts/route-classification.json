@@ -1,0 +1,536 @@
+{
+  "schema": "iicp.directory.route-classification.v1",
+  "routes": [
+    {
+      "method": "GET",
+      "uri": ".well-known/did.json",
+      "classification": "development_only",
+      "openapi_path": null,
+      "middleware": [
+        "web"
+      ],
+      "rationale": "Development/testbed DID helper; production serves static DID metadata."
+    },
+    {
+      "method": "GET",
+      "uri": "/",
+      "classification": "reference_landing",
+      "openapi_path": null,
+      "middleware": [
+        "web"
+      ],
+      "rationale": "Reference application landing route, not an API operation."
+    },
+    {
+      "method": "POST",
+      "uri": "api/_deploy/migrate",
+      "classification": "deployment_internal",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:6,1"
+      ],
+      "rationale": "HMAC-gated deployment control outside the public protocol contract."
+    },
+    {
+      "method": "GET",
+      "uri": "api/metrics",
+      "classification": "operator_observability",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:30,1"
+      ],
+      "rationale": "Operator-only Prometheus surface outside the versioned protocol contract."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/audit-report",
+      "classification": "telemetry_compliance_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\NodeTokenAuth",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Telemetry/compliance extension retained as runtime API but excluded from the core OpenAPI projection pending a reviewed extension schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/badge/{tier}",
+      "classification": "public_directory_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Supported public directory extension explicitly excluded from the core projection pending its reviewed response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/bootstrap",
+      "classification": "federation_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\LoadRedirect",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Federation/preparation extension retained as runtime API but excluded until its normative OpenAPI schema is reviewed."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/compliance-attestation",
+      "classification": "telemetry_compliance_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:30,1"
+      ],
+      "rationale": "Telemetry/compliance extension retained as runtime API but excluded from the core OpenAPI projection pending a reviewed extension schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/conformance/badges",
+      "classification": "public_directory_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:30,1"
+      ],
+      "rationale": "Supported public directory extension explicitly excluded from the core projection pending its reviewed response schema."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/conformance/submit",
+      "classification": "public_directory_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:30,1"
+      ],
+      "rationale": "Supported public directory extension explicitly excluded from the core projection pending its reviewed response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/conformance/verify",
+      "classification": "public_directory_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:30,1"
+      ],
+      "rationale": "Supported public directory extension explicitly excluded from the core projection pending its reviewed response schema."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/consumer-token",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\NodeTokenAuth",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:consumer-token"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/credits/award",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\NodeTokenAuth"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/credits/balance",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\NodeTokenAuth"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/credits/quote",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\NodeTokenAuth"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/credits/summary",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\NodeTokenAuth"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/credits/transactions",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\NodeTokenAuth"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/directory-key",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/discover",
+      "classification": "supported_protocol_api",
+      "openapi_path": "/discover",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\LoadRedirect",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/dispatch/ticket",
+      "classification": "supported_protocol_api",
+      "openapi_path": "/dispatch/ticket",
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/events",
+      "classification": "federation_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api"
+      ],
+      "rationale": "Federation/preparation extension retained as runtime API but excluded until its normative OpenAPI schema is reviewed."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/heartbeat",
+      "classification": "supported_protocol_api",
+      "openapi_path": "/heartbeat",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\NodeTokenAuth",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:heartbeat"
+      ],
+      "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/leaderboards/{board_id}",
+      "classification": "public_directory_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Supported public directory extension explicitly excluded from the core projection pending its reviewed response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/me",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\NodeTokenAuth"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/node/{id}",
+      "classification": "supported_protocol_api",
+      "openapi_path": "/node/{id}",
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\LoadRedirect",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/operator/acceptance",
+      "classification": "supported_protocol_api",
+      "openapi_path": "/operator/acceptance",
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:5,1"
+      ],
+      "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/operator/challenge",
+      "classification": "supported_protocol_api",
+      "openapi_path": "/operator/challenge",
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:10,1"
+      ],
+      "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/operator/dsr/anonymize",
+      "classification": "supported_protocol_api",
+      "openapi_path": "/operator/dsr/anonymize",
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:5,1"
+      ],
+      "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/operator/dsr/export",
+      "classification": "supported_protocol_api",
+      "openapi_path": "/operator/dsr/export",
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:5,1"
+      ],
+      "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/operator/dsr/restrict",
+      "classification": "supported_protocol_api",
+      "openapi_path": "/operator/dsr/restrict",
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:5,1"
+      ],
+      "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/operator/key/revoke",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:5,1"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/operator/key/rotate",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:5,1"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/operator/rename",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/peers",
+      "classification": "federation_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\NodeTokenAuth"
+      ],
+      "rationale": "Federation/preparation extension retained as runtime API but excluded until its normative OpenAPI schema is reviewed."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/probe",
+      "classification": "telemetry_compliance_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:10,1"
+      ],
+      "rationale": "Telemetry/compliance extension retained as runtime API but excluded from the core OpenAPI projection pending a reviewed extension schema."
+    },
+    {
+      "method": "DELETE",
+      "uri": "api/v1/register",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\NodeTokenAuth"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/register",
+      "classification": "supported_protocol_api",
+      "openapi_path": "/register",
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:register"
+      ],
+      "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/registry/intents",
+      "classification": "public_directory_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Supported public directory extension explicitly excluded from the core projection pending its reviewed response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/registry/nodes",
+      "classification": "public_directory_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Supported public directory extension explicitly excluded from the core projection pending its reviewed response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/registry/nodes/{prefix}",
+      "classification": "public_directory_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Supported public directory extension explicitly excluded from the core projection pending its reviewed response schema."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/registry/stats",
+      "classification": "public_directory_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
+      ],
+      "rationale": "Supported public directory extension explicitly excluded from the core projection pending its reviewed response schema."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/relay/ticket",
+      "classification": "authenticated_protocol_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\NodeTokenAuth",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:consumer-token"
+      ],
+      "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/replicas/register",
+      "classification": "federation_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:5,60"
+      ],
+      "rationale": "Federation/preparation extension retained as runtime API but excluded until its normative OpenAPI schema is reviewed."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/snapshot",
+      "classification": "federation_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\ReplicaTokenAuth",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:5,60"
+      ],
+      "rationale": "Federation/preparation extension retained as runtime API but excluded until its normative OpenAPI schema is reviewed."
+    },
+    {
+      "method": "GET",
+      "uri": "api/v1/stats",
+      "classification": "public_directory_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api"
+      ],
+      "rationale": "Supported public directory extension explicitly excluded from the core projection pending its reviewed response schema."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/telemetry",
+      "classification": "telemetry_compliance_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\ProxyTokenAuth"
+      ],
+      "rationale": "Telemetry/compliance extension retained as runtime API but excluded from the core OpenAPI projection pending a reviewed extension schema."
+    },
+    {
+      "method": "POST",
+      "uri": "api/v1/telemetry/probe",
+      "classification": "telemetry_compliance_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\ProbeTokenAuth"
+      ],
+      "rationale": "Telemetry/compliance extension retained as runtime API but excluded from the core OpenAPI projection pending a reviewed extension schema."
+    },
+    {
+      "method": "GET",
+      "uri": "iicp/health",
+      "classification": "federation_liveness",
+      "openapi_path": null,
+      "middleware": [
+        "web"
+      ],
+      "rationale": "Unversioned federation liveness convention, not a protocol data operation."
+    }
+  ]
+}
