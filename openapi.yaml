@@ -5,10 +5,12 @@ info:
   description: >
     IICP directory service — node registration, heartbeat, discovery, and
     node detail. Traffic NEVER routes through the directory; it is
-    bootstrap and discovery only. See spec/iicp-dir.md for the normative
-    sub-protocol specification. The info.version value versions this
-    documented OpenAPI contract; runtime and parity-evidence versions are
-    tracked separately.
+    bootstrap and discovery only. The IICP specification is normative;
+    this OpenAPI document is a machine-readable projection of the supported
+    HTTP contract and must not silently override the specification. The
+    info.version value versions this documented OpenAPI contract; runtime,
+    schema, deployment, and historical parity-evidence versions are tracked
+    separately.
   contact:
     url: https://iicp.network
   license:
@@ -16,7 +18,7 @@ info:
     identifier: Apache-2.0
 
 servers:
-  - url: https://iicp.network/v1
+  - url: https://iicp.network/api/v1
     description: Production
 
 tags:
@@ -36,7 +38,7 @@ paths:
       description: >
         Called by a provider node at startup. Returns a node_token that
         MUST be used on all subsequent heartbeat calls. Rate-limited to
-        10 requests per minute per IP.
+        60 requests per minute per IP in production.
       requestBody:
         required: true
         content:
@@ -54,7 +56,7 @@ paths:
                 max_concurrent: 4
                 tokens_per_min: 20000
       responses:
-        "200":
+        "201":
           description: Registration successful
           content:
             application/json:
@@ -124,14 +126,14 @@ paths:
           required: true
           schema:
             type: string
-            pattern: "^urn:iicp:intent:[a-z0-9_-]+:[a-z0-9_-]+:v[0-9]+$"
+            pattern: "^urn:iicp:intent:(?:[a-z][a-z0-9_]*|x\\.[a-z][a-z0-9-]*):[a-z][a-z0-9_-]*:v[1-9][0-9]*$"
           example: "urn:iicp:intent:llm:chat:v1"
         - name: qos
           in: query
           required: false
           schema:
             type: string
-            enum: [interactive, batch, best-effort]
+            enum: [realtime, interactive, batch, best-effort]
             default: interactive
         - name: region
           in: query
@@ -165,9 +167,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "../spec/schemas/nodelist.json"
-        "400":
-          $ref: "#/components/responses/BadRequest"
+                $ref: "#/components/schemas/DiscoveryResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /dispatch/ticket:
     post:
@@ -186,11 +190,20 @@ paths:
             schema:
               type: object
               required: [intent]
-              additionalProperties: false
               properties:
                 intent: { type: string }
+                qos: { type: string, enum: [realtime, interactive, batch, best-effort] }
                 region: { type: string }
+                model: { type: [string, "null"], maxLength: 128 }
                 min_reputation: { type: number, minimum: 0, maximum: 1 }
+                limit: { type: integer, minimum: 1, maximum: 50 }
+                max_multiplier: { type: number, minimum: 0 }
+                min_quality_score: { type: number, minimum: 0, maximum: 1 }
+                cip_capable: { type: boolean }
+                relay_capable: { type: boolean }
+                include_internal: { type: boolean }
+                modality: { type: string, enum: [text, image, audio, video] }
+                score_version: { type: string, enum: [v2_shadow] }
                 node_id: { type: string }
                 node_id_prefix: { type: string, minLength: 4, maxLength: 36 }
                 exclude_node_id_prefixes:
@@ -209,6 +222,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "503":
           description: Directory ticket signing is not configured
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /operator/challenge:
     post:
@@ -259,23 +274,16 @@ paths:
         "200": { description: Redacted acceptance receipt; Cache-Control is no-store }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "409": { description: Acceptance version is no longer current }
+        "429": { $ref: "#/components/responses/RateLimited" }
 
-  /operator/dsr/{action}:
+  /operator/dsr/export:
     post:
-      operationId: operatorDataSubjectRequest
+      operationId: exportOperatorData
       tags: [operator]
-      summary: Export, restrict or anonymize operator-linked records
+      summary: Export operator-linked records
       description: >
-        Operator-key authenticated self-service. action is export, restrict or
-        anonymize. Mutating actions require confirm=true. The authenticated
-        operator key is always the selector, preventing cross-operator access.
-        Results are no-store and redacted: they never include prompts, node or
-        proxy tokens, HMAC keys, raw endpoint secrets, or a full operator key.
-      parameters:
-        - name: action
-          in: path
-          required: true
-          schema: { type: string, enum: [export, restrict, anonymize] }
+        Operator-key authenticated self-service. The authenticated operator
+        key is always the selector. Results are no-store and redacted.
       requestBody:
         required: true
         content:
@@ -291,6 +299,53 @@ paths:
         "200": { description: Redacted DSR result; Cache-Control is no-store }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /operator/dsr/restrict:
+    post:
+      operationId: restrictOperatorData
+      tags: [operator]
+      summary: Restrict operator-linked records
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/OperatorSignedRequest"
+                - type: object
+                  required: [confirm]
+                  properties:
+                    tracking_id: { type: string, maxLength: 64 }
+                    confirm: { type: boolean, const: true }
+      responses:
+        "200": { description: Redacted DSR result; Cache-Control is no-store }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /operator/dsr/anonymize:
+    post:
+      operationId: anonymizeOperatorData
+      tags: [operator]
+      summary: Anonymize operator-linked records
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/OperatorSignedRequest"
+                - type: object
+                  required: [confirm]
+                  properties:
+                    tracking_id: { type: string, maxLength: 64 }
+                    confirm: { type: boolean, const: true }
+      responses:
+        "200": { description: Redacted DSR result; Cache-Control is no-store }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
 
   /node/{id}:
     get:
@@ -303,7 +358,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
+            pattern: "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,35}$"
       responses:
         "200":
           description: Node detail
@@ -313,6 +368,8 @@ paths:
                 $ref: "#/components/schemas/NodeDetail"
         "404":
           $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
 components:
   securitySchemes:
@@ -333,12 +390,18 @@ components:
     NodeRegistration:
       type: object
       required: [endpoint, region, capabilities, limits]
-      additionalProperties: false
       properties:
+        node_id:
+          type: string
+          pattern: "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,35}$"
         endpoint:
           type: string
           format: uri
-          description: HTTPS base URL where this node accepts tasks.
+          description: Routable HTTP or HTTPS base URL where this node accepts tasks.
+        transport_endpoint:
+          type: [string, "null"]
+          format: uri
+          description: Optional routable iicp or iicpsec native transport URL.
         region:
           type: string
           description: Geographic region hint (e.g. eu-central, us-east). Required for Phase 1 discovery routing.
@@ -363,7 +426,7 @@ components:
       properties:
         intent:
           type: string
-          pattern: "^urn:iicp:intent:[a-z0-9_-]+:[a-z0-9_-]+:v[0-9]+$"
+          pattern: "^urn:iicp:intent:(?:[a-z][a-z0-9_]*|x\\.[a-z][a-z0-9-]*):[a-z][a-z0-9_-]*:v[1-9][0-9]*$"
         models:
           type: array
           minItems: 1
@@ -380,6 +443,7 @@ components:
         max_concurrent:
           type: integer
           minimum: 1
+          maximum: 256
         tokens_per_min:
           type: integer
           minimum: 1
@@ -406,7 +470,7 @@ components:
       properties:
         node_id:
           type: string
-          format: uuid
+          pattern: "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,35}$"
         node_token:
           type: string
           minLength: 32
@@ -414,8 +478,6 @@ components:
 
     HeartbeatRequest:
       type: object
-      required: [load, active_jobs]
-      additionalProperties: false
       properties:
         load:
           type: number
@@ -426,13 +488,38 @@ components:
           type: integer
           minimum: 0
 
+    DiscoveryResponse:
+      type: object
+      required:
+        - nodes
+        - count
+        - relay_available
+        - query_ms
+        - view
+        - data_class
+        - route_fields_present
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        count: { type: integer, minimum: 0 }
+        relay_available: { type: boolean }
+        query_ms: { type: number, minimum: 0 }
+        view: { type: string, enum: [dispatch, public] }
+        data_class: { type: string, enum: [route_dispatch, public_presentation] }
+        route_fields_present: { type: boolean }
+        dispatch_ticket_endpoint: { type: string }
+        ticketed_dispatch_available: { type: boolean }
+
     NodeDetail:
       type: object
       required: [node_id, endpoint, score, available]
       properties:
         node_id:
           type: string
-          format: uuid
+          pattern: "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,35}$"
         endpoint:
           type: string
           format: uri

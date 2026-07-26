@@ -36,6 +36,7 @@ credentials from the public Genesis Seed.
 ```bash
 composer install --no-interaction --prefer-dist
 php artisan test --compact
+php artisan test --compact tests/Feature/OpenApiContractTest.php
 python3 scripts/check_seed_parity.py \
   --manifest parity/seed-manifest-v1.10.76.2.json \
   --php-dir . \
@@ -71,8 +72,12 @@ one release sequence:
 - telemetry, health evidence and conformance badges.
 
 See `routes/api_protocol.php`, `routes/api_public.php`, and `openapi.yaml` for
-the implementation surface. The IICP specification remains authoritative when
-documentation and code disagree.
+the implementation surface. The IICP specification is normative and OpenAPI is
+its machine-readable HTTP projection; a contradiction between runtime and
+OpenAPI is a contract defect, not permission to choose whichever behavior is
+convenient. `contracts/route-classification.json` records every application
+route and gives a reviewed reason for surfaces intentionally excluded from the
+current OpenAPI projection.
 
 ## Configuration and operations
 
