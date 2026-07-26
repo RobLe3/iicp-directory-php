@@ -56,12 +56,12 @@ one release sequence:
 
 - `openapi: 3.1.0` selects the OpenAPI format;
 - `info.version: 1.6.0` versions the documented OpenAPI contract;
-- runtime `v1.10.77` identifies the current application release; and
+- runtime `v1.10.77.1` identifies the current application release; and
 - parity manifest `v1.10.76.2` identifies the final historical extraction
   snapshot from the earlier seed source.
 
 The public repository is the source authority for releases beginning with
-`v1.10.77`. See `RELEASE_POLICY.md` for compatibility, verification and
+`v1.10.77.1`. See `RELEASE_POLICY.md` for compatibility, verification and
 support rules.
 
 ## Major protocol surfaces

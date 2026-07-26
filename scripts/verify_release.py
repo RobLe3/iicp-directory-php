@@ -48,8 +48,10 @@ def verify(version: str, allow_untagged: bool) -> dict[str, object]:
     config = (ROOT / "config/app.php").read_text()
     if f"'iicp_version' => 'v{version}'" not in config:
         raise RuntimeError("config/app.php runtime version does not match VERSION")
-    if run("git", "status", "--porcelain"):
-        raise RuntimeError("release verification requires a clean checkout")
+    if subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=ROOT).returncode != 0:
+        raise RuntimeError("release verification requires no tracked source changes")
+    if subprocess.run(["git", "diff", "--cached", "--quiet", "HEAD", "--"], cwd=ROOT).returncode != 0:
+        raise RuntimeError("release verification requires no staged source changes")
 
     head = run("git", "rev-parse", "HEAD")
     tag = f"v{version}"

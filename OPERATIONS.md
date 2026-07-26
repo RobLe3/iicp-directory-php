@@ -9,7 +9,7 @@ Before preparing an operator artifact, verify both checksum and provenance:
 
 ```bash
 sha256sum --check SHA256SUMS
-gh attestation verify iicp-directory-php-v1.10.77.tar.gz \
+gh attestation verify iicp-directory-php-v1.10.77.1.tar.gz \
   --repo RobLe3/iicp-directory-php
 ```
 
