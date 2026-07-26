@@ -178,6 +178,30 @@ class NodeUptimeTest extends TestCase
         );
     }
 
+    public function test_batched_health_scores_match_single_node_lifecycle_contracts(): void
+    {
+        $withEvidence = $this->makeNode();
+        $withoutEvidence = $this->makeNode();
+        $service = new UptimeService;
+        $base = (int) (microtime(true) * 1000) - 3_600_000;
+
+        $this->seedEvent($withEvidence->id, 'REGISTER', $base);
+        $this->seedEvent($withEvidence->id, 'EVICT', $base + 1_800_000);
+        $this->seedEvent($withEvidence->id, 'REACTIVATE', $base + 2_000_000);
+
+        $batch = $service->healthScoresForNodes([
+            $withEvidence->id,
+            $withoutEvidence->id,
+            $withEvidence->id,
+            '',
+        ]);
+
+        $this->assertSame([$withEvidence->id, $withoutEvidence->id], array_keys($batch));
+        $this->assertSame($service->uptimeScoreForNode($withEvidence->id), $batch[$withEvidence->id]['uptime']);
+        $this->assertSame($service->stabilityScoreForNode($withEvidence->id), $batch[$withEvidence->id]['stability']);
+        $this->assertSame(['uptime' => null, 'stability' => null], $batch[$withoutEvidence->id]);
+    }
+
     // ── Duration gate progress fields ─────────────────────────────────────────
     // These fields show how far toward the next rank's UPTIME DURATION threshold.
     // Rank assignment is operator-scoped (operators table); these are informational only.
