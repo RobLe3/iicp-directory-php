@@ -69,10 +69,12 @@ Coverage and mutation floors are ratchets. Lowering one requires a dedicated
 pull request, measured before/after evidence, maintainer review, and an issue
 explaining why strengthening tests first is not practical.
 
-The initial calibration measured JWT/authorization at 100% MSI, signed events
-at 80.85%, and credits at 44.12% when its 38 timeouts are conservatively
-treated as escapes. Their rounded-down starting floors are respectively 100%,
-80%, and 40%. The original discovery run time-skipped all mutants because its
+The valid covering-test-only calibration measured JWT/authorization at 87.06%
+MSI, signed events at 80.85%, and credits at 44.48%. Their rounded-down
+starting floors are respectively 85%, 80%, and 40%. The original discovery run
+time-skipped all mutants because its
 covering tests exceeded the default 10-second nominal-test limit; the reviewed
-60-second limit and covering-test-only mode must produce a valid non-zero
-discovery floor before this lane is merged.
+60-second limit and covering-test-only mode produced a valid 31.63% MSI, so
+the initial discovery/scoring floor is 30%. This low starting point is explicit
+test debt to ratchet upward as issue #15 extracts smaller scoring policies; it
+is not evidence that surviving policy mutations are acceptable.
