@@ -253,12 +253,6 @@ parameters:
 			path: app/Services/NodeScorer.php
 
 		-
-			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$end_time\.$#'
-			identifier: property.notFound
-			count: 1
-			path: app/Services/NodeScorer.php
-
-		-
 			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$observed_latency_ms\.$#'
 			identifier: property.notFound
 			count: 1
@@ -268,18 +262,6 @@ parameters:
 			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$score\.$#'
 			identifier: property.notFound
 			count: 5
-			path: app/Services/NodeScorer.php
-
-		-
-			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$share\.$#'
-			identifier: property.notFound
-			count: 1
-			path: app/Services/NodeScorer.php
-
-		-
-			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$start_time\.$#'
-			identifier: property.notFound
-			count: 1
 			path: app/Services/NodeScorer.php
 
 		-

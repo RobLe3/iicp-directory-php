@@ -4,6 +4,7 @@ namespace Tests\Unit;
 
 use App\Models\Capability;
 use App\Models\Node;
+use App\Services\AvailabilityWindowPolicy;
 use App\Services\CapabilityEvidencePolicy;
 use App\Services\NodeHealthService;
 use App\Services\NodeScorer;
@@ -21,7 +22,11 @@ class NodeScorerCapabilityEvidenceCharacterizationTest extends TestCase
     ): void {
         $node = $this->node($healthModels);
         $policy = new CapabilityEvidencePolicy;
-        $scorer = new NodeScorer($this->createMock(NodeHealthService::class), $policy);
+        $scorer = new NodeScorer(
+            $this->createMock(NodeHealthService::class),
+            $policy,
+            new AvailabilityWindowPolicy,
+        );
 
         $summary = $scorer->capabilitySummary($node);
 

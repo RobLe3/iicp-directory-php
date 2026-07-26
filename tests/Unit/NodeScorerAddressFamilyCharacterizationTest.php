@@ -2,6 +2,7 @@
 
 namespace Tests\Unit;
 
+use App\Services\AvailabilityWindowPolicy;
 use App\Services\CapabilityEvidencePolicy;
 use App\Services\NodeHealthService;
 use App\Services\NodeScorer;
@@ -17,7 +18,11 @@ class NodeScorerAddressFamilyCharacterizationTest extends TestCase
         ?string $transportEndpoint,
         string $expected,
     ): void {
-        $scorer = new NodeScorer($this->createMock(NodeHealthService::class), new CapabilityEvidencePolicy);
+        $scorer = new NodeScorer(
+            $this->createMock(NodeHealthService::class),
+            new CapabilityEvidencePolicy,
+            new AvailabilityWindowPolicy,
+        );
         $method = new ReflectionMethod($scorer, 'detectAddressFamily');
 
         $this->assertSame($expected, $method->invoke($scorer, $endpoint, $transportEndpoint));

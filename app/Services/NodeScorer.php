@@ -109,6 +109,7 @@ class NodeScorer
     public function __construct(
         private NodeHealthService $health,
         private CapabilityEvidencePolicy $capabilityEvidence,
+        private AvailabilityWindowPolicy $availabilityWindows,
     ) {}
 
     public function discover(
@@ -1243,7 +1244,7 @@ class NodeScorer
 
     private function scoreNode(Node $node, ?string $requestedRegion, ?string $requestedModel = null): array
     {
-        $availabilityScore = $this->computeAvailability($node);
+        $availabilityScore = $this->availabilityWindows->score($node);
         $loadScore = 1.0 - min($node->load, 1.0);
         $capacityScore = $node->max_concurrent > 0
             ? 1.0 - ($node->active_jobs / $node->max_concurrent)
@@ -1335,25 +1336,6 @@ class NodeScorer
                 'policy_fit' => round($policy, 4),
             ],
         ];
-    }
-
-    private function computeAvailability(Node $node): float
-    {
-        $windows = $node->availabilityWindows;
-
-        if ($windows->isEmpty()) {
-            return 1.0;
-        }
-
-        $nowTime = now()->format('H:i:s');
-
-        foreach ($windows as $window) {
-            if ($nowTime >= $window->start_time && $nowTime <= $window->end_time) {
-                return (float) $window->share;
-            }
-        }
-
-        return 0.5;
     }
 
     /**

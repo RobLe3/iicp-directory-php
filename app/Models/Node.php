@@ -169,6 +169,7 @@ class Node extends Model
         return $this->hasMany(Capability::class);
     }
 
+    /** @return HasMany<AvailabilityWindow, $this> */
     public function availabilityWindows(): HasMany
     {
         return $this->hasMany(AvailabilityWindow::class);
