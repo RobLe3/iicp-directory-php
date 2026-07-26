@@ -1,22 +1,10 @@
 parameters:
 	ignoreErrors:
 		-
-			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
-			identifier: larastan.noEnvCallsOutsideOfConfig
-			count: 2
-			path: app/Console/Commands/ReplicaPreflightCommand.php
-
-		-
 			message: '#^Called ''pluck'' on Laravel collection, but could have been retrieved as a query\.$#'
 			identifier: larastan.noUnnecessaryCollectionCall
 			count: 1
 			path: app/Http/Controllers/AuditReportController.php
-
-		-
-			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
-			identifier: larastan.noEnvCallsOutsideOfConfig
-			count: 1
-			path: app/Http/Controllers/ConformanceController.php
 
 		-
 			message: '#^Constant App\\Http\\Controllers\\ConformanceController\:\:MAX_EXPIRY_DAYS is unused\.$#'
@@ -161,12 +149,6 @@ parameters:
 			identifier: property.onlyWritten
 			count: 1
 			path: app/Http/Controllers/TelemetryController.php
-
-		-
-			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
-			identifier: larastan.noEnvCallsOutsideOfConfig
-			count: 1
-			path: app/Http/Middleware/SignReplicaResponse.php
 
 		-
 			message: '#^Strict comparison using \!\=\= between Carbon\\Carbon and null will always evaluate to true\.$#'
