@@ -4,6 +4,7 @@
 
 namespace App\Console\Commands;
 
+use App\Services\RuntimeSecretProvider;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 
@@ -30,6 +31,11 @@ use Illuminate\Support\Facades\Http;
  */
 class ReplicaPreflightCommand extends Command
 {
+    public function __construct(private readonly RuntimeSecretProvider $secrets)
+    {
+        parent::__construct();
+    }
+
     protected $signature = 'iicp:replica-preflight '
         .'{--seed-url= : Genesis Seed base URL} '
         .'{--did= : This replica\'s did:web identifier} '
@@ -139,7 +145,7 @@ class ReplicaPreflightCommand extends Command
     private function checkSecretKey(): void
     {
         $this->line('<fg=cyan>[2/5] Ed25519 secret key</fg=cyan>');
-        $key = (string) env('IICP_REPLICA_ED25519_SECRET_KEY', '');
+        $key = $this->secrets->get(RuntimeSecretProvider::REPLICA_ED25519_SECRET_KEY) ?? '';
         if ($key === '') {
             $this->markFail(
                 'IICP_REPLICA_ED25519_SECRET_KEY is not set',
@@ -252,7 +258,7 @@ class ReplicaPreflightCommand extends Command
                     if ($x && $x !== 'GENESIS_KEY_PENDING') {
                         $found = true;
                         // Cross-check against our private key
-                        $privHex = (string) env('IICP_REPLICA_ED25519_SECRET_KEY', '');
+                        $privHex = $this->secrets->get(RuntimeSecretProvider::REPLICA_ED25519_SECRET_KEY) ?? '';
                         if (strlen($privHex) === 128 && ctype_xdigit($privHex)) {
                             $expectedPub = sodium_crypto_sign_publickey_from_secretkey(sodium_hex2bin($privHex));
                             $expectedB64 = rtrim(strtr(base64_encode($expectedPub), '+/', '-_'), '=');

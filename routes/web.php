@@ -1,6 +1,7 @@
 <?php
 
 use App\Services\OperatorReadiness;
+use App\Services\RuntimeSecretProvider;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -52,7 +53,8 @@ Route::get('/.well-known/did.json', function () {
         abort(404);
     }
 
-    $doc = env('IICP_DEV_DID_DOCUMENT_JSON', '');
+    $secrets = app(RuntimeSecretProvider::class);
+    $doc = $secrets->get(RuntimeSecretProvider::DEV_DID_DOCUMENT_JSON) ?? '';
     if ($doc !== '') {
         return response($doc, 200, ['Content-Type' => 'application/json']);
     }
@@ -64,7 +66,7 @@ Route::get('/.well-known/did.json', function () {
     // seed's join handshake (E040) resolves from did:web:replica-... /.well-known/did.json.
     $hexKey = config('app.genesis_ed25519_secret_key');
     if (! is_string($hexKey) || strlen($hexKey) !== 128 || ! ctype_xdigit($hexKey)) {
-        $hexKey = env('IICP_REPLICA_ED25519_SECRET_KEY');
+        $hexKey = $secrets->get(RuntimeSecretProvider::REPLICA_ED25519_SECRET_KEY);
     }
     if (! is_string($hexKey) || strlen($hexKey) !== 128 || ! ctype_xdigit($hexKey)) {
         abort(404);

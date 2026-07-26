@@ -6,6 +6,7 @@ namespace App\Http\Controllers;
 
 use App\Models\ConformanceBadge;
 use App\Services\ConformanceBadgeValidator;
+use App\Services\RuntimeSecretProvider;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -39,6 +40,8 @@ use Illuminate\Http\Request;
  */
 class ConformanceController extends Controller
 {
+    public function __construct(private readonly RuntimeSecretProvider $secrets) {}
+
     // BADGE-03: 90-day TTL; accept up to 1 day over for clock skew
     private const MAX_EXPIRY_DAYS = 91;
 
@@ -228,7 +231,7 @@ class ConformanceController extends Controller
 
     private function loadGenesisSecretKey(): ?string
     {
-        $encoded = env('GENESIS_SEED_SECRET_KEY');
+        $encoded = $this->secrets->get(RuntimeSecretProvider::GENESIS_SEED_SECRET_KEY);
         if (! $encoded) {
             return null;
         }

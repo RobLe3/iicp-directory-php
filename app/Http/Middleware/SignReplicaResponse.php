@@ -5,6 +5,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\NodeEvent;
+use App\Services\RuntimeSecretProvider;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -40,6 +41,8 @@ use Symfony\Component\HttpFoundation\Response;
  */
 class SignReplicaResponse
 {
+    public function __construct(private readonly RuntimeSecretProvider $secrets) {}
+
     private const SIGNED_PATH_PREFIXES = [
         '/api/v1/discover',
         '/api/v1/node/',
@@ -59,7 +62,7 @@ class SignReplicaResponse
             return $next($request);
         }
 
-        $secretHex = (string) env('IICP_REPLICA_ED25519_SECRET_KEY', '');
+        $secretHex = $this->secrets->get(RuntimeSecretProvider::REPLICA_ED25519_SECRET_KEY) ?? '';
         if (strlen($secretHex) !== 128) {
             return response()->json([
                 'error' => [
