@@ -23,7 +23,7 @@ class OpenApiMetadataTest extends TestCase
             $openApi,
         );
 
-        foreach (['openapi: 3.1.0', 'info.version: 1.6.0', 'v1.10.77', 'v1.10.76.2'] as $version) {
+        foreach (['openapi: 3.1.0', 'info.version: 1.6.0', 'v1.10.77.1', 'v1.10.76.2'] as $version) {
             $this->assertStringContainsString($version, $readme);
         }
     }

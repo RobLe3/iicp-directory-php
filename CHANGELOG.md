@@ -1,6 +1,10 @@
 # Changelog
 
-## v1.10.77 — 2026-07-26
+## v1.10.77.1 — 2026-07-26
+
+Corrective first publication after the v1.10.77 tag workflow stopped before producing any release assets. The v1.10.77 tag is retained as failed provenance and must not be moved.
+
+## v1.10.77 — 2026-07-26 (unpublished candidate)
 
 - Established the standalone public repository as release source authority.
 - Serialized signed lifecycle-event appends with a durable chain head.
