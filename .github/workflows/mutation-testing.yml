@@ -22,7 +22,10 @@ concurrency:
 
 jobs:
   targeted-mutation:
-    if: github.event_name != 'pull_request' || github.head_ref == 'quality/coverage-mutation-ratchets'
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.head_ref == 'quality/coverage-mutation-ratchets' ||
+      github.head_ref == 'refactor/node-readiness-policy'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
