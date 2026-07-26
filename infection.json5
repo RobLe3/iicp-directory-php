@@ -8,6 +8,7 @@
     "configDir": "."
   },
   "tmpDir": "storage/framework/cache/infection",
+  "timeout": 60,
   "mutators": {
     "@default": true
   }
