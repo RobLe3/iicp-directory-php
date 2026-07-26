@@ -60,7 +60,9 @@ jobs:
             min_msi: 30
             max_timeouts: 0
             paths: >-
+              app/Services/CapabilityEvidencePolicy.php
               app/Services/NodeScorer.php
+              tests/Unit/NodeScorerCapabilityEvidenceCharacterizationTest.php
               tests/Feature/DiscoverTest.php
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
