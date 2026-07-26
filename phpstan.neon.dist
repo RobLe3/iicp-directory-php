@@ -1,0 +1,14 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+    - vendor/nesbot/carbon/extension.neon
+    # Reviewed debt snapshot. Exact messages, counts, and paths ensure that
+    # any new or moved finding fails instead of silently joining the baseline.
+    - phpstan-baseline.neon
+
+parameters:
+    paths:
+        - app
+    level: 5
+    tmpDir: storage/framework/cache/phpstan
+    parallel:
+        maximumNumberOfProcesses: 4
