@@ -625,7 +625,10 @@ class NodeRegistry
      */
     private function assertSourceIpCapacity(string $observedIp): void
     {
-        $limit = (int) env('IICP_REGISTER_MAX_ACTIVE_NODES_PER_IP', self::DEFAULT_MAX_ACTIVE_NODES_PER_SOURCE_IP);
+        $limit = (int) config(
+            'iicp.registry.max_active_nodes_per_source_ip',
+            self::DEFAULT_MAX_ACTIVE_NODES_PER_SOURCE_IP,
+        );
         if ($limit <= 0 || $observedIp === '0.0.0.0') {
             return;
         }
@@ -701,7 +704,7 @@ class NodeRegistry
      */
     public function isEndpointAlive(string $endpoint): bool
     {
-        if (env('IICP_SKIP_LIVENESS_CHECK', false)) {
+        if (config('iicp.registry.skip_liveness_check', false)) {
             return false;
         }
 
@@ -813,7 +816,7 @@ class NodeRegistry
 
     private function assertLive(string $endpoint): void
     {
-        if (env('IICP_SKIP_LIVENESS_CHECK', false)) {
+        if (config('iicp.registry.skip_liveness_check', false)) {
             return;
         }
 

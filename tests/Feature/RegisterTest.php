@@ -8,6 +8,7 @@ use App\Services\NodePolicyManifestVerifier;
 use App\Services\OperatorDelegationVerifier;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -682,9 +683,9 @@ class RegisterTest extends TestCase
     public function test_skip_liveness_check_keeps_routable_node_public(): void
     {
         Cache::flush();
-        $original = env('IICP_SKIP_LIVENESS_CHECK');
+        $original = config('iicp.registry.skip_liveness_check');
         try {
-            putenv('IICP_SKIP_LIVENESS_CHECK=true');
+            Config::set('iicp.registry.skip_liveness_check', true);
             $payload = $this->validPayload;
             // No nat_type/transport_method — falls to skip-mode branch
             $resp = $this->postJson('/api/v1/register', $payload);
@@ -694,7 +695,7 @@ class RegisterTest extends TestCase
                 'public_reachable' => true,
             ]);
         } finally {
-            putenv('IICP_SKIP_LIVENESS_CHECK='.($original === false ? '' : $original));
+            Config::set('iicp.registry.skip_liveness_check', $original);
         }
     }
 
@@ -754,8 +755,8 @@ class RegisterTest extends TestCase
     /** @test #525: fresh registrations from one source IP have an active-node capacity gate */
     public function test_rejects_fresh_registration_when_source_ip_active_node_capacity_is_reached(): void
     {
-        $previous = getenv('IICP_REGISTER_MAX_ACTIVE_NODES_PER_IP');
-        putenv('IICP_REGISTER_MAX_ACTIVE_NODES_PER_IP=1');
+        $previous = config('iicp.registry.max_active_nodes_per_source_ip');
+        Config::set('iicp.registry.max_active_nodes_per_source_ip', 1);
 
         try {
             Node::create([
@@ -777,7 +778,7 @@ class RegisterTest extends TestCase
                 ->assertStatus(422)
                 ->assertJsonPath('error.fields.registration_ip.0', 'Too many active nodes registered from this source IP (IICP-E052)');
         } finally {
-            putenv('IICP_REGISTER_MAX_ACTIVE_NODES_PER_IP='.($previous === false ? '' : $previous));
+            Config::set('iicp.registry.max_active_nodes_per_source_ip', $previous);
         }
     }
 

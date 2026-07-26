@@ -235,12 +235,6 @@ parameters:
 			path: app/Services/DiscoveryPhaseTiming.php
 
 		-
-			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
-			identifier: larastan.noEnvCallsOutsideOfConfig
-			count: 3
-			path: app/Services/NodeRegistry.php
-
-		-
 			message: '#^Method App\\Services\\NodeRegistry\:\:isNattedDeclaration\(\) is unused\.$#'
 			identifier: method.unused
 			count: 1
