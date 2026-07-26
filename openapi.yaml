@@ -6,11 +6,14 @@ info:
     IICP directory service — node registration, heartbeat, discovery, and
     node detail. Traffic NEVER routes through the directory; it is
     bootstrap and discovery only. See spec/iicp-dir.md for the normative
-    sub-protocol specification.
+    sub-protocol specification. The info.version value versions this
+    documented OpenAPI contract; runtime and parity-evidence versions are
+    tracked separately.
   contact:
     url: https://iicp.network
   license:
-    name: MIT
+    name: Apache 2.0
+    identifier: Apache-2.0
 
 servers:
   - url: https://iicp.network/v1

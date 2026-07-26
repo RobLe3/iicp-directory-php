@@ -11,7 +11,7 @@ composer install --no-interaction --prefer-dist
 composer audit --locked
 php artisan test --compact
 python3 scripts/check_seed_parity.py \
-  --manifest parity/seed-manifest-v1.10.76.1.json \
+  --manifest parity/seed-manifest-v1.10.76.2.json \
   --php-dir .
 ```
 

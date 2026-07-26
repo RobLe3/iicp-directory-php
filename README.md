@@ -37,12 +37,23 @@ credentials from the public Genesis Seed.
 composer install --no-interaction --prefer-dist
 php artisan test --compact
 python3 scripts/check_seed_parity.py \
-  --manifest parity/seed-manifest-v1.10.76.1.json \
+  --manifest parity/seed-manifest-v1.10.76.2.json \
   --php-dir .
 ```
 
 The versioned parity manifests identify the reviewed seed contract. They do
 not certify live operational equivalence on another host.
+
+### Version namespaces
+
+The repository uses separate version namespaces that should not be compared as
+one release sequence:
+
+- `openapi: 3.1.0` selects the OpenAPI format;
+- `info.version: 1.6.0` versions the documented OpenAPI contract;
+- runtime `v1.10.76` identifies the application baseline; and
+- parity manifest `v1.10.76.2` identifies the second evidence snapshot for
+  that runtime baseline.
 
 ## Major protocol surfaces
 
