@@ -51,10 +51,12 @@ suppressions. Prefer fixing or refining the rule over suppression.
 ## Coverage and mutation policy
 
 The ordinary parity workflow records application-only Clover coverage and
-enforces both the reviewed repository floor and 80% coverage of changed
+enforces both the reviewed 90% repository floor and 80% coverage of changed
 executable PHP lines. Generated files, dependencies, tests, configuration,
 routes, and database scaffolding are outside the `app/` coverage denominator.
-The report is retained for 14 days.
+The initial supported-CI measurement on 2026-07-26 was 90.40%
+(7,636/8,447 statements); the floor was rounded down to 90%. The report is
+retained for 14 days.
 
 Targeted mutation testing is scheduled/manual rather than paid by every pull
 request. Its four scopes cover JWT/authorization, signed event logging,
@@ -66,3 +68,11 @@ assertion-free tests or tests that merely execute lines to inflate a metric.
 Coverage and mutation floors are ratchets. Lowering one requires a dedicated
 pull request, measured before/after evidence, maintainer review, and an issue
 explaining why strengthening tests first is not practical.
+
+The initial calibration measured JWT/authorization at 100% MSI, signed events
+at 80.85%, and credits at 44.12% when its 38 timeouts are conservatively
+treated as escapes. Their rounded-down starting floors are respectively 100%,
+80%, and 40%. The original discovery run time-skipped all mutants because its
+covering tests exceeded the default 10-second nominal-test limit; the reviewed
+60-second limit and covering-test-only mode must produce a valid non-zero
+discovery floor before this lane is merged.

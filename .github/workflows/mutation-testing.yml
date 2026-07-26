@@ -27,6 +27,8 @@ jobs:
       matrix:
         include:
           - scope: jwt-authorization
+            min_msi: 100
+            max_timeouts: 0
             paths: >-
               app/Services/JwtService.php
               app/Services/ConsumerTokenService.php
@@ -36,10 +38,14 @@ jobs:
               tests/Feature/ProbeTokenAuthTest.php
               tests/Feature/ReplicaTokenRoundTripTest.php
           - scope: signed-events
+            min_msi: 80
+            max_timeouts: 0
             paths: >-
               app/Services/NodeEventLogger.php
               tests/Unit/NodeEventLoggerTest.php
           - scope: credits
+            min_msi: 40
+            max_timeouts: 40
             paths: >-
               app/Services/CreditService.php
               tests/Unit/CreditServiceRetryTest.php
@@ -51,6 +57,10 @@ jobs:
               tests/Feature/CreditsReadTest.php
               tests/Feature/EconomicIntegrityAuditCommandTest.php
           - scope: discovery-scoring
+            # Zero only while this PR re-calibrates the prior time-skipped run.
+            # A non-zero reviewed floor is required before merge.
+            min_msi: 0
+            max_timeouts: 0
             paths: >-
               app/Services/NodeScorer.php
               tests/Feature/DiscoverTest.php
@@ -66,7 +76,9 @@ jobs:
       - name: Mutate ${{ matrix.scope }}
         run: |
           ./vendor/bin/infection --no-progress --threads=2 \
-            --min-msi=0 --min-covered-msi=0 \
+            --only-covering-test-cases \
+            --with-timeouts --max-timeouts=${{ matrix.max_timeouts }} \
+            --min-msi=${{ matrix.min_msi }} --min-covered-msi=${{ matrix.min_msi }} \
             --logger-text="build/infection-${{ matrix.scope }}.log" \
             --logger-summary-json="build/infection-${{ matrix.scope }}.json" \
             ${{ matrix.paths }}

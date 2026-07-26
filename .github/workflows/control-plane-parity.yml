@@ -33,7 +33,7 @@ jobs:
         env:
           COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          args=(--clover build/coverage.xml --minimum 0)
+          args=(--clover build/coverage.xml --minimum 90)
           if [[ -n "$COVERAGE_BASE" && "$COVERAGE_BASE" != "0000000000000000000000000000000000000000" ]]; then
             args+=(--changed-since "$COVERAGE_BASE" --changed-minimum 80)
           fi
