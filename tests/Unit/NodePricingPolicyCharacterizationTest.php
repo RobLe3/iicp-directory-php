@@ -7,6 +7,7 @@ namespace Tests\Unit;
 use App\Services\JwtService;
 use App\Services\NodeEndpointVerifier;
 use App\Services\NodePricingPolicy;
+use App\Services\NodeRegistrationPersistence;
 use App\Services\NodeRegistry;
 use App\Services\OperatorDelegationVerifier;
 use Illuminate\Validation\ValidationException;
@@ -123,6 +124,7 @@ class NodePricingPolicyCharacterizationTest extends TestCase
             $this->createMock(OperatorDelegationVerifier::class),
             new NodePricingPolicy,
             new NodeEndpointVerifier,
+            app(NodeRegistrationPersistence::class),
         );
     }
 }

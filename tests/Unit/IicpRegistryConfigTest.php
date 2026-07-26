@@ -20,14 +20,16 @@ class IicpRegistryConfigTest extends TestCase
     {
         $registrySource = file_get_contents(__DIR__.'/../../app/Services/NodeRegistry.php');
         $verifierSource = file_get_contents(__DIR__.'/../../app/Services/NodeEndpointVerifier.php');
+        $persistenceSource = file_get_contents(__DIR__.'/../../app/Services/NodeRegistrationPersistence.php');
 
         $this->assertIsString($registrySource);
         $this->assertIsString($verifierSource);
-        $this->assertStringNotContainsString('env(', $registrySource.$verifierSource);
+        $this->assertIsString($persistenceSource);
+        $this->assertStringNotContainsString('env(', $registrySource.$verifierSource.$persistenceSource);
         $this->assertSame(2, substr_count($verifierSource, "config('iicp.registry.skip_liveness_check'"));
         $this->assertStringContainsString(
             "'iicp.registry.max_active_nodes_per_source_ip'",
-            $registrySource,
+            $persistenceSource,
         );
     }
 
