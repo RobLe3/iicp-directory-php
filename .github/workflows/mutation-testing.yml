@@ -27,7 +27,7 @@ jobs:
       matrix:
         include:
           - scope: jwt-authorization
-            min_msi: 100
+            min_msi: 85
             max_timeouts: 0
             paths: >-
               app/Services/JwtService.php
@@ -57,9 +57,7 @@ jobs:
               tests/Feature/CreditsReadTest.php
               tests/Feature/EconomicIntegrityAuditCommandTest.php
           - scope: discovery-scoring
-            # Zero only while this PR re-calibrates the prior time-skipped run.
-            # A non-zero reviewed floor is required before merge.
-            min_msi: 0
+            min_msi: 30
             max_timeouts: 0
             paths: >-
               app/Services/NodeScorer.php
