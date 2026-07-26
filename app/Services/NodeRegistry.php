@@ -40,6 +40,7 @@ class NodeRegistry
     public function __construct(
         private JwtService $jwt,
         private OperatorDelegationVerifier $delegationVerifier,
+        private NodePricingPolicy $pricing,
     ) {}
 
     private const LIVENESS_TIMEOUT_S = 5;
@@ -424,47 +425,7 @@ class NodeRegistry
      */
     public function resolvePricingBlock(array $pricing, string $hmacKey, array $advertisedModels = []): array
     {
-        $multiplier = isset($pricing['credit_cost_multiplier'])
-            ? (float) $pricing['credit_cost_multiplier']
-            : 1.0;
-        $model = $pricing['pricing_model'] ?? 'per_token';
-        $sig = $pricing['declaration_signature'] ?? null;
-        $attested = false;
-
-        if ($sig !== null) {
-            // Body is the pricing block WITHOUT declaration_signature, keys sorted
-            $body = ['credit_cost_multiplier' => $multiplier, 'pricing_model' => $model];
-            ksort($body);
-            $expected = hash_hmac('sha256', json_encode($body, JSON_THROW_ON_ERROR), $hmacKey);
-            if (! hash_equals($expected, $sig)) {
-                throw ValidationException::withMessages([
-                    'pricing.declaration_signature' => 'Invalid declaration signature (IICP-E010)',
-                ]);
-            }
-            $attested = true;
-        }
-
-        // #489 — compute-anchored ceiling: clamp multiplier to tier_weight × 3.
-        // Prevents a 0.5B node from claiming rates that exceed even a 70B node.
-        if (! empty($advertisedModels)) {
-            $tier = self::classifyModelTier($advertisedModels);
-            $ceiling = self::TIER_WEIGHTS[$tier] * 3.0;
-            if ($multiplier > $ceiling) {
-                Log::warning('NodeRegistry: multiplier clamped by tier ceiling', [
-                    'declared' => $multiplier, 'tier' => $tier, 'ceiling' => $ceiling,
-                ]);
-                $multiplier = $ceiling;
-            }
-        }
-
-        return [
-            'credit_cost_multiplier' => $multiplier,
-            'pricing_model' => $model,
-            'declaration_signature' => $sig,
-            'attested' => $attested,
-            'effective_from' => isset($pricing['effective_from']) ? $pricing['effective_from'] : null,
-            'effective_until' => isset($pricing['effective_until']) ? $pricing['effective_until'] : null,
-        ];
+        return $this->pricing->resolve($pricing, $hmacKey, $advertisedModels);
     }
 
     /**
@@ -473,15 +434,6 @@ class NodeRegistry
      *
      * @internal
      */
-    private const TIER_WEIGHTS = [
-        'sub_1b' => 0.05,
-        '7b' => 1.0,
-        '13b' => 2.0,
-        '30b' => 6.5,
-        '70b' => 32.0,
-        '100b_plus' => 75.0,
-    ];
-
     /**
      * Classify a set of model names to the highest applicable compute tier.
      * Parses patterns like "7b", "7.5B", "0.5b", "llama3.1:8b", "qwen2.5:0.5b".
@@ -491,32 +443,7 @@ class NodeRegistry
      */
     public static function classifyModelTier(array $models): string
     {
-        $maxWeight = 0.0;
-        $bestTier = '7b';
-        foreach ($models as $name) {
-            if (preg_match('/(\d+(?:\.\d+)?)\s*[bB](?:[^a-zA-Z]|$)/', (string) $name, $m)) {
-                $n = (float) $m[1];
-                if ($n < 1) {
-                    $tier = 'sub_1b';
-                } elseif ($n < 10) {
-                    $tier = '7b';
-                } elseif ($n < 20) {
-                    $tier = '13b';
-                } elseif ($n < 50) {
-                    $tier = '30b';
-                } elseif ($n < 85) {
-                    $tier = '70b';
-                } else {
-                    $tier = '100b_plus';
-                }
-                if (self::TIER_WEIGHTS[$tier] > $maxWeight) {
-                    $maxWeight = self::TIER_WEIGHTS[$tier];
-                    $bestTier = $tier;
-                }
-            }
-        }
-
-        return $bestTier;
+        return (new NodePricingPolicy)->classifyModelTier($models);
     }
 
     /**
