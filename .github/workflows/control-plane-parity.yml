@@ -30,6 +30,44 @@ jobs:
       - run: composer install --no-interaction --prefer-dist
       - run: composer audit --locked --no-interaction
       - run: php artisan test --compact
-      # The pinned manifest records the reviewed source and contract snapshot.
-      # Verification is self-contained and needs no private repository access.
-      - run: python3 scripts/check_seed_parity.py --manifest parity/seed-manifest-v1.10.76.2.json --php-dir .
+      # Preserve the reviewed extraction snapshot without treating current public
+      # development as a live mirror of a private tree.
+      - run: python3 scripts/check_seed_parity.py --manifest parity/seed-manifest-v1.10.76.2.json --php-dir . --git-revision c489d4e02a636b337ba4237f8543f83675162db0
+
+  event-log-concurrency:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_DATABASE: iicp_concurrency
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      APP_ENV: testing
+      APP_KEY: base64:+Ks8E2HpJxEHq4rM2oNxGTVmAqFZXbmGiJvHaJXwXn4=
+      CACHE_STORE: array
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_DATABASE: iicp_concurrency
+      DB_USERNAME: root
+      DB_PASSWORD: root
+      QUEUE_CONNECTION: sync
+      SESSION_DRIVER: array
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: shivammathur/setup-php@b604ade2a87db23f8871b7182e69ec5e75effb45 # v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, pcntl, pdo_mysql, sodium
+      - run: mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
+      - run: composer install --no-interaction --prefer-dist
+      - run: php artisan migrate:fresh --force
+      - run: php artisan test --compact tests/Feature/NodeEventLoggerConcurrencyTest.php

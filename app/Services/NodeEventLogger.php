@@ -5,19 +5,25 @@
 namespace App\Services;
 
 use App\Models\NodeEvent;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 /**
  * Phase 6 prerequisite: append-only event log emitter.
  *
  * Spec: spec/iicp-federated-directory.md §3.4
- * Sequence numbers are assigned atomically from the current max.
+ * Sequence numbers and predecessor signatures are assigned atomically from a
+ * durable, row-locked chain head.
  * Ed25519 signing: when IICP_GENESIS_ED25519_SECRET_KEY is set (64-byte hex = 128 chars),
  * each event is signed per §3.4 — input is SHA256(event_id:event_type:seq:ts_ms:SHA256_hex(canonical_json(payload))).
  * Signature is hex-encoded sodium detached signature (64 bytes → 128 hex chars).
  */
 class NodeEventLogger
 {
+    private const CHAIN_ID = 'genesis';
+
+    private const TRANSACTION_ATTEMPTS = 3;
+
     /**
      * Hash-chain genesis root (#458): SHA256_hex("iicp:dir:event-log:genesis:v1"). The
      * prev_hash of the first signed event (or the first after an unsigned span) is this.
@@ -30,24 +36,53 @@ class NodeEventLogger
         if ($serviceId !== null && ! preg_match('/^[a-z0-9][a-z0-9._-]{0,63}$/', $serviceId)) {
             throw new \InvalidArgumentException('service_id must be a lowercase portable identifier');
         }
-        $eventId = (string) Str::uuid();
-        $seq = (NodeEvent::max('seq') ?? 0) + 1;
-        $tsMs = (int) (microtime(true) * 1000);
-        // Hash-chain link to the predecessor (#458): the tip event's signature seeds this
-        // event's prev_hash; GENESIS_ROOT when there is no signed predecessor.
-        $prevHash = $this->prevHash(NodeEvent::orderByDesc('seq')->value('signature'));
 
-        return NodeEvent::create([
-            'event_id' => $eventId,
-            'seq' => $seq,
-            'event_type' => $eventType,
-            'service_id' => $serviceId,
-            'node_id' => $nodeId,
-            'ts_ms' => $tsMs,
-            'payload' => $payload,
-            'prev_hash' => $prevHash,
-            'signature' => $this->sign($eventId, $eventType, $seq, $tsMs, $payload, $prevHash, $serviceId),
-        ]);
+        return DB::transaction(function () use ($eventType, $nodeId, $payload, $serviceId): NodeEvent {
+            $head = DB::table('node_event_chain_heads')
+                ->where('chain_id', self::CHAIN_ID)
+                ->lockForUpdate()
+                ->first();
+
+            if ($head === null) {
+                throw new \LogicException('Event chain head is missing; run the database migrations.');
+            }
+
+            $eventId = (string) Str::uuid();
+            $seq = (int) $head->last_seq + 1;
+            $tsMs = (int) (microtime(true) * 1000);
+            $prevHash = $this->prevHash($head->last_signature);
+            $signature = $this->sign(
+                $eventId,
+                $eventType,
+                $seq,
+                $tsMs,
+                $payload,
+                $prevHash,
+                $serviceId,
+            );
+
+            $event = NodeEvent::create([
+                'event_id' => $eventId,
+                'seq' => $seq,
+                'event_type' => $eventType,
+                'service_id' => $serviceId,
+                'node_id' => $nodeId,
+                'ts_ms' => $tsMs,
+                'payload' => $payload,
+                'prev_hash' => $prevHash,
+                'signature' => $signature,
+            ]);
+
+            DB::table('node_event_chain_heads')
+                ->where('chain_id', self::CHAIN_ID)
+                ->update([
+                    'last_seq' => $seq,
+                    'last_signature' => $signature,
+                    'updated_at' => now(),
+                ]);
+
+            return $event;
+        }, self::TRANSACTION_ATTEMPTS);
     }
 
     /**

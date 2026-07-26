@@ -5,8 +5,10 @@
 namespace Tests\Unit;
 
 use App\Models\Node;
+use App\Models\NodeEvent;
 use App\Services\NodeEventLogger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -62,6 +64,48 @@ class NodeEventLoggerTest extends TestCase
         $this->assertSame(1, $e1->seq);
         $this->assertSame(2, $e2->seq);
         $this->assertSame(3, $e3->seq);
+    }
+
+    public function test_chain_head_advances_with_committed_event(): void
+    {
+        $event = $this->logger->log('REGISTER', $this->nodeId, []);
+        $head = DB::table('node_event_chain_heads')->where('chain_id', 'genesis')->first();
+
+        $this->assertNotNull($head);
+        $this->assertSame($event->seq, (int) $head->last_seq);
+        $this->assertSame($event->signature, $head->last_signature);
+    }
+
+    public function test_outer_transaction_rollback_restores_event_and_chain_head(): void
+    {
+        try {
+            DB::transaction(function (): void {
+                $this->logger->log('REGISTER', $this->nodeId, []);
+                throw new \RuntimeException('force rollback');
+            });
+            $this->fail('The forced rollback must escape the transaction.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('force rollback', $exception->getMessage());
+        }
+
+        $this->assertSame(0, NodeEvent::count());
+        $head = DB::table('node_event_chain_heads')->where('chain_id', 'genesis')->first();
+        $this->assertSame(0, (int) $head->last_seq);
+        $this->assertNull($head->last_signature);
+    }
+
+    public function test_sequence_does_not_reuse_numbers_after_retention_deletes_events(): void
+    {
+        [, $secretKey] = $this->generateKeypair();
+        config(['app.genesis_ed25519_secret_key' => bin2hex($secretKey)]);
+        $first = $this->logger->log('HEARTBEAT', $this->nodeId, []);
+        NodeEvent::query()->delete();
+
+        $second = $this->logger->log('REGISTER', $this->nodeId, []);
+
+        $this->assertSame(1, $first->seq);
+        $this->assertSame(2, $second->seq);
+        $this->assertSame(hash('sha256', $first->signature), $second->prev_hash);
     }
 
     public function test_signature_is_null_when_no_key_configured(): void
