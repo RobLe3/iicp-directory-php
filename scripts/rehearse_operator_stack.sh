@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT/compose.operator.yml"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/iicp-operator-rehearsal.XXXXXX")"
-PROJECT="iicp-operator-rehearsal-$$"
+TMP="${IICP_OPERATOR_REHEARSAL_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/iicp-operator-rehearsal.XXXXXX")}"
+PROJECT="${IICP_OPERATOR_PROJECT:-iicp-operator-rehearsal-$$}"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 KEEP=0
 SKIP_BUILD=0
@@ -40,14 +40,14 @@ export IICP_DB_PASSWORD_FILE="$TMP/db_password"
 export IICP_DB_ROOT_PASSWORD_FILE="$TMP/db_root_password"
 export IICP_IMAGE_TAG="${IICP_IMAGE_TAG:-test}"
 export IICP_OPERATOR_PORT
-IICP_OPERATOR_PORT="$(python3 - <<'PY'
+IICP_OPERATOR_PORT="${IICP_OPERATOR_PORT:-$(python3 - <<'PY'
 import socket
 s = socket.socket()
 s.bind(("127.0.0.1", 0))
 print(s.getsockname()[1])
 s.close()
 PY
-)"
+)}"
 
 compose=(docker compose -p "$PROJECT" -f "$COMPOSE_FILE")
 

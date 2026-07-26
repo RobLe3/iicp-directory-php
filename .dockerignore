@@ -16,3 +16,5 @@
 /.git
 /.phpunit.result.cache
 /.phpunit.cache
+/.codegraph
+/.sentrux
