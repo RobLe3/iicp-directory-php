@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.10.79.1 — 2026-07-26
+
+- Removed avoidable Eloquent model hydration from the selected-node lifecycle
+  scoring read after an isolated fresh-restore benchmark passed every fixed
+  semantic and latency gate.
+- Added pinned Larastan/PHPStan, Pint and repository-local Semgrep security
+  gates with accountable baseline and suppression policies.
+- Added a measured 90% application coverage floor, an 80% changed-code floor
+  and scheduled/manual mutation ratchets for four high-risk domains.
+- Began characterization-first `NodeScorer` decomposition by extracting the
+  deterministic endpoint address-family classifier without projection drift.
+- No schema, public protocol behavior, production database, deployment or
+  unpublished website change is authorized by this release.
+
 ## v1.10.78.1 — 2026-07-26
 
 - Added separate hardened, non-root PHP-FPM and nginx operator images.
