@@ -11,7 +11,7 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * ReplicaTokenAuth — verifies JWT issued by ReplicasController::issueReplicaToken().
+ * ReplicaTokenAuth — verifies the replica profile issued by JwtService.
  *
  * Differs from NodeTokenAuth: expects role=replica in JWT claims, resolves
  * Replica (not Node), and rejects opaque-token fallback (replica tokens are
@@ -35,9 +35,9 @@ class ReplicaTokenAuth
             ], 401);
         }
 
-        $claims = $this->jwt->verify($bearer);
-        if (! $claims) {
-            if ($this->jwt->isExpiredJwt($bearer)) {
+        $verification = $this->jwt->verifyReplica($bearer);
+        if (! $verification->isValid()) {
+            if ($verification->isExpired()) {
                 return response()->json([
                     'error' => ['code' => 'token_expired', 'message' => 'Replica JWT has expired; re-register via POST /v1/replicas/register'],
                 ], 401);
@@ -48,13 +48,7 @@ class ReplicaTokenAuth
             ], 401);
         }
 
-        if (($claims['role'] ?? null) !== 'replica' || empty($claims['sub'])) {
-            return response()->json([
-                'error' => ['code' => 'unauthorized', 'message' => 'Token is not a replica token'],
-            ], 401);
-        }
-
-        $replica = Replica::where('replica_id', $claims['sub'])->first();
+        $replica = Replica::where('replica_id', $verification->claims['sub'])->first();
         if (! $replica) {
             return response()->json([
                 'error' => ['code' => 'unauthorized', 'message' => 'Replica not registered'],

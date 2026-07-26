@@ -9,86 +9,178 @@ use Tests\TestCase;
 
 class JwtServiceTest extends TestCase
 {
-    public function test_issues_and_verifies_a_valid_jwt(): void
+    private JwtService $jwt;
+
+    protected function setUp(): void
     {
-        $jwt = app(JwtService::class);
+        parent::setUp();
+        config(['app.key' => 'base64:/OAqqqyx1z7Q0IxZy6/tNTe0l7Jyf0nkru4AhZeHzso=']);
+        $this->jwt = app(JwtService::class);
+    }
+
+    public function test_issues_and_verifies_node_profile(): void
+    {
         $nodeId = 'f47ac10b-58cc-4372-a567-0e02b2c3d479';
+        $result = $this->jwt->verifyNode($this->jwt->issueNode($nodeId));
 
-        $token = $jwt->issue($nodeId);
-        $this->assertIsString($token);
-        $this->assertStringContainsString('.', $token);
-
-        $claims = $jwt->verify($token);
-        $this->assertIsArray($claims);
-        $this->assertSame($nodeId, $claims['sub']);
-        $this->assertSame('iicp.network', $claims['iss']);
-        $this->assertGreaterThan(time(), $claims['exp']);
+        $this->assertTrue($result->isValid());
+        $this->assertSame($nodeId, $result->claims['sub']);
+        $this->assertSame('iicp.network', $result->claims['iss']);
+        $this->assertArrayNotHasKey('role', $result->claims);
+        $this->assertGreaterThan(time(), $result->claims['exp']);
     }
 
-    public function test_verify_rejects_tampered_token(): void
+    public function test_replica_profile_round_trips_with_standard_base64_app_key(): void
     {
-        $jwt = app(JwtService::class);
-        $token = $jwt->issue('some-node-id');
-        $parts = explode('.', $token);
-        $parts[1] = base64_encode('{"sub":"evil","exp":9999999999,"iss":"iicp.network","iat":1}');
-        $tampered = implode('.', $parts);
+        $replicaId = 'rep-'.str_repeat('a', 32);
+        $result = $this->jwt->verifyReplica($this->jwt->issueReplica($replicaId));
 
-        $this->assertNull($jwt->verify($tampered));
+        $this->assertTrue($result->isValid());
+        $this->assertSame($replicaId, $result->claims['sub']);
+        $this->assertSame('replica', $result->claims['role']);
+        $this->assertSame('GET /v1/events', $result->claims['scope']);
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $result->claims['jti']);
     }
 
-    public function test_verify_rejects_malformed_token(): void
+    public function test_profiles_reject_each_others_tokens(): void
     {
-        $jwt = app(JwtService::class);
+        $nodeAsReplica = $this->jwt->verifyReplica($this->jwt->issueNode('node-1'));
+        $replicaAsNode = $this->jwt->verifyNode($this->jwt->issueReplica('replica-1'));
 
-        $this->assertNull($jwt->verify('not.a.valid.token.at.all'));
-        $this->assertNull($jwt->verify('onlytwoparts.x'));
+        $this->assertFalse($nodeAsReplica->isValid());
+        $this->assertSame('invalid_profile', $nodeAsReplica->failure);
+        $this->assertFalse($replicaAsNode->isValid());
+        $this->assertSame('invalid_profile', $replicaAsNode->failure);
     }
 
-    public function test_is_expired_jwt_returns_false_for_valid_token(): void
+    public function test_existing_replica_profile_without_jti_remains_valid(): void
     {
-        $jwt = app(JwtService::class);
-        $token = $jwt->issue('some-node');
+        $result = $this->jwt->verifyReplica(
+            $this->signedToken($this->header(), $this->replicaClaims()),
+        );
 
-        $this->assertFalse($jwt->isExpiredJwt($token));
+        $this->assertTrue($result->isValid());
+        $this->assertArrayNotHasKey('jti', $result->claims);
     }
 
-    public function test_is_expired_jwt_returns_true_for_expired_token(): void
+    public function test_rejects_unexpected_algorithm_type_and_critical_header(): void
     {
-        $jwt = app(JwtService::class);
+        $claims = $this->nodeClaims();
 
-        // Craft a token with exp in the past using the real secret
-        $header = rtrim(strtr(base64_encode(json_encode(['alg' => 'HS256', 'typ' => 'JWT'])), '+/', '-_'), '=');
-        $claims = ['sub' => 'x', 'iss' => 'iicp.network', 'iat' => time() - 7200, 'exp' => time() - 3600];
-        $payload = rtrim(strtr(base64_encode(json_encode($claims)), '+/', '-_'), '=');
-        // Use real signing so signature is valid
-        $token = $jwt->issue('throwaway'); // issue to get format, then replace segments below
-
-        // Re-sign with real secret via reflection to access private method — simpler: just verify
-        // that a freshly issued + manually expired token is detected.
-        // Easiest: issue a valid token and check isExpiredJwt(tamperedExpiry) = false (wrong sig)
-        $tampered = $token;
-        $parts = explode('.', $tampered);
-        // Tamper the payload to set exp in the past (this breaks the signature)
-        $parts[1] = rtrim(strtr(base64_encode(json_encode($claims)), '+/', '-_'), '=');
-        $tampered = implode('.', $parts);
-        // Tampered token has wrong sig → isExpiredJwt must return false (not a valid-sig expired token)
-        $this->assertFalse($jwt->isExpiredJwt($tampered));
+        foreach ([
+            ['alg' => 'none', 'typ' => 'JWT'],
+            ['alg' => 'HS256', 'typ' => 'JWS'],
+            ['alg' => 'HS256', 'typ' => 'JWT', 'crit' => ['exp']],
+        ] as $header) {
+            $result = $this->jwt->verifyNode($this->signedToken($header, $claims));
+            $this->assertFalse($result->isValid());
+            $this->assertSame('invalid_header', $result->failure);
+        }
     }
 
-    public function test_is_expired_jwt_returns_false_for_invalid_signature(): void
+    public function test_rejects_wrong_issuer_claim_types_and_replica_scope(): void
     {
-        $jwt = app(JwtService::class);
-        $token = $jwt->issue('node-x');
-        $parts = explode('.', $token);
-        $parts[2] = 'invalidsignature';
-        $this->assertFalse($jwt->isExpiredJwt(implode('.', $parts)));
+        $wrongIssuer = $this->nodeClaims();
+        $wrongIssuer['iss'] = 'attacker.example';
+        $stringExpiry = $this->nodeClaims();
+        $stringExpiry['exp'] = (string) $stringExpiry['exp'];
+        $wrongScope = $this->replicaClaims();
+        $wrongScope['scope'] = 'GET /v1/snapshot';
+
+        $this->assertSame(
+            'invalid_claims',
+            $this->jwt->verifyNode($this->signedToken($this->header(), $wrongIssuer))->failure,
+        );
+        $this->assertSame(
+            'invalid_claims',
+            $this->jwt->verifyNode($this->signedToken($this->header(), $stringExpiry))->failure,
+        );
+        $this->assertSame(
+            'invalid_profile',
+            $this->jwt->verifyReplica($this->signedToken($this->header(), $wrongScope))->failure,
+        );
     }
 
-    public function test_is_expired_jwt_returns_false_for_malformed_token(): void
+    public function test_expired_valid_profile_is_distinguished_from_invalid_tokens(): void
     {
-        $jwt = app(JwtService::class);
+        $claims = $this->nodeClaims();
+        $claims['iat'] = time() - 7200;
+        $claims['exp'] = time() - 3600;
 
-        $this->assertFalse($jwt->isExpiredJwt('not.valid'));
-        $this->assertFalse($jwt->isExpiredJwt('a.b.c.d'));
+        $expired = $this->jwt->verifyNode($this->signedToken($this->header(), $claims));
+        $tampered = $this->jwt->issueNode('node-1').'x';
+
+        $this->assertTrue($expired->isExpired());
+        $this->assertFalse($expired->isValid());
+        $this->assertFalse($this->jwt->verifyNode($tampered)->isExpired());
+    }
+
+    public function test_rejects_malformed_and_tampered_tokens(): void
+    {
+        foreach (['not.valid', 'a.b.c.d', 'not.a.jwt'] as $token) {
+            $this->assertFalse($this->jwt->verifyNode($token)->isValid());
+        }
+
+        $parts = explode('.', $this->jwt->issueNode('node-1'));
+        $parts[1] = $this->b64url('{"sub":"evil"}');
+        $result = $this->jwt->verifyNode(implode('.', $parts));
+        $this->assertFalse($result->isValid());
+        $this->assertSame('invalid_signature', $result->failure);
+    }
+
+    public function test_empty_subject_fails_closed(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->jwt->issueNode('');
+    }
+
+    public function test_missing_application_key_fails_closed_without_exposing_key_material(): void
+    {
+        config(['app.key' => '']);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('An application key is required for JWT operations.');
+        $this->jwt->issueNode('node-1');
+    }
+
+    private function header(): array
+    {
+        return ['alg' => 'HS256', 'typ' => 'JWT'];
+    }
+
+    private function nodeClaims(): array
+    {
+        return [
+            'sub' => 'node-1',
+            'iss' => 'iicp.network',
+            'iat' => time(),
+            'exp' => time() + 3600,
+        ];
+    }
+
+    private function replicaClaims(): array
+    {
+        return [
+            ...$this->nodeClaims(),
+            'sub' => 'replica-1',
+            'role' => 'replica',
+            'scope' => 'GET /v1/events',
+        ];
+    }
+
+    private function signedToken(array $header, array $claims): string
+    {
+        $encodedHeader = $this->b64url(json_encode($header, JSON_THROW_ON_ERROR));
+        $encodedClaims = $this->b64url(json_encode($claims, JSON_THROW_ON_ERROR));
+        $input = "{$encodedHeader}.{$encodedClaims}";
+        $secret = base64_decode(substr((string) config('app.key'), 7), true);
+        $signature = $this->b64url(hash_hmac('sha256', $input, $secret, true));
+
+        return "{$input}.{$signature}";
+    }
+
+    private function b64url(string $value): string
+    {
+        return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
     }
 }

@@ -24,7 +24,7 @@ class PeersTest extends TestCase
         parent::setUp();
         // Caller node — JWT auth (NodeTokenAuth Phase 2 path)
         $caller = $this->makeNode();
-        $this->jwt = app(JwtService::class)->issue($caller->id);
+        $this->jwt = app(JwtService::class)->issueNode($caller->id);
     }
 
     private function makeNode(array $overrides = []): Node

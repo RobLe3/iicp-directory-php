@@ -26,12 +26,15 @@ class NodeTokenAuth
         }
 
         // Phase 2: try JWT first (compact token format — three dot-separated segments)
-        $node = $this->tryJwt($bearer);
+        $verification = $this->jwt->verifyNode($bearer);
+        $node = $verification->isValid()
+            ? Node::find($verification->claims['sub'])
+            : null;
 
         // Spec requires token_expired to be distinct from unauthorized.
         // Only return it when the JWT has a valid signature but has expired — skip
         // the opaque fallback in that case, since the caller clearly intended JWT auth.
-        if (! $node && $this->jwt->isExpiredJwt($bearer)) {
+        if (! $node && $verification->isExpired()) {
             return response()->json([
                 'error' => ['code' => 'token_expired', 'message' => 'JWT has expired; re-register to obtain a new token'],
             ], 401);
@@ -63,15 +66,5 @@ class NodeTokenAuth
         $request->merge(['_authenticated_node' => $node]);
 
         return $next($request);
-    }
-
-    private function tryJwt(string $bearer): ?Node
-    {
-        $claims = $this->jwt->verify($bearer);
-        if (! $claims || ! isset($claims['sub'])) {
-            return null;
-        }
-
-        return Node::find($claims['sub']);
     }
 }
