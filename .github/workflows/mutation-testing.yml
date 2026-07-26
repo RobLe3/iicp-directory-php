@@ -22,10 +22,7 @@ concurrency:
 
 jobs:
   targeted-mutation:
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.head_ref == 'quality/coverage-mutation-ratchets' ||
-      github.head_ref == 'refactor/node-readiness-policy'
+    if: github.event_name != 'pull_request' || github.head_ref == 'quality/coverage-mutation-ratchets'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -79,12 +76,6 @@ jobs:
             paths: >-
               app/Services/AvailabilityWindowPolicy.php
               tests/Unit/NodeScorerAvailabilityWindowCharacterizationTest.php
-          - scope: node-readiness
-            min_msi: 60
-            max_timeouts: 0
-            paths: >-
-              app/Services/NodeReadinessPolicy.php
-              tests/Unit/NodeReadinessPolicyCharacterizationTest.php
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
@@ -108,4 +99,32 @@ jobs:
         with:
           name: mutation-${{ matrix.scope }}
           path: build/infection-${{ matrix.scope }}.*
+          retention-days: 14
+
+  node-readiness-mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: '8.3'
+          coverage: xdebug
+          extensions: mbstring, pdo_sqlite, sqlite3
+      - run: mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs build
+      - run: composer install --no-interaction --prefer-dist
+      - name: Mutate node-readiness
+        run: |
+          ./vendor/bin/infection --no-progress --threads=2 \
+            --only-covering-test-cases \
+            --with-timeouts --max-timeouts=0 \
+            --min-msi=60 --min-covered-msi=60 \
+            --logger-text="build/infection-node-readiness.log" \
+            --logger-summary-json="build/infection-node-readiness.json" \
+            app/Services/NodeReadinessPolicy.php \
+            tests/Unit/NodeReadinessPolicyCharacterizationTest.php
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mutation-node-readiness
+          path: build/infection-node-readiness.*
           retention-days: 14
