@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.10.78.1 — 2026-07-26
+
+- Added separate hardened, non-root PHP-FPM and nginx operator images.
+- Added explicit one-shot migrations, fixed content-free readiness, disposable
+  failure/recovery and backup/restore rehearsal.
+- Added HIGH/CRITICAL container security gates and clean-build content
+  reproducibility checks for both hardened images.
+- Added a deterministic, content-free 100-node reference capacity profile.
+- No production deployment, production database, public website or protocol
+  behavior change is authorized by this release.
+
 ## v1.10.77.1 — 2026-07-26
 
 Corrective first publication after the v1.10.77 tag workflow stopped before producing any release assets. The v1.10.77 tag is retained as failed provenance and must not be moved.
