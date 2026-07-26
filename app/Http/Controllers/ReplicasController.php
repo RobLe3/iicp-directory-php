@@ -159,7 +159,7 @@ class ReplicasController extends Controller
      */
     private function devAllowsHttpDid(): bool
     {
-        return env('IICP_DEV_ALLOW_HTTP_DID', false)
+        return config('iicp.replica.dev_allow_http_did', false)
             && config('app.env') !== 'production';
     }
 

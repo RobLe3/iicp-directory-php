@@ -9,15 +9,15 @@ class ReplicaModeRedirectTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        putenv('IICP_REPLICA_MODE=false');
-        putenv('IICP_SEED_URL');
+        config(['iicp.replica.enabled' => false]);
+        config(['iicp.replica.seed_url' => '']);
     }
 
     protected function tearDown(): void
     {
-        putenv('IICP_REPLICA_MODE=false');
-        putenv('IICP_SEED_URL');
-        putenv('IICP_DEV_ALLOW_HTTP_DID');
+        config(['iicp.replica.enabled' => false]);
+        config(['iicp.replica.seed_url' => '']);
+        config(['iicp.replica.dev_allow_http_did' => false]);
         parent::tearDown();
     }
 
@@ -26,9 +26,9 @@ class ReplicaModeRedirectTest extends TestCase
         // Testbed (docker-compose.federation.yml): seed↔replica over plain http inside the
         // bridge network. IICP_DEV_ALLOW_HTTP_DID (non-production) permits http:// → 307,
         // instead of the 503 a bare http URL gets in production.
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=http://seed-directory:8080');
-        putenv('IICP_DEV_ALLOW_HTTP_DID=true');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'http://seed-directory:8080']);
+        config(['iicp.replica.dev_allow_http_did' => true]);
 
         $resp = $this->postJson('/api/v1/register', ['endpoint' => 'https://x.test']);
 
@@ -47,8 +47,8 @@ class ReplicaModeRedirectTest extends TestCase
 
     public function test_replica_mode_redirects_post_to_seed(): void
     {
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
 
         $resp = $this->postJson('/api/v1/register', ['endpoint' => 'https://x.test']);
 
@@ -61,8 +61,8 @@ class ReplicaModeRedirectTest extends TestCase
 
     public function test_replica_mode_redirects_delete(): void
     {
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
 
         $resp = $this->deleteJson('/api/v1/register');
         $resp->assertStatus(307);
@@ -71,8 +71,8 @@ class ReplicaModeRedirectTest extends TestCase
 
     public function test_replica_mode_passes_gets_through(): void
     {
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
 
         // GET /v1/events → middleware no-op → reaches EventsController → 200 with empty list
         $resp = $this->getJson('/api/v1/events');
@@ -81,8 +81,8 @@ class ReplicaModeRedirectTest extends TestCase
 
     public function test_replica_mode_preserves_query_string(): void
     {
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
 
         $resp = $this->postJson('/api/v1/heartbeat?node_id=abc&foo=bar');
         $resp->assertStatus(307);
@@ -94,8 +94,8 @@ class ReplicaModeRedirectTest extends TestCase
 
     public function test_replica_mode_returns_iicp_e046_when_seed_url_missing(): void
     {
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => '']);
 
         $resp = $this->postJson('/api/v1/register', ['endpoint' => 'https://x.test']);
         $resp->assertStatus(503);
@@ -104,8 +104,8 @@ class ReplicaModeRedirectTest extends TestCase
 
     public function test_replica_mode_returns_iicp_e046_when_seed_url_non_https(): void
     {
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=http://insecure.example');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'http://insecure.example']);
 
         $resp = $this->postJson('/api/v1/credits/award', []);
         $resp->assertStatus(503);

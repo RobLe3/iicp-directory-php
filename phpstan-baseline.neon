@@ -3,14 +3,8 @@ parameters:
 		-
 			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
 			identifier: larastan.noEnvCallsOutsideOfConfig
-			count: 4
+			count: 2
 			path: app/Console/Commands/ReplicaPreflightCommand.php
-
-		-
-			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
-			identifier: larastan.noEnvCallsOutsideOfConfig
-			count: 1
-			path: app/Console/Commands/ReplicaStartCommand.php
 
 		-
 			message: '#^Called ''pluck'' on Laravel collection, but could have been retrieved as a query\.$#'
@@ -133,12 +127,6 @@ parameters:
 			path: app/Http/Controllers/RegistryController.php
 
 		-
-			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
-			identifier: larastan.noEnvCallsOutsideOfConfig
-			count: 1
-			path: app/Http/Controllers/ReplicasController.php
-
-		-
 			message: '#^Constant App\\Http\\Controllers\\ReplicasController\:\:ALLOWED_TRUST_TIERS is unused\.$#'
 			identifier: classConstant.unused
 			count: 1
@@ -173,18 +161,6 @@ parameters:
 			identifier: property.onlyWritten
 			count: 1
 			path: app/Http/Controllers/TelemetryController.php
-
-		-
-			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
-			identifier: larastan.noEnvCallsOutsideOfConfig
-			count: 4
-			path: app/Http/Middleware/LoadRedirect.php
-
-		-
-			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
-			identifier: larastan.noEnvCallsOutsideOfConfig
-			count: 3
-			path: app/Http/Middleware/ReplicaModeRedirect.php
 
 		-
 			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
