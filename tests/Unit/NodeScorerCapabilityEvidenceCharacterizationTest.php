@@ -4,11 +4,10 @@ namespace Tests\Unit;
 
 use App\Models\Capability;
 use App\Models\Node;
-use App\Services\AvailabilityWindowPolicy;
 use App\Services\CapabilityEvidencePolicy;
 use App\Services\NodeEligibilityPolicy;
 use App\Services\NodeHealthService;
-use App\Services\NodeReadinessPolicy;
+use App\Services\NodeRankingPolicy;
 use App\Services\NodeScorer;
 use Illuminate\Database\Eloquent\Collection;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -27,9 +26,8 @@ class NodeScorerCapabilityEvidenceCharacterizationTest extends TestCase
         $scorer = new NodeScorer(
             $this->createMock(NodeHealthService::class),
             $policy,
-            new AvailabilityWindowPolicy,
-            new NodeReadinessPolicy,
             new NodeEligibilityPolicy,
+            app(NodeRankingPolicy::class),
         );
 
         $summary = $scorer->capabilitySummary($node);

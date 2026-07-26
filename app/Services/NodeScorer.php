@@ -57,38 +57,11 @@ class NodeScorer
 
     private const MIN_SCORE = 0.1;
 
-    // Phase 3 weights — used when no model preference is specified
-    private const W_AVAILABILITY = 0.35;
-
-    private const W_LOAD = 0.28;
-
-    private const W_CAPACITY = 0.18;
-
-    private const W_REGION = 0.09;
-
-    private const W_REPUTATION = 0.10;
-
-    // Phase 5 weights — used when ?model= is specified (ADR-012 W_MODEL, ADR-021)
-    private const P5_W_AVAILABILITY = 0.25;
-
-    private const P5_W_LOAD = 0.20;
-
-    private const P5_W_CAPACITY = 0.15;
-
-    private const P5_W_REGION = 0.10;
-
-    private const P5_W_REPUTATION = 0.10;
-
-    private const P5_W_PRICE = 0.10;
-
-    private const P5_W_MODEL = 0.10;
-
     public function __construct(
         private NodeHealthService $health,
         private CapabilityEvidencePolicy $capabilityEvidence,
-        private AvailabilityWindowPolicy $availabilityWindows,
-        private NodeReadinessPolicy $readiness,
         private NodeEligibilityPolicy $eligibility,
+        private NodeRankingPolicy $ranking,
     ) {}
 
     public function discover(
@@ -157,7 +130,7 @@ class NodeScorer
         $nodes = $timing !== null ? $timing->profile('eligibility', $eligible) : $eligible();
 
         $rank = fn () => $nodes
-            ->map(fn (Node $node) => $this->scoreNode($node, $region, $model))
+            ->map(fn (Node $node) => ['node' => $node, 'score' => $this->ranking->score($node, $region, $model)])
             ->filter(fn (array $item) => $item['score'] >= self::MIN_SCORE)
             ->when($maxMultiplier !== null, fn ($c) => $c->filter(fn (array $item) => $item['node']->credit_cost_multiplier <= $maxMultiplier))
             ->when($minQualityScore !== null, fn ($c) => $c->filter(fn (array $item) => $item['score'] >= $minQualityScore))
@@ -278,7 +251,7 @@ class NodeScorer
             ];
 
             if ($scoreVersion === 'v2_shadow') {
-                $out += $this->routingScoreV2($node, $health, $capabilitySummary, $model);
+                $out += $this->ranking->shadowV2($node, $health, $capabilitySummary, $model);
             }
 
             return $out;
@@ -1079,50 +1052,6 @@ class NodeScorer
         return $out;
     }
 
-    private function scoreNode(Node $node, ?string $requestedRegion, ?string $requestedModel = null): array
-    {
-        $availabilityScore = $this->availabilityWindows->score($node);
-        $loadScore = 1.0 - min($node->load, 1.0);
-        $capacityScore = $node->max_concurrent > 0
-            ? 1.0 - ($node->active_jobs / $node->max_concurrent)
-            : 0.0;
-        $regionScore = match (true) {
-            $requestedRegion === null => 0.5,
-            $node->region === $requestedRegion => 1.0,
-            default => 0.0,
-        };
-        $reputationScore = $node->reputation?->score ?? 0.5;
-
-        if ($requestedModel !== null) {
-            $modelMatch = $this->capabilityEvidence->exactModelMatch($node, $requestedModel);
-            // W_PRICE: cheaper nodes score higher; 0.5 neutral when pricing unavailable
-            $priceScore = $node->pricing_credits_per_1000 !== null
-                ? max(0.0, 1.0 - ($node->pricing_credits_per_1000 / 10.0))
-                : 0.5;
-
-            $score = (self::P5_W_AVAILABILITY * $availabilityScore)
-                + (self::P5_W_LOAD * $loadScore)
-                + (self::P5_W_CAPACITY * max(0.0, $capacityScore))
-                + (self::P5_W_REGION * $regionScore)
-                + (self::P5_W_REPUTATION * $reputationScore)
-                + (self::P5_W_PRICE * $priceScore)
-                + (self::P5_W_MODEL * $modelMatch);
-        } else {
-            $score = (self::W_AVAILABILITY * $availabilityScore)
-                + (self::W_LOAD * $loadScore)
-                + (self::W_CAPACITY * max(0.0, $capacityScore))
-                + (self::W_REGION * $regionScore)
-                + (self::W_REPUTATION * $reputationScore);
-        }
-
-        // Strict demotion, not spec watering-down: downlevel or non-key-ready
-        // nodes remain visible for transition, but do not rank as peers with
-        // current SDK + CX evidence.
-        $score *= $this->readiness->multiplier($node);
-
-        return ['node' => $node, 'score' => $score];
-    }
-
     /**
      * Additive #548 capability summary. This is descriptive evidence, not a
      * claim that one model is better than another.
@@ -1133,46 +1062,6 @@ class NodeScorer
     public function capabilitySummary(Node $node, ?array $registeredModels = null, ?array $liveModels = null): array
     {
         return $this->capabilityEvidence->summary($node, $registeredModels, $liveModels);
-    }
-
-    private function routingScoreV2(Node $node, array $health, array $capabilitySummary, ?string $requestedModel): array
-    {
-        $healthScore = max(0.0, min(1.0, ((float) ($health['score'] ?? 0)) / 100.0));
-        $capabilityFit = $this->capabilityEvidence->fitScore($capabilitySummary, $requestedModel);
-        $loadScore = 1.0 - min($node->load, 1.0);
-        $capacityScore = $node->max_concurrent > 0
-            ? max(0.0, 1.0 - ($node->active_jobs / $node->max_concurrent))
-            : 0.0;
-        $loadCapacity = round(($loadScore + $capacityScore) / 2.0, 4);
-        $reputation = (float) ($node->reputation?->score ?? 0.5);
-        $latency = (float) ($health['components']['latency'] ?? 0.5);
-        $price = $node->pricing_credits_per_1000 !== null
-            ? max(0.0, min(1.0, 1.0 - ($node->pricing_credits_per_1000 / 10.0)))
-            : 0.5;
-        $policy = $this->readiness->multiplier($node);
-
-        $score = 0.25 * $healthScore
-            + 0.20 * $capabilityFit
-            + 0.15 * $loadCapacity
-            + 0.15 * $reputation
-            + 0.10 * $latency
-            + 0.05 * $healthScore
-            + 0.05 * $price
-            + 0.05 * $policy;
-
-        return [
-            'routing_score_v2' => round($score, 4),
-            'routing_score_v2_components' => [
-                'health' => round($healthScore, 4),
-                'capability_fit' => $capabilityFit,
-                'load_capacity' => $loadCapacity,
-                'reputation' => round($reputation, 4),
-                'latency' => round($latency, 4),
-                'uptime_stability' => round($healthScore, 4),
-                'price' => round($price, 4),
-                'policy_fit' => round($policy, 4),
-            ],
-        ];
     }
 
     /**
