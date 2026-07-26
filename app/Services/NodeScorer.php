@@ -88,6 +88,7 @@ class NodeScorer
         private CapabilityEvidencePolicy $capabilityEvidence,
         private AvailabilityWindowPolicy $availabilityWindows,
         private NodeReadinessPolicy $readiness,
+        private NodeEligibilityPolicy $eligibility,
     ) {}
 
     public function discover(
@@ -152,37 +153,7 @@ class NodeScorer
 
         $scoringStarted = hrtime(true);
 
-        $eligible = function () use ($nodes, $model, $qos, $minReputation) {
-            // #494: nodes reporting health_models=[] have no model capacity right now.
-            $nodes = $nodes->filter(fn (Node $node) => $node->health_models === null || count($node->health_models) > 0);
-            // #561: only explicit backend draining blocks new admission.
-            $nodes = self::filterBackendAdmission($nodes);
-            if ($model !== null) {
-                $nodes = $nodes->filter(function (Node $node) use ($model) {
-                    if ($node->health_models !== null) {
-                        return in_array($model, $node->health_models, true);
-                    }
-                    foreach ($node->capabilities as $cap) {
-                        if (in_array($model, $cap->models ?? [], true)) {
-                            return true;
-                        }
-                    }
-
-                    return false;
-                });
-            }
-            if ($qos === 'realtime') {
-                $nodes = $nodes->filter(fn (Node $node) => $node->reputation !== null
-                    && $node->reputation->completed_tasks_count >= 1000 && $node->reputation->score >= 0.8);
-            } elseif ($qos === 'interactive') {
-                $nodes = $nodes->filter(fn (Node $node) => ($node->reputation?->completed_tasks_count ?? 0) >= 100);
-            }
-            if ($minReputation > 0.0) {
-                $nodes = $nodes->filter(fn (Node $node) => ($node->reputation?->score ?? 0.5) >= $minReputation);
-            }
-
-            return $nodes;
-        };
+        $eligible = fn () => $this->eligibility->filter($nodes, $model, $qos, $minReputation);
         $nodes = $timing !== null ? $timing->profile('eligibility', $eligible) : $eligible();
 
         $rank = fn () => $nodes
@@ -654,11 +625,6 @@ class NodeScorer
     public static function backendStability(Node $node): array
     {
         return BackendStabilityPolicy::summarize($node);
-    }
-
-    private static function filterBackendAdmission($nodes)
-    {
-        return $nodes->filter(fn (Node $node) => BackendStabilityPolicy::allowsAdmission($node));
     }
 
     /**

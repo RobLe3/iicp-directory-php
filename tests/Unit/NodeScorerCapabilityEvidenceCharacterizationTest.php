@@ -6,6 +6,7 @@ use App\Models\Capability;
 use App\Models\Node;
 use App\Services\AvailabilityWindowPolicy;
 use App\Services\CapabilityEvidencePolicy;
+use App\Services\NodeEligibilityPolicy;
 use App\Services\NodeHealthService;
 use App\Services\NodeReadinessPolicy;
 use App\Services\NodeScorer;
@@ -28,6 +29,7 @@ class NodeScorerCapabilityEvidenceCharacterizationTest extends TestCase
             $policy,
             new AvailabilityWindowPolicy,
             new NodeReadinessPolicy,
+            new NodeEligibilityPolicy,
         );
 
         $summary = $scorer->capabilitySummary($node);

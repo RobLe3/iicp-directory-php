@@ -201,7 +201,7 @@ parameters:
 		-
 			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$completed_tasks_count\.$#'
 			identifier: property.notFound
-			count: 4
+			count: 2
 			path: app/Services/NodeScorer.php
 
 		-
@@ -213,7 +213,7 @@ parameters:
 		-
 			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$score\.$#'
 			identifier: property.notFound
-			count: 5
+			count: 3
 			path: app/Services/NodeScorer.php
 
 		-
@@ -225,13 +225,13 @@ parameters:
 		-
 			message: '#^Using nullsafe property access "\?\-\>completed_tasks_count" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
 			identifier: nullsafe.neverNull
-			count: 4
+			count: 3
 			path: app/Services/NodeScorer.php
 
 		-
 			message: '#^Using nullsafe property access "\?\-\>score" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
 			identifier: nullsafe.neverNull
-			count: 5
+			count: 4
 			path: app/Services/NodeScorer.php
 
 		-

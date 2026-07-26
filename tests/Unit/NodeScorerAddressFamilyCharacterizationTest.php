@@ -4,6 +4,7 @@ namespace Tests\Unit;
 
 use App\Services\AvailabilityWindowPolicy;
 use App\Services\CapabilityEvidencePolicy;
+use App\Services\NodeEligibilityPolicy;
 use App\Services\NodeHealthService;
 use App\Services\NodeReadinessPolicy;
 use App\Services\NodeScorer;
@@ -24,6 +25,7 @@ class NodeScorerAddressFamilyCharacterizationTest extends TestCase
             new CapabilityEvidencePolicy,
             new AvailabilityWindowPolicy,
             new NodeReadinessPolicy,
+            new NodeEligibilityPolicy,
         );
         $method = new ReflectionMethod($scorer, 'detectAddressFamily');
 
