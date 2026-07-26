@@ -86,3 +86,5 @@ jobs:
           docker build -f Dockerfile.operator-nginx -t iicp-directory-operator-nginx:test .
       - name: Verify non-root, read-only and fail-closed runtime
         run: ./scripts/test_operator_image.sh
+      - name: Rehearse disposable operator lifecycle
+        run: IICP_IMAGE_TAG=test ./scripts/rehearse_operator_stack.sh --skip-build

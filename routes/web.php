@@ -1,5 +1,6 @@
 <?php
 
+use App\Services\OperatorReadiness;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -14,6 +15,20 @@ Route::get('/', function () {
 | convention provider nodes use. Cheap, unauthenticated, no DB.
 */
 Route::get('/iicp/health', fn () => response()->json(['ok' => true, 'role' => 'directory']));
+
+/*
+| GET /iicp/ready — operator readiness probe.
+| Fixed, content-free output only: it confirms database connectivity and that
+| every tracked migration has run. It never returns exception, host, schema,
+| credential, query, or pending-migration details.
+*/
+Route::get('/iicp/ready', function (OperatorReadiness $readiness) {
+    $ready = $readiness->ready();
+
+    return response()
+        ->json(['ok' => $ready, 'role' => 'directory', 'ready' => $ready], $ready ? 200 : 503)
+        ->header('Cache-Control', 'no-store');
+});
 
 /*
 |--------------------------------------------------------------------------
