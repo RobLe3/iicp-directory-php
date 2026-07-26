@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\NodeEvent;
 use App\Models\TelemetryProbe;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Compute verified cumulative uptime for a node from the signed event log.
@@ -93,7 +94,11 @@ class UptimeService
             return [];
         }
 
-        $eventsByNode = NodeEvent::whereIn('node_id', $ids)
+        // This read may hydrate thousands of historical lifecycle rows for a
+        // small discovery result. Query-builder records preserve the exact
+        // property contract used below without Eloquent model hydration cost.
+        $eventsByNode = DB::table('node_events')
+            ->whereIn('node_id', $ids)
             ->whereIn('event_type', array_merge(self::SESSION_START_TYPES, self::SESSION_END_TYPES))
             ->orderBy('node_id')
             ->orderBy('seq')
