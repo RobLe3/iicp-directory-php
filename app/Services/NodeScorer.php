@@ -1187,7 +1187,7 @@ class NodeScorer
             return 'https_direct';
         }
         if ($scheme === 'http') {
-            return self::hostFamily($endpoint) === 'ipv6' ? 'http_ipv6' : 'http_direct';
+            return EndpointAddressFamilyClassifier::hostFamily($endpoint) === 'ipv6' ? 'http_ipv6' : 'http_direct';
         }
 
         return 'unknown';
@@ -1423,49 +1423,6 @@ class NodeScorer
      */
     private function detectAddressFamily(?string $endpoint, ?string $transportEndpoint): string
     {
-        $primary = self::hostFamily($endpoint);
-        $tcp = self::hostFamily($transportEndpoint);
-        if ($primary === 'unknown' && $tcp === 'unknown') {
-            return 'unknown';
-        }
-        // Hostname (DNS name) — can't statically tell without resolving;
-        // defer to consumer-side resolution. Render badge as 'DNS' or
-        // hide entirely on the website.
-        if ($primary === 'hostname' || $tcp === 'hostname') {
-            return 'hostname';
-        }
-        if ($primary === $tcp) {
-            return $primary;
-        }
-        if ($primary !== 'unknown' && $tcp !== 'unknown') {
-            return 'dual';
-        }
-
-        return $primary !== 'unknown' ? $primary : $tcp;
-    }
-
-    private static function hostFamily(?string $url): string
-    {
-        if (! $url) {
-            return 'unknown';
-        }
-        $parts = parse_url($url);
-        $host = $parts['host'] ?? '';
-        if ($host === '') {
-            return 'unknown';
-        }
-        // Strip IPv6 brackets that parse_url leaves on
-        if (str_starts_with($host, '[') && str_ends_with($host, ']')) {
-            $host = substr($host, 1, -1);
-        }
-        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-            return 'ipv4';
-        }
-        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-            return 'ipv6';
-        }
-
-        // Looks like a DNS hostname — family unknown until resolved.
-        return 'hostname';
+        return EndpointAddressFamilyClassifier::classify($endpoint, $transportEndpoint);
     }
 }
