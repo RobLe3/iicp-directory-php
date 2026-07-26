@@ -9,7 +9,7 @@ source or require a private-tree mirror.
 
 The project keeps separate namespaces:
 
-- Git tag and `VERSION`: PHP implementation release (`v1.10.77.1`);
+- Git tag and `VERSION`: PHP implementation release (`v1.10.78.1`);
 - `openapi.yaml` `info.version`: machine-readable HTTP contract revision;
 - IICP specification versions: protocol documents owned by `RobLe3/IICP`;
 - database migrations: ordered schema history, not a separate release number;
@@ -29,13 +29,13 @@ SHA-256 checksums and GitHub artifact attestation. Verify with:
 
 ```bash
 sha256sum --check SHA256SUMS
-gh attestation verify iicp-directory-php-v1.10.77.1.tar.gz \
+gh attestation verify iicp-directory-php-v1.10.78.1.tar.gz \
   --repo RobLe3/iicp-directory-php
 ```
 
 ## Compatibility
 
-- PHP: 8.3.x is the supported runtime line for v1.10.77.1.
+- PHP: 8.3.x is the supported runtime line for v1.10.78.1.
 - Database: MariaDB 11.4 is the concurrency-tested reference; compatible
   MySQL deployments require operator rehearsal.
 - HTTP: additive fields and endpoints may appear in a minor release. Removing
