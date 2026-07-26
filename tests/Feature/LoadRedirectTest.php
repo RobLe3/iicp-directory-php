@@ -31,17 +31,17 @@ class LoadRedirectTest extends TestCase
 
     protected function tearDown(): void
     {
-        putenv('IICP_REDIRECT_ENABLED');
-        putenv('IICP_REPLICA_URLS');
-        putenv('IICP_REDIRECT_TRUST_TIER');
-        putenv('IICP_REDIRECT_RETRY_AFTER');
+        config(['iicp.replica.redirect.enabled' => false]);
+        config(['iicp.replica.redirect.urls' => '']);
+        config(['iicp.replica.redirect.trust_tier' => 'low']);
+        config(['iicp.replica.redirect.retry_after' => 5]);
         parent::tearDown();
     }
 
     public function test_passes_through_when_disabled(): void
     {
-        putenv('IICP_REDIRECT_ENABLED=false');
-        putenv('IICP_REPLICA_URLS=https://r1.example.com');
+        config(['iicp.replica.redirect.enabled' => false]);
+        config(['iicp.replica.redirect.urls' => 'https://r1.example.com']);
 
         $this->getJson('/api/v1/_load-redirect-probe')
             ->assertStatus(200)
@@ -50,8 +50,8 @@ class LoadRedirectTest extends TestCase
 
     public function test_passes_through_when_enabled_but_no_replicas(): void
     {
-        putenv('IICP_REDIRECT_ENABLED=true');
-        putenv('IICP_REPLICA_URLS=');
+        config(['iicp.replica.redirect.enabled' => true]);
+        config(['iicp.replica.redirect.urls' => '']);
 
         $this->getJson('/api/v1/_load-redirect-probe')
             ->assertStatus(200)
@@ -60,10 +60,10 @@ class LoadRedirectTest extends TestCase
 
     public function test_returns_307_with_required_headers_when_enabled_and_replica_present(): void
     {
-        putenv('IICP_REDIRECT_ENABLED=true');
-        putenv('IICP_REPLICA_URLS=https://r1.example.com');
-        putenv('IICP_REDIRECT_TRUST_TIER=medium');
-        putenv('IICP_REDIRECT_RETRY_AFTER=7');
+        config(['iicp.replica.redirect.enabled' => true]);
+        config(['iicp.replica.redirect.urls' => 'https://r1.example.com']);
+        config(['iicp.replica.redirect.trust_tier' => 'medium']);
+        config(['iicp.replica.redirect.retry_after' => 7]);
 
         $response = $this->getJson('/api/v1/_load-redirect-probe');
         $response->assertStatus(307);
@@ -76,8 +76,8 @@ class LoadRedirectTest extends TestCase
 
     public function test_picks_from_multiple_replicas(): void
     {
-        putenv('IICP_REDIRECT_ENABLED=true');
-        putenv('IICP_REPLICA_URLS=https://r1.example.com,https://r2.example.com,https://r3.example.com');
+        config(['iicp.replica.redirect.enabled' => true]);
+        config(['iicp.replica.redirect.urls' => 'https://r1.example.com,https://r2.example.com,https://r3.example.com']);
 
         $response = $this->getJson('/api/v1/_load-redirect-probe');
         $response->assertStatus(307);
@@ -94,8 +94,8 @@ class LoadRedirectTest extends TestCase
 
     public function test_default_trust_tier_is_low(): void
     {
-        putenv('IICP_REDIRECT_ENABLED=true');
-        putenv('IICP_REPLICA_URLS=https://r1.example.com');
+        config(['iicp.replica.redirect.enabled' => true]);
+        config(['iicp.replica.redirect.urls' => 'https://r1.example.com']);
 
         $response = $this->getJson('/api/v1/_load-redirect-probe');
         $response->assertStatus(307);
@@ -105,8 +105,8 @@ class LoadRedirectTest extends TestCase
 
     public function test_preserves_query_string_in_location(): void
     {
-        putenv('IICP_REDIRECT_ENABLED=true');
-        putenv('IICP_REPLICA_URLS=https://r1.example.com');
+        config(['iicp.replica.redirect.enabled' => true]);
+        config(['iicp.replica.redirect.urls' => 'https://r1.example.com']);
 
         $response = $this->getJson('/api/v1/_load-redirect-probe?intent=urn:iicp:intent:llm:chat:v1&region=eu');
         $response->assertStatus(307);
@@ -119,8 +119,8 @@ class LoadRedirectTest extends TestCase
     public function test_rejects_non_https_replica_urls(): void
     {
         // bug-281: open-redirect-via-misconfig — http:// (no TLS) and javascript: must be dropped.
-        putenv('IICP_REDIRECT_ENABLED=true');
-        putenv('IICP_REPLICA_URLS=http://r1.example.com,javascript:alert(1),https://r2.example.com');
+        config(['iicp.replica.redirect.enabled' => true]);
+        config(['iicp.replica.redirect.urls' => 'http://r1.example.com,javascript:alert(1),https://r2.example.com']);
 
         $response = $this->getJson('/api/v1/_load-redirect-probe');
         $response->assertStatus(307);
@@ -131,8 +131,8 @@ class LoadRedirectTest extends TestCase
     public function test_passes_through_when_all_replicas_are_non_https(): void
     {
         // bug-281: if filter leaves no replicas, behave like the "no replicas" case.
-        putenv('IICP_REDIRECT_ENABLED=true');
-        putenv('IICP_REPLICA_URLS=http://r1.example.com,ftp://r2.example.com');
+        config(['iicp.replica.redirect.enabled' => true]);
+        config(['iicp.replica.redirect.urls' => 'http://r1.example.com,ftp://r2.example.com']);
 
         $this->getJson('/api/v1/_load-redirect-probe')
             ->assertStatus(200)
@@ -143,9 +143,9 @@ class LoadRedirectTest extends TestCase
     {
         // bug-281: prevent header injection via env misconfig — anything outside
         // the allowlist {low, medium, high} falls back to "low".
-        putenv('IICP_REDIRECT_ENABLED=true');
-        putenv('IICP_REPLICA_URLS=https://r1.example.com');
-        putenv("IICP_REDIRECT_TRUST_TIER=bogus\r\nX-Injected: yes");
+        config(['iicp.replica.redirect.enabled' => true]);
+        config(['iicp.replica.redirect.urls' => 'https://r1.example.com']);
+        config(['iicp.replica.redirect.trust_tier' => "bogus\r\nX-Injected: yes"]);
 
         $response = $this->getJson('/api/v1/_load-redirect-probe');
         $response->assertStatus(307);
@@ -156,9 +156,9 @@ class LoadRedirectTest extends TestCase
     public function test_retry_after_clamped_to_minimum_one(): void
     {
         // bug-281: Retry-After=0 or negative would invite tight retry loops.
-        putenv('IICP_REDIRECT_ENABLED=true');
-        putenv('IICP_REPLICA_URLS=https://r1.example.com');
-        putenv('IICP_REDIRECT_RETRY_AFTER=0');
+        config(['iicp.replica.redirect.enabled' => true]);
+        config(['iicp.replica.redirect.urls' => 'https://r1.example.com']);
+        config(['iicp.replica.redirect.retry_after' => 0]);
 
         $response = $this->getJson('/api/v1/_load-redirect-probe');
         $response->assertHeader('Retry-After', '1');

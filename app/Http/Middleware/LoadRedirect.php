@@ -49,7 +49,7 @@ class LoadRedirect
         $replica = $this->pickReplica($replicas);
         $target = rtrim($replica, '/').'/'.ltrim($request->getRequestUri(), '/');
         $trust = $this->trustTier();
-        $retry = max(1, (int) env('IICP_REDIRECT_RETRY_AFTER', 5));
+        $retry = max(1, (int) config('iicp.replica.redirect.retry_after', 5));
 
         return response('', 307, [
             'Location' => $target,
@@ -62,7 +62,7 @@ class LoadRedirect
 
     private function enabled(): bool
     {
-        return filter_var(env('IICP_REDIRECT_ENABLED', false), FILTER_VALIDATE_BOOLEAN);
+        return filter_var(config('iicp.replica.redirect.enabled', false), FILTER_VALIDATE_BOOLEAN);
     }
 
     /**
@@ -73,7 +73,7 @@ class LoadRedirect
      */
     private function replicaUrls(): array
     {
-        $raw = (string) env('IICP_REPLICA_URLS', '');
+        $raw = (string) config('iicp.replica.redirect.urls', '');
         if ($raw === '') {
             return [];
         }
@@ -89,7 +89,7 @@ class LoadRedirect
      */
     private function trustTier(): string
     {
-        $tier = strtolower(trim((string) env('IICP_REDIRECT_TRUST_TIER', 'low')));
+        $tier = strtolower(trim((string) config('iicp.replica.redirect.trust_tier', 'low')));
 
         return in_array($tier, self::VALID_TRUST_TIERS, true) ? $tier : 'low';
     }

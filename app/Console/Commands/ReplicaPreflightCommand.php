@@ -116,7 +116,7 @@ class ReplicaPreflightCommand extends Command
     private function checkEnvFlags(): void
     {
         $this->line('<fg=cyan>[1/5] Environment flags</fg=cyan>');
-        $replicaMode = filter_var(env('IICP_REPLICA_MODE', false), FILTER_VALIDATE_BOOLEAN);
+        $replicaMode = filter_var(config('iicp.replica.enabled', false), FILTER_VALIDATE_BOOLEAN);
         if ($replicaMode) {
             $this->markPass('IICP_REPLICA_MODE=true');
         } else {
@@ -125,7 +125,7 @@ class ReplicaPreflightCommand extends Command
                 'Set IICP_REPLICA_MODE=true in .env (without it the write-gate + signing middleware are no-ops)'
             );
         }
-        $seedUrlEnv = (string) env('IICP_SEED_URL', '');
+        $seedUrlEnv = (string) config('iicp.replica.seed_url', '');
         if ($seedUrlEnv && str_starts_with($seedUrlEnv, 'https://')) {
             $this->markPass("IICP_SEED_URL set and https ({$seedUrlEnv})");
         } else {

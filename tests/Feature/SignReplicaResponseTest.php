@@ -23,15 +23,15 @@ class SignReplicaResponseTest extends TestCase
         $this->publicKey = sodium_crypto_sign_publickey($kp);
         $this->secretHex = bin2hex($secret);
 
-        putenv('IICP_REPLICA_MODE=false');
-        putenv('IICP_SEED_URL');
+        config(['iicp.replica.enabled' => false]);
+        config(['iicp.replica.seed_url' => '']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY');
     }
 
     protected function tearDown(): void
     {
-        putenv('IICP_REPLICA_MODE=false');
-        putenv('IICP_SEED_URL');
+        config(['iicp.replica.enabled' => false]);
+        config(['iicp.replica.seed_url' => '']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY');
         parent::tearDown();
     }
@@ -46,8 +46,8 @@ class SignReplicaResponseTest extends TestCase
 
     public function test_replica_mode_adds_sig_headers_on_discover(): void
     {
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY='.$this->secretHex);
 
         $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1');
@@ -61,8 +61,8 @@ class SignReplicaResponseTest extends TestCase
 
     public function test_replica_mode_does_not_sign_non_discovery_paths(): void
     {
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY='.$this->secretHex);
 
         // /v1/events is not a discovery endpoint — should NOT be signed
@@ -72,8 +72,8 @@ class SignReplicaResponseTest extends TestCase
 
     public function test_replica_mode_missing_key_returns_503(): void
     {
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY');  // unset
 
         $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1');
@@ -83,8 +83,8 @@ class SignReplicaResponseTest extends TestCase
 
     public function test_replica_mode_wrong_length_key_returns_503(): void
     {
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY=deadbeef');  // too short
 
         $resp = $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1');
@@ -97,8 +97,8 @@ class SignReplicaResponseTest extends TestCase
         // Critical round-trip test: server signs, we verify with the same key.
         // Any divergence in the canonical signing input between PHP and the
         // documented spec/proxy verifier surfaces here.
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY='.$this->secretHex);
 
         // Use a query with order that needs canonicalization (b before a)
@@ -131,8 +131,8 @@ class SignReplicaResponseTest extends TestCase
 
     public function test_snapshot_seq_matches_max_event_seq(): void
     {
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY='.$this->secretHex);
 
         // Seed the event log

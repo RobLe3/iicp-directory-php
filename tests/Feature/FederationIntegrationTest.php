@@ -32,8 +32,8 @@ class FederationIntegrationTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        putenv('IICP_REPLICA_MODE=false');
-        putenv('IICP_SEED_URL');
+        config(['iicp.replica.enabled' => false]);
+        config(['iicp.replica.seed_url' => '']);
         // RegisterController performs a real liveness GET on the node endpoint.
         Http::fake([
             'https://node-a.test/iicp/health' => Http::response('ok', 200),
@@ -45,16 +45,16 @@ class FederationIntegrationTest extends TestCase
 
     protected function tearDown(): void
     {
-        putenv('IICP_REPLICA_MODE=false');
-        putenv('IICP_SEED_URL');
+        config(['iicp.replica.enabled' => false]);
+        config(['iicp.replica.seed_url' => '']);
         parent::tearDown();
     }
 
     public function test_replica_307_redirects_write_to_seed_then_seed_state_mirrors_to_replica(): void
     {
         // === Phase A: REPLICA mode — POST /v1/register should 307 to seed ===
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         $registerPayload = [
             'endpoint' => 'https://node-a.test',
             'region' => 'eu-central',
@@ -72,8 +72,8 @@ class FederationIntegrationTest extends TestCase
         // === Phase B: SEED mode — the redirected request lands at the seed ===
         // Simulate what the client does next: re-POST to the Location URL.
         // In-process we just toggle replica mode off and re-issue the request.
-        putenv('IICP_REPLICA_MODE=false');
-        putenv('IICP_SEED_URL');
+        config(['iicp.replica.enabled' => false]);
+        config(['iicp.replica.seed_url' => '']);
         $seedResp = $this->postJson('/api/v1/register', $registerPayload);
         $seedResp->assertStatus(201);
         $nodeId = $seedResp->json('node_id');
@@ -152,8 +152,8 @@ class FederationIntegrationTest extends TestCase
     public function test_replica_503_when_misconfigured_does_not_leak_writes(): void
     {
         // IICP_REPLICA_MODE=true but no IICP_SEED_URL → 503 IICP-E047, no state change
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL'); // unset
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => '']); // unset
 
         $resp = $this->postJson('/api/v1/register', [
             'endpoint' => 'https://node-c.test',
@@ -172,8 +172,8 @@ class FederationIntegrationTest extends TestCase
     public function test_event_emission_only_happens_on_seed_not_replica(): void
     {
         // Round 1: REPLICA mode — POST is 307'd, no event emitted
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         $this->postJson('/api/v1/register', [
             'endpoint' => 'https://node-d.test', 'region' => 'eu-west',
             'capabilities' => [['intent' => 'urn:iicp:intent:llm:chat:v1', 'models' => ['m'], 'max_tokens' => 1024]],
@@ -182,7 +182,7 @@ class FederationIntegrationTest extends TestCase
         $this->assertSame(0, NodeEvent::count(), 'replica mode must NOT emit events on write');
 
         // Round 2: SEED mode — POST processes, event emitted
-        putenv('IICP_REPLICA_MODE=false');
+        config(['iicp.replica.enabled' => false]);
         $this->postJson('/api/v1/register', [
             'endpoint' => 'https://node-d.test', 'region' => 'eu-west',
             'capabilities' => [['intent' => 'urn:iicp:intent:llm:chat:v1', 'models' => ['m'], 'max_tokens' => 1024]],

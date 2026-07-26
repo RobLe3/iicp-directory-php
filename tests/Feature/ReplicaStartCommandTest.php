@@ -42,7 +42,7 @@ class ReplicaStartCommandTest extends TestCase
     public function test_dev_flag_allows_http_in_non_production(): void
     {
         config(['app.env' => 'local']);
-        putenv('IICP_DEV_ALLOW_HTTP_DID=true');
+        config(['iicp.replica.dev_allow_http_did' => true]);
         try {
             Http::fake();
             $exit = $this->artisan('iicp:replica-start', [
@@ -53,14 +53,14 @@ class ReplicaStartCommandTest extends TestCase
             ])->run();
             $this->assertSame(0, $exit, 'dev flag should let http:// pass in local env');
         } finally {
-            putenv('IICP_DEV_ALLOW_HTTP_DID');
+            config(['iicp.replica.dev_allow_http_did' => false]);
         }
     }
 
     public function test_dev_flag_rejected_in_production(): void
     {
         config(['app.env' => 'production']);
-        putenv('IICP_DEV_ALLOW_HTTP_DID=true');
+        config(['iicp.replica.dev_allow_http_did' => true]);
         try {
             $exit = $this->artisan('iicp:replica-start', [
                 '--seed-url' => 'http://insecure.example',
@@ -73,7 +73,7 @@ class ReplicaStartCommandTest extends TestCase
                 'IICP_DEV_ALLOW_HTTP_DID must NOT bypass HTTPS check in production',
             );
         } finally {
-            putenv('IICP_DEV_ALLOW_HTTP_DID');
+            config(['iicp.replica.dev_allow_http_did' => false]);
             config(['app.env' => 'testing']);
         }
     }

@@ -74,19 +74,19 @@ class ReplicaModeRedirect
 
     public static function enabled(): bool
     {
-        return filter_var(env('IICP_REPLICA_MODE', false), FILTER_VALIDATE_BOOLEAN);
+        return filter_var(config('iicp.replica.enabled', false), FILTER_VALIDATE_BOOLEAN);
     }
 
     private function seedUrl(): ?string
     {
-        $url = (string) env('IICP_SEED_URL', '');
+        $url = (string) config('iicp.replica.seed_url', '');
         if ($url === '') {
             return null;
         }
         // Production requires https. The docker-compose federation testbed wires seed↔replica
         // over plain http inside the bridge network; IICP_DEV_ALLOW_HTTP_DID (non-production
         // only) permits http:// here, mirroring ReplicasController/ReplicaStartCommand.
-        $allowHttp = filter_var(env('IICP_DEV_ALLOW_HTTP_DID', false), FILTER_VALIDATE_BOOLEAN)
+        $allowHttp = filter_var(config('iicp.replica.dev_allow_http_did', false), FILTER_VALIDATE_BOOLEAN)
             && config('app.env') !== 'production';
         $ok = str_starts_with($url, 'https://') || ($allowHttp && str_starts_with($url, 'http://'));
 

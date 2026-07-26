@@ -10,15 +10,15 @@ class ReplicaPreflightCommandTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        putenv('IICP_REPLICA_MODE=false');
-        putenv('IICP_SEED_URL');
+        config(['iicp.replica.enabled' => false]);
+        config(['iicp.replica.seed_url' => '']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY');
     }
 
     protected function tearDown(): void
     {
-        putenv('IICP_REPLICA_MODE=false');
-        putenv('IICP_SEED_URL');
+        config(['iicp.replica.enabled' => false]);
+        config(['iicp.replica.seed_url' => '']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY');
         parent::tearDown();
     }
@@ -42,8 +42,8 @@ class ReplicaPreflightCommandTest extends TestCase
 
     public function test_fails_when_secret_key_wrong_length(): void
     {
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY=deadbeef');  // too short
 
         Http::fake([
@@ -63,8 +63,8 @@ class ReplicaPreflightCommandTest extends TestCase
     public function test_fails_when_seed_unreachable(): void
     {
         $kp = sodium_crypto_sign_keypair();
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY='.bin2hex(sodium_crypto_sign_secretkey($kp)));
 
         Http::fake([
@@ -85,8 +85,8 @@ class ReplicaPreflightCommandTest extends TestCase
     {
         $kp = sodium_crypto_sign_keypair();
         $secret = sodium_crypto_sign_secretkey($kp);
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY='.bin2hex($secret));
 
         // Publish a DID doc with a DIFFERENT public key
@@ -117,8 +117,8 @@ class ReplicaPreflightCommandTest extends TestCase
         $pub = sodium_crypto_sign_publickey($kp);
         $pub_b64 = rtrim(strtr(base64_encode($pub), '+/', '-_'), '=');
 
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY='.bin2hex($secret));
 
         Http::fake([
@@ -143,8 +143,8 @@ class ReplicaPreflightCommandTest extends TestCase
     public function test_non_https_endpoint_is_failure(): void
     {
         $kp = sodium_crypto_sign_keypair();
-        putenv('IICP_REPLICA_MODE=true');
-        putenv('IICP_SEED_URL=https://iicp.network');
+        config(['iicp.replica.enabled' => true]);
+        config(['iicp.replica.seed_url' => 'https://iicp.network']);
         putenv('IICP_REPLICA_ED25519_SECRET_KEY='.bin2hex(sodium_crypto_sign_secretkey($kp)));
 
         Http::fake([

@@ -164,7 +164,7 @@ class ReplicaStartCommand extends Command
      */
     private function validateUrlSchemes(string $seedUrl, string $endpoint): ?int
     {
-        $allowHttp = env('IICP_DEV_ALLOW_HTTP_DID', false)
+        $allowHttp = config('iicp.replica.dev_allow_http_did', false)
             && config('app.env') !== 'production';
 
         $okSeed = str_starts_with($seedUrl, 'https://')

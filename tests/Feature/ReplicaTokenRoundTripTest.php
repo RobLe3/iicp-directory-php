@@ -64,12 +64,12 @@ PHP);
             'app.env' => 'local',
             'app.key' => 'base64:/OAqqqyx1z7Q0IxZy6/tNTe0l7Jyf0nkru4AhZeHzso=',
         ]);
-        putenv('IICP_DEV_ALLOW_HTTP_DID=true');
+        config(['iicp.replica.dev_allow_http_did' => true]);
     }
 
     protected function tearDown(): void
     {
-        putenv('IICP_DEV_ALLOW_HTTP_DID');
+        config(['iicp.replica.dev_allow_http_did' => false]);
         if (is_resource($this->server)) {
             proc_terminate($this->server);
             proc_close($this->server);

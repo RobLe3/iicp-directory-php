@@ -90,7 +90,7 @@ class ReplicasTest extends TestCase
     public function test_register_accepts_http_endpoint_with_dev_flag_in_non_production(): void
     {
         config(['app.env' => 'local']);
-        putenv('IICP_DEV_ALLOW_HTTP_DID=true');
+        config(['iicp.replica.dev_allow_http_did' => true]);
         try {
             // We expect to reach validateDidDocument (which will still fail
             // because did:web:replica-directory does not resolve in the test
@@ -107,14 +107,14 @@ class ReplicasTest extends TestCase
                 'dev flag must let http:// pass the scheme check in local env',
             );
         } finally {
-            putenv('IICP_DEV_ALLOW_HTTP_DID');
+            config(['iicp.replica.dev_allow_http_did' => false]);
         }
     }
 
     public function test_register_rejects_http_endpoint_with_dev_flag_in_production(): void
     {
         config(['app.env' => 'production']);
-        putenv('IICP_DEV_ALLOW_HTTP_DID=true');
+        config(['iicp.replica.dev_allow_http_did' => true]);
         try {
             $response = $this->postJson('/api/v1/replicas/register', [
                 'did' => 'did:web:replica.example.com',
@@ -123,7 +123,7 @@ class ReplicasTest extends TestCase
             $response->assertStatus(422)
                 ->assertJsonPath('error.code', 'IICP-E043');
         } finally {
-            putenv('IICP_DEV_ALLOW_HTTP_DID');
+            config(['iicp.replica.dev_allow_http_did' => false]);
             config(['app.env' => 'testing']);
         }
     }
@@ -137,7 +137,7 @@ class ReplicasTest extends TestCase
     public function test_register_accepts_did_with_percent_encoded_port(): void
     {
         config(['app.env' => 'local']);
-        putenv('IICP_DEV_ALLOW_HTTP_DID=true');
+        config(['iicp.replica.dev_allow_http_did' => true]);
         try {
             $response = $this->postJson('/api/v1/replicas/register', [
                 'did' => 'did:web:replica-directory%3A8080',
@@ -154,7 +154,7 @@ class ReplicasTest extends TestCase
                 "got {$code} — did regex should now accept %3A8080 port suffix",
             );
         } finally {
-            putenv('IICP_DEV_ALLOW_HTTP_DID');
+            config(['iicp.replica.dev_allow_http_did' => false]);
         }
     }
 
