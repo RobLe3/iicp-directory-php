@@ -74,3 +74,15 @@ jobs:
       - run: composer install --no-interaction --prefer-dist
       - run: php artisan migrate:fresh --force
       - run: php artisan test --compact tests/Feature/NodeEventLoggerConcurrencyTest.php tests/Feature/CreditLedgerConcurrencyTest.php
+
+  operator-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build hardened operator images
+        run: |
+          docker build -f Dockerfile.operator -t iicp-directory-operator:test .
+          docker build -f Dockerfile.operator-nginx -t iicp-directory-operator-nginx:test .
+      - name: Verify non-root, read-only and fail-closed runtime
+        run: ./scripts/test_operator_image.sh

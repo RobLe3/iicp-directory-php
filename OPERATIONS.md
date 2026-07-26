@@ -3,6 +3,21 @@
 These instructions are implementation-neutral examples. Adapt paths, retention
 and access controls to the operator's environment.
 
+## Deployment profiles
+
+- `Dockerfile` and `docker-testbed-entrypoint.sh` are development/testbed
+  conveniences. They generate local state and may apply migrations.
+- `Dockerfile.operator` plus `Dockerfile.operator-nginx` are the hardened
+  operator images. They use pinned multi-stage inputs, run as non-root users,
+  do not contain default credentials, do not generate `APP_KEY`, and never
+  apply migrations from the web entrypoint.
+
+The operator image accepts `APP_KEY_FILE` and `DB_PASSWORD_FILE`; optional
+secret-file inputs are limited to the names explicitly loaded by
+`operator/entrypoint.sh`. Provide `APP_ENV=production`, `APP_DEBUG=false`,
+`APP_URL`, `DB_HOST`, `DB_DATABASE`, and `DB_USERNAME` separately. Do not put
+secret values in an image layer, Compose file, command line, or Git.
+
 ## Verify a public source release
 
 Before preparing an operator artifact, verify both checksum and provenance:

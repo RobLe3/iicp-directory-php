@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1.7
+
+FROM composer:2.8@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd62ac72a02577c AS vendor
+WORKDIR /source
+COPY . .
+RUN composer install \
+    --no-dev \
+    --no-interaction \
+    --no-progress \
+    --no-scripts \
+    --prefer-dist \
+    --classmap-authoritative
+
+FROM php:8.3-fpm-alpine@sha256:9fcec48321d890240d700ccdc2b475420c87d398826e68c3d8830b8fca663e5c AS runtime
+
+RUN apk add --no-cache fcgi \
+    && docker-php-ext-install -j"$(getconf _NPROCESSORS_ONLN)" opcache pcntl pdo_mysql \
+    && addgroup -g 10001 -S iicp \
+    && adduser -u 10001 -S -D -H -G iicp iicp
+
+WORKDIR /app
+COPY --chown=root:root . .
+COPY --from=vendor --chown=root:root /source/vendor /app/vendor
+COPY --chown=root:root operator/php-fpm.conf /usr/local/etc/php-fpm.d/zz-iicp.conf
+COPY --chown=root:root operator/php.ini /usr/local/etc/php/conf.d/zz-iicp.ini
+COPY --chown=root:root operator/entrypoint.sh /usr/local/bin/iicp-operator-entrypoint
+
+RUN mkdir -p \
+      bootstrap/cache \
+      storage/app/private \
+      storage/framework/cache/data \
+      storage/framework/sessions \
+      storage/framework/testing \
+      storage/framework/views \
+      storage/logs \
+    && php artisan package:discover --ansi \
+    && chown -R 10001:10001 bootstrap/cache storage \
+    && chmod 0555 /usr/local/bin/iicp-operator-entrypoint \
+    && find /app -xdev -type d \
+         ! -path '/app/bootstrap/cache*' \
+         ! -path '/app/storage*' -exec chmod 0555 {} + \
+    && find /app -xdev -type f \
+         ! -path '/app/bootstrap/cache/*' \
+         ! -path '/app/storage/*' -exec chmod 0444 {} +
+
+USER 10001:10001
+EXPOSE 9000
+ENTRYPOINT ["/usr/local/bin/iicp-operator-entrypoint"]
+CMD ["php-fpm", "-F"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD SCRIPT_NAME=/ping SCRIPT_FILENAME=/ping REQUEST_METHOD=GET \
+      cgi-fcgi -bind -connect 127.0.0.1:9000 | grep -q pong
