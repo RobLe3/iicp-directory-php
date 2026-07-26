@@ -1,0 +1,37 @@
+name: Operator previous-to-next rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      previous_tag:
+        description: Previous immutable hardened release tag
+        required: true
+        type: string
+      next_tag:
+        description: Next immutable hardened release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  disposable-upgrade-rollback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: python3 -m unittest scripts/test_operator_upgrade_rehearsal.py
+      - name: Rehearse immutable previous to next
+        env:
+          IICP_OPERATOR_UPGRADE_OUTPUT: ${{ runner.temp }}/operator-upgrade-result.json
+        run: |
+          ./scripts/rehearse_operator_upgrade.sh \
+            --previous-tag '${{ inputs.previous_tag }}' \
+            --next-tag '${{ inputs.next_tag }}'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: operator-upgrade-rehearsal
+          path: ${{ runner.temp }}/operator-upgrade-result.json
+          retention-days: 14
