@@ -21,6 +21,14 @@ The checker is not a replacement for container tests.  Releases must also run
 the variant's full suite, migration upgrade tests, and cross-implementation
 request fixtures before any cutover claim.
 
+`http-contract-v1.json` is the normalized, content-free route projection shared
+with the Rust directory. It retains only canonical method/path, success status,
+authentication class, extension classification, and OpenAPI projection.
+`behavior-contract-v1.json` contains deterministic policy and registration
+cases. `contract-v1.10.80.json` pins both byte-level fixture digests to the PHP
+`v1.10.80.1` source authority at `08fa5f9`. These fixtures do not identify the
+currently deployed Genesis version and do not authorize deployment or cutover.
+
 `policy-detail-disclosure-v0.json` is a portable mirror of the pre-normative
 fixture under `spec/proposals/fixtures/`. The PHP unit test verifies that both
 copies remain byte-identical in the monorepo while allowing the standalone
