@@ -30,6 +30,16 @@ class OpenApiContractTest extends TestCase
         );
     }
 
+    /** @return array<string, mixed> */
+    private function sharedHttpContract(): array
+    {
+        return json_decode(
+            file_get_contents(base_path('parity/http-contract-v1.json')),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+    }
+
     public function test_every_application_route_has_a_reviewed_classification(): void
     {
         $ignoredFrameworkRoutes = [
@@ -180,5 +190,65 @@ class OpenApiContractTest extends TestCase
                 $resolved = $resolved[$segment];
             }
         }
+    }
+
+    public function test_shared_http_contract_is_normalized_from_reviewed_runtime_routes(): void
+    {
+        $fixture = $this->sharedHttpContract();
+        $this->assertSame('iicp.directory.http-contract.v1', $fixture['schema']);
+        $this->assertSame('v1.10.80.1', $fixture['authority']['runtime_version']);
+        $this->assertSame('/api/v1', $fixture['canonical_prefix']);
+
+        $classified = [];
+        foreach ($this->routeClassification()['routes'] as $route) {
+            if (! str_starts_with($route['uri'], 'api/v1/')) {
+                continue;
+            }
+            $path = '/'.substr($route['uri'], strlen('api/v1/'));
+            $classified[$route['method'].' '.$path] = $route;
+        }
+
+        $contract = $this->contract();
+        foreach ($fixture['routes'] as $route) {
+            $key = $route['method'].' '.$route['path'];
+            $this->assertArrayHasKey($key, $classified);
+            $runtime = $classified[$key];
+            $this->assertSame($runtime['classification'], $route['classification']);
+            $this->assertSame($runtime['openapi_path'], $route['openapi_path']);
+            $this->assertSame($this->normalizedAuthClass($runtime), $route['auth']);
+
+            if ($route['success_status'] !== null) {
+                $method = strtolower($route['method']);
+                $this->assertArrayHasKey($route['openapi_path'], $contract['paths']);
+                $this->assertArrayHasKey(
+                    (string) $route['success_status'],
+                    $contract['paths'][$route['openapi_path']][$method]['responses'],
+                );
+            }
+        }
+        $this->assertCount(count($classified), $fixture['routes']);
+    }
+
+    /** @param array<string,mixed> $route */
+    private function normalizedAuthClass(array $route): string
+    {
+        $middleware = implode('|', $route['middleware']);
+        if (str_contains($middleware, 'NodeTokenAuth')) {
+            return 'node_token';
+        }
+        if (str_contains($middleware, 'ProxyTokenAuth')) {
+            return 'proxy_token';
+        }
+        if (str_contains($middleware, 'ProbeTokenAuth')) {
+            return 'probe_token';
+        }
+        if (str_contains($middleware, 'ReplicaTokenAuth')) {
+            return 'replica_token';
+        }
+        if ($route['method'] === 'POST' && str_starts_with($route['uri'], 'api/v1/operator/')) {
+            return 'signed_operator_request';
+        }
+
+        return 'public';
     }
 }
