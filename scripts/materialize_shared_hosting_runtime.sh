@@ -3,64 +3,27 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DESTINATION="${1:-}"
 ALLOWLIST="${IICP_RUNTIME_ALLOWLIST:-$ROOT/ops/shared-hosting-runtime-allowlist.txt}"
 
-case "$#" in
-  1) SOURCE="$ROOT"; DESTINATION="$1" ;;
-  2) SOURCE="$1"; DESTINATION="$2" ;;
-  *)
-  echo "usage: $0 [SOURCE] DESTINATION" >&2
+[[ -n "$DESTINATION" ]] || {
+  echo "usage: $0 DESTINATION" >&2
   exit 2
-  ;;
-esac
-[[ -d "$SOURCE" ]] || { echo "runtime source is not a directory: $SOURCE" >&2; exit 2; }
-[[ -f "$ALLOWLIST" ]] || { echo "runtime allowlist is missing: $ALLOWLIST" >&2; exit 2; }
+}
+[[ -f "$ALLOWLIST" ]] || {
+  echo "runtime allowlist is missing: $ALLOWLIST" >&2
+  exit 2
+}
+[[ ! -e "$DESTINATION" ]] || {
+  echo "runtime destination must not already exist: $DESTINATION" >&2
+  exit 2
+}
 
-SOURCE="$(cd "$SOURCE" && pwd -P)"
 mkdir -p "$DESTINATION"
-DESTINATION="$(cd "$DESTINATION" && pwd -P)"
-
-if [[ "$DESTINATION" == "$SOURCE" || "$DESTINATION" == "$SOURCE/"* ]]; then
-  echo "runtime destination must be outside the source tree" >&2
-  exit 2
-fi
-if find "$DESTINATION" -mindepth 1 -print -quit | grep -q .; then
-  echo "runtime destination must be empty: $DESTINATION" >&2
-  exit 2
-fi
-
-copied=0
-while IFS= read -r raw || [[ -n "$raw" ]]; do
-  entry="${raw%$'\r'}"
-  [[ -z "$entry" || "$entry" == \#* ]] && continue
-  if [[ "$entry" == /* || "$entry" == *".."* ]]; then
-    echo "unsafe runtime allowlist entry: $entry" >&2
-    exit 2
-  fi
-
-  source_path="$SOURCE/${entry%/}"
-  [[ -e "$source_path" ]] || {
-    echo "runtime allowlist entry is missing from source: $entry" >&2
-    exit 1
-  }
-
-  if [[ "$entry" == */ ]]; then
-    [[ -d "$source_path" ]] || {
-      echo "runtime allowlist directory is not a directory: $entry" >&2
-      exit 1
-    }
-    mkdir -p "$DESTINATION/${entry%/}"
-    rsync -a "$source_path/" "$DESTINATION/${entry%/}/"
-  else
-    [[ -f "$source_path" ]] || {
-      echo "runtime allowlist file is not a file: $entry" >&2
-      exit 1
-    }
-    mkdir -p "$(dirname "$DESTINATION/$entry")"
-    cp -p "$source_path" "$DESTINATION/$entry"
-  fi
-  copied=$((copied + 1))
-done < "$ALLOWLIST"
+rsync -a --prune-empty-dirs \
+  --include='*/' \
+  --include-from="$ALLOWLIST" --exclude='*' \
+  "$ROOT/" "$DESTINATION/"
 
 mkdir -p \
   "$DESTINATION/bootstrap/cache" \
@@ -71,4 +34,4 @@ mkdir -p \
   "$DESTINATION/storage/framework/views" \
   "$DESTINATION/storage/logs"
 
-printf 'Shared-hosting runtime materialized: %d allowlist entries\n' "$copied"
+echo "Shared-hosting runtime materialized from reviewed allowlist"
