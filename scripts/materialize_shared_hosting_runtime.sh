@@ -3,14 +3,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE="${1:-$ROOT}"
-DESTINATION="${2:-}"
 ALLOWLIST="${IICP_RUNTIME_ALLOWLIST:-$ROOT/ops/shared-hosting-runtime-allowlist.txt}"
 
-if [[ -z "$DESTINATION" ]]; then
+case "$#" in
+  1) SOURCE="$ROOT"; DESTINATION="$1" ;;
+  2) SOURCE="$1"; DESTINATION="$2" ;;
+  *)
   echo "usage: $0 [SOURCE] DESTINATION" >&2
   exit 2
-fi
+  ;;
+esac
 [[ -d "$SOURCE" ]] || { echo "runtime source is not a directory: $SOURCE" >&2; exit 2; }
 [[ -f "$ALLOWLIST" ]] || { echo "runtime allowlist is missing: $ALLOWLIST" >&2; exit 2; }
 

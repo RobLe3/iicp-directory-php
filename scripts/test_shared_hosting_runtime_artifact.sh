@@ -7,7 +7,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/iicp-runtime-artifact.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 ARTIFACT="$WORK/artifact"
 
-"$ROOT/scripts/materialize_shared_hosting_runtime.sh" "$ROOT" "$ARTIFACT" >/dev/null
+"$ROOT/scripts/materialize_shared_hosting_runtime.sh" "$ARTIFACT" >/dev/null
 
 required=(
   app/Http/Controllers/RegisterController.php
