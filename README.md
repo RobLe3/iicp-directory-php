@@ -15,6 +15,18 @@ review is complete.
 
 The protocol is defined in the public [IICP specification](https://github.com/RobLe3/IICP).
 
+## Directory flavors
+
+PHP is the supported implementation behind the current Genesis Seed. The
+[Rust directory](https://github.com/RobLe3/iicp-directory-rust) is a pre-1.0
+operator preview of the same implementation-neutral contract. Its publication
+does not move production traffic or deprecate PHP.
+
+Applications should use the protocol contract rather than depend on
+implementation-specific internals. Consumer and provider agents can start
+with the public
+[agent bootstrap guide](https://github.com/RobLe3/IICP/blob/main/docs/agent-bootstrap.md).
+
 ## Local setup
 
 Requirements: PHP 8.3 or newer, Composer, and the SQLite extensions used by
