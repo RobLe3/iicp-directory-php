@@ -1,0 +1,21 @@
+# Shared-hosting runtime source contract.
+#
+# One repository-relative file or directory per line. Directories end in "/".
+# The materializer rejects absolute paths, parent traversal, missing entries,
+# and non-empty destinations.
+app/
+bootstrap/app.php
+bootstrap/providers.php
+config/
+database/migrations/
+public/.htaccess
+public/favicon.ico
+public/index.php
+public/robots.txt
+resources/views/
+routes/
+artisan
+composer.json
+composer.lock
+LICENSE
+VERSION

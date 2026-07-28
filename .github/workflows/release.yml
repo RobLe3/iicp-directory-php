@@ -52,6 +52,7 @@ jobs:
       - run: composer validate --no-interaction
       - run: composer install --no-interaction --prefer-dist
       - run: composer audit --locked --no-interaction
+      - run: IICP_RUNTIME_ARTIFACT_COMPOSER_INSTALL=1 scripts/test_shared_hosting_runtime_artifact.sh
       - run: php artisan test --compact
         env:
           DB_CONNECTION: sqlite
