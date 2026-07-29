@@ -98,13 +98,13 @@ if [[ "${IICP_RUNTIME_ARTIFACT_COMPOSER_INSTALL:-0}" == "1" ]]; then
   [[ -f "$ARTIFACT/vendor/autoload.php" ]]
   database="$WORK/runtime.sqlite"
   : > "$database"
-  APP_ENV=local \
-    APP_KEY='base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
+  APP_ENV=testing \
+    APP_KEY='00000000000000000000000000000000' \
     DB_CONNECTION=sqlite \
     DB_DATABASE="$database" \
     "$ARTIFACT/artisan" migrate:fresh --force >/dev/null
-  APP_ENV=local \
-    APP_KEY='base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
+  APP_ENV=testing \
+    APP_KEY='00000000000000000000000000000000' \
     DB_CONNECTION=sqlite \
     DB_DATABASE="$database" \
     "$ARTIFACT/artisan" route:list --json >/dev/null

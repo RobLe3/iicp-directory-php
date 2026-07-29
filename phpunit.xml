@@ -25,7 +25,7 @@
         <env name="APP_ENV" value="testing"/>
         <env name="IICP_DEV_ALLOW_INSECURE_TLS" value="true"/>
         <env name="IICP_DEV_ALLOW_UNSIGNED_EVENTS" value="true"/>
-        <env name="APP_KEY" value="base64:+Ks8E2HpJxEHq4rM2oNxGTVmAqFZXbmGiJvHaJXwXn4="/>
+        <env name="APP_KEY" value="00000000000000000000000000000000"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>

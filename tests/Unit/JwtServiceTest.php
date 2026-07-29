@@ -5,6 +5,7 @@
 namespace Tests\Unit;
 
 use App\Services\JwtService;
+use Tests\Support\TestAppKey;
 use Tests\TestCase;
 
 class JwtServiceTest extends TestCase
@@ -14,7 +15,7 @@ class JwtServiceTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        config(['app.key' => 'base64:/OAqqqyx1z7Q0IxZy6/tNTe0l7Jyf0nkru4AhZeHzso=']);
+        config(['app.key' => TestAppKey::base64()]);
         $this->jwt = app(JwtService::class);
     }
 
