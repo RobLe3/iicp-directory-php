@@ -67,6 +67,14 @@ gh attestation verify iicp-directory-php-v1.10.80.1.tar.gz \
 The verified public archive is the source input. A retained private-hub copy is
 not release authority. Verification does not authorize production deployment.
 
+Shared-hosting operators should materialize the runtime artifact through
+`scripts/materialize_shared_hosting_runtime.sh`. Its reviewed allowlist keeps
+application code, migrations, public assets, production Composer manifests and
+the writable Laravel directory skeleton while excluding tests, reports,
+repository metadata and development/operator tooling. Validate the layout with
+`scripts/test_shared_hosting_runtime_artifact.sh` before adding production
+dependencies or environment configuration.
+
 ## Backup before a migration
 
 ```bash

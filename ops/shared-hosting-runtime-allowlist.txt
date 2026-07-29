@@ -1,0 +1,18 @@
+# rsync filter rules for the shared-hosting Laravel runtime.
++ /app/***
++ /bootstrap/app.php
++ /bootstrap/providers.php
++ /config/***
++ /database/migrations/***
++ /public/.htaccess
++ /public/favicon.ico
++ /public/index.php
++ /public/robots.txt
++ /resources/views/***
++ /routes/***
++ /artisan
++ /composer.json
++ /composer.lock
++ /LICENSE
++ /VERSION
+- *
