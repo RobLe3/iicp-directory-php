@@ -5,6 +5,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Node;
+use App\Services\EndpointTlsPolicy;
 use App\Services\NodeEventLogger;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
@@ -197,9 +198,11 @@ class NodeLifecycleCommand extends Command
     private function probeReachable(string $endpoint): array
     {
         try {
-            $resp = Http::timeout(self::REACHABILITY_PROBE_TIMEOUT_S)
-                ->withoutVerifying()
-                ->head(rtrim($endpoint, '/').'/iicp/health');
+            $request = Http::timeout(self::REACHABILITY_PROBE_TIMEOUT_S);
+            if (app(EndpointTlsPolicy::class)->allowInsecureTestbed()) {
+                $request = $request->withoutVerifying();
+            }
+            $resp = $request->head(rtrim($endpoint, '/').'/iicp/health');
 
             return [$resp->successful(), $resp->successful() ? 'probe_success' : 'probe_non_2xx'];
         } catch (ConnectionException) {

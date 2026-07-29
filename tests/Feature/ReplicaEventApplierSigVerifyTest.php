@@ -27,6 +27,7 @@ class ReplicaEventApplierSigVerifyTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        config(['iicp.replica.dev_allow_unsigned_events' => true]);
         $this->applier = new ReplicaEventApplier;
         $keypair = sodium_crypto_sign_keypair();
         $this->secretKey = sodium_crypto_sign_secretkey($keypair);
@@ -159,6 +160,31 @@ class ReplicaEventApplierSigVerifyTest extends TestCase
 
         $r = $this->applier->apply($ev, null);
         $this->assertSame(ReplicaEventApplier::RESULT_APPLIED, $r['status']);
+    }
+
+    public function test_production_rejects_missing_verification_key_without_mutation(): void
+    {
+        config(['app.env' => 'production']);
+        $event = $this->signedEvent();
+
+        $result = $this->applier->apply($event, null);
+
+        $this->assertSame(ReplicaEventApplier::RESULT_REJECTED, $result['status']);
+        $this->assertStringContainsString('verification key unavailable', $result['detail']);
+        $this->assertDatabaseMissing('nodes', ['id' => $event['node_id']]);
+    }
+
+    public function test_production_rejects_unsigned_event_even_with_key(): void
+    {
+        config(['app.env' => 'production']);
+        $event = $this->signedEvent();
+        $event['sig'] = null;
+
+        $result = $this->applier->apply($event, $this->publicKey);
+
+        $this->assertSame(ReplicaEventApplier::RESULT_REJECTED, $result['status']);
+        $this->assertStringContainsString('missing signature', $result['detail']);
+        $this->assertDatabaseMissing('nodes', ['id' => $event['node_id']]);
     }
 
     public function test_broken_hash_chain_is_rejected(): void

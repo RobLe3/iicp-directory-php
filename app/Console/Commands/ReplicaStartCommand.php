@@ -94,6 +94,12 @@ class ReplicaStartCommand extends Command
             return self::SUCCESS;
         }
 
+        if ($apply && $this->verificationRequired() && $this->resolveSeedVerifyKey() === null) {
+            $this->error('Replica apply refused: no valid Ed25519 verification key is available from the seed DID document.');
+
+            return self::FAILURE;
+        }
+
         $state = $this->loadState($stateFile);
         if ($state === null && $noRegister) {
             // Read-only tail: no registration, no token — GET /api/v1/events is public.
@@ -111,12 +117,23 @@ class ReplicaStartCommand extends Command
                 .' since_seq='.$state['since_seq']
                 .' genesis_hash='.substr((string) ($state['genesis_hash'] ?? ''), 0, 16).'…</fg=green>');
 
-            // Bootstrap via GET /api/v1/snapshot (S.13 §5.3 step 1 + §5.5).
-            $this->line('<fg=green>→ Fetching snapshot for one-RTT bootstrap</fg=green>');
-            $bootstrap = $this->bootstrapFromSnapshot($seedUrl, $state['replica_token'], $apply);
-            if ($bootstrap === null) {
-                $this->warn('Snapshot fetch failed; will catch up via /api/v1/events from since_seq=0');
+            // The current snapshot envelope is not signed. A production replica in
+            // apply mode therefore catches up from the signed event stream instead of
+            // mutating from an unauthenticated snapshot.
+            $strictApply = $apply && $this->verificationRequired();
+            if ($strictApply) {
+                $state['since_seq'] = 0;
+                $state['last_seq'] = 0;
+                $this->saveState($stateFile, $state);
+                $this->warn('Unsigned snapshot bootstrap skipped; applying the verified event chain from seq 0.');
+                $bootstrap = null;
             } else {
+                $this->line('<fg=green>→ Fetching snapshot for one-RTT bootstrap</fg=green>');
+                $bootstrap = $this->bootstrapFromSnapshot($seedUrl, $state['replica_token'], $apply);
+            }
+            if ($bootstrap === null && ! $strictApply) {
+                $this->warn('Snapshot fetch failed; will catch up via /api/v1/events from since_seq=0');
+            } elseif ($bootstrap !== null) {
                 $state['last_seq'] = (int) $bootstrap['snapshot_seq'];
                 $this->saveState($stateFile, $state);
                 $this->line('<fg=green>✓ Snapshot applied: snapshot_seq='.$bootstrap['snapshot_seq']
@@ -137,9 +154,8 @@ class ReplicaStartCommand extends Command
             if ($events === null) {
                 $this->warn("Poll failed; retry in {$pollInterval}s");
             } else {
-                $this->logEvents($events, $state['genesis_hash'] ?? null, $apply);
-                if (! empty($events['events'])) {
-                    $lastSeq = max(array_map(fn ($e) => (int) ($e['seq'] ?? 0), $events['events']));
+                $lastSeq = $this->logEvents($events, $state['genesis_hash'] ?? null, $apply, $sinceSeq);
+                if ($lastSeq > $sinceSeq) {
                     $state['last_seq'] = max($sinceSeq, $lastSeq);
                     $this->saveState($stateFile, $state);
                 }
@@ -293,7 +309,7 @@ class ReplicaStartCommand extends Command
         return $resp->json();
     }
 
-    private function logEvents(array $resp, ?string $expectedGenesisHash, bool $apply): void
+    private function logEvents(array $resp, ?string $expectedGenesisHash, bool $apply, int $lastAcceptedSeq): int
     {
         $events = $resp['events'] ?? [];
         $genesisHash = $resp['genesis_hash'] ?? null;
@@ -303,7 +319,7 @@ class ReplicaStartCommand extends Command
         if (empty($events)) {
             $this->line('  · no new events');
 
-            return;
+            return $lastAcceptedSeq;
         }
         $applier = $apply ? app(ReplicaEventApplier::class) : null;
         $verifyKey = $apply ? $this->resolveSeedVerifyKey() : null;
@@ -321,12 +337,20 @@ class ReplicaStartCommand extends Command
                 $expectedPrev = $prevSig === null ? null : hash('sha256', $prevSig);
                 $r = $applier->apply($ev, $verifyKey, $expectedPrev);
                 $suffix = "[{$r['status']}: {$r['detail']}]";
-                if (($r['status'] ?? '') === ReplicaEventApplier::RESULT_APPLIED) {
+                if (in_array(($r['status'] ?? ''), [
+                    ReplicaEventApplier::RESULT_APPLIED,
+                    ReplicaEventApplier::RESULT_SKIPPED,
+                ], true)) {
                     $prevSig = $ev['sig'] ?? null;
+                    $lastAcceptedSeq = max($lastAcceptedSeq, (int) ($ev['seq'] ?? 0));
                 }
+            } else {
+                $lastAcceptedSeq = max($lastAcceptedSeq, (int) ($ev['seq'] ?? 0));
             }
             $this->line("  · seq={$seq} type={$type} ts_ms={$tsMs} signer={$signer} {$suffix}");
         }
+
+        return $lastAcceptedSeq;
     }
 
     private ?string $cachedVerifyKey = null;
@@ -345,11 +369,21 @@ class ReplicaStartCommand extends Command
         }
         $this->cachedVerifyKey = app(SeedDidResolver::class)->publicKey(rtrim($seedUrl, '/'));
         if ($this->cachedVerifyKey === null) {
-            $this->warn('No Ed25519 verification key available from seed DID document — '
-                .'events with sig=null will pass through unverified (Phase 6B opt-in).');
+            $message = 'No Ed25519 verification key available from seed DID document.';
+            if ($this->verificationRequired()) {
+                $this->error($message.' Production apply mode will not mutate replica state.');
+            } else {
+                $this->warn($message.' Explicit non-production unsigned-event mode is active.');
+            }
         }
 
         return $this->cachedVerifyKey;
+    }
+
+    private function verificationRequired(): bool
+    {
+        return config('app.env') === 'production'
+            || ! config('iicp.replica.dev_allow_unsigned_events', false);
     }
 
     private function loadState(string $file): ?array

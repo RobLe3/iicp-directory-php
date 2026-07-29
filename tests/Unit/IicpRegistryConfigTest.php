@@ -43,12 +43,14 @@ class IicpRegistryConfigTest extends TestCase
             PHP,
             [
                 'IICP_SKIP_LIVENESS_CHECK' => 'true',
+                'IICP_DEV_ALLOW_INSECURE_TLS' => 'true',
                 'IICP_REGISTER_MAX_ACTIVE_NODES_PER_IP' => '7',
             ],
         );
 
         $this->assertSame([
             'skip_liveness_check' => true,
+            'dev_allow_insecure_tls' => true,
             'max_active_nodes_per_source_ip' => 7,
         ], json_decode($result, true, flags: JSON_THROW_ON_ERROR));
     }
@@ -60,6 +62,7 @@ class IicpRegistryConfigTest extends TestCase
             'APP_ENV' => 'testing',
             'APP_CONFIG_CACHE' => $cache,
             'IICP_SKIP_LIVENESS_CHECK' => 'true',
+            'IICP_DEV_ALLOW_INSECURE_TLS' => 'true',
             'IICP_REGISTER_MAX_ACTIVE_NODES_PER_IP' => '7',
         ];
 
@@ -83,6 +86,7 @@ class IicpRegistryConfigTest extends TestCase
 
             $this->assertSame([
                 'skip_liveness_check' => true,
+                'dev_allow_insecure_tls' => true,
                 'max_active_nodes_per_source_ip' => 7,
             ], json_decode($result, true, flags: JSON_THROW_ON_ERROR));
         } finally {
@@ -186,6 +190,7 @@ class IicpRegistryConfigTest extends TestCase
             'IICP_REPLICA_MODE' => 'true',
             'IICP_SEED_URL' => 'https://seed.example',
             'IICP_DEV_ALLOW_HTTP_DID' => 'true',
+            'IICP_DEV_ALLOW_UNSIGNED_EVENTS' => 'true',
             'IICP_REDIRECT_ENABLED' => 'true',
             'IICP_REPLICA_URLS' => 'https://one.example,https://two.example',
             'IICP_REDIRECT_TRUST_TIER' => 'medium',
@@ -199,6 +204,7 @@ class IicpRegistryConfigTest extends TestCase
             'enabled' => true,
             'seed_url' => 'https://seed.example',
             'dev_allow_http_did' => true,
+            'dev_allow_unsigned_events' => true,
             'redirect' => [
                 'enabled' => true,
                 'retry_after' => 7,
