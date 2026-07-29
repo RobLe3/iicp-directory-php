@@ -58,7 +58,7 @@ class SharedBehaviorContractTest extends TestCase
             flags: JSON_THROW_ON_ERROR,
         );
         $this->assertSame('v1.10.81', $manifest['contract_version']);
-        $this->assertSame('v1.10.81.1', $manifest['authority']['runtime_version']);
+        $this->assertSame('v1.10.81.2', $manifest['authority']['runtime_version']);
         foreach ($manifest['fixtures'] as $file => $digest) {
             $this->assertSame($digest, hash_file('sha256', base_path('parity/'.$file)), $file);
         }

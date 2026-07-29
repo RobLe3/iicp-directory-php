@@ -1,6 +1,10 @@
 # Changelog
 
-## v1.10.81.1 — 2026-07-29
+## v1.10.81.2 — 2026-07-29
+
+Corrective release after the `v1.10.81.1` tag was accidentally pushed at the
+previous main commit before PR #57 merged. The failed tag remains immutable and
+must not be deployed; it contains runtime v1.10.80.1 and has no release assets.
 
 - Restored TLS certificate verification for registration dial-back and lifecycle
   probes. Insecure TLS is confined to an explicit non-production testbed flag.
