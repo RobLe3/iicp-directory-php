@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.10.82 — 2026-07-29
+
+- Added a fail-closed, signed `/.well-known/iicp-deployment.json` record that
+  binds the running PHP directory to its release tag, source revision, artifact
+  digest and protocol compatibility range.
+- Added a shared PHP/Rust signature fixture with tamper, purpose, key-rotation
+  and freshness-policy tests.
+- Documented PHP as the current Genesis implementation and Rust as the public
+  pre-1.0 operator preview.
+- No schema migration or task-data-plane behavior change is included.
+
 ## v1.10.81.2 — 2026-07-29
 
 Corrective release after the `v1.10.81.1` tag was accidentally pushed at the

@@ -1,5 +1,6 @@
 <?php
 
+use App\Services\DeploymentProvenanceService;
 use App\Services\OperatorReadiness;
 use App\Services\RuntimeSecretProvider;
 use Illuminate\Support\Facades\Route;
@@ -29,6 +30,19 @@ Route::get('/iicp/ready', function (OperatorReadiness $readiness) {
     return response()
         ->json(['ok' => $ready, 'role' => 'directory', 'ready' => $ready], $ready ? 200 : 503)
         ->header('Cache-Control', 'no-store');
+});
+
+Route::get('/.well-known/iicp-deployment.json', function (DeploymentProvenanceService $provenance) {
+    $record = $provenance->record();
+    if ($record === null) {
+        return response()
+            ->json(['error' => ['code' => 'deployment_record_unavailable']], 503)
+            ->header('Cache-Control', 'no-store');
+    }
+
+    return response()
+        ->json($record)
+        ->header('Cache-Control', 'public, max-age=300');
 });
 
 /*
