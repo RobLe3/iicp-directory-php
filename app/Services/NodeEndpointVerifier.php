@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Rules\RoutableEndpoint;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Validation\ValidationException;
 
@@ -15,6 +16,13 @@ use Illuminate\Validation\ValidationException;
 final class NodeEndpointVerifier
 {
     private const LIVENESS_TIMEOUT_S = 5;
+
+    private EndpointTlsPolicy $tlsPolicy;
+
+    public function __construct(?EndpointTlsPolicy $tlsPolicy = null)
+    {
+        $this->tlsPolicy = $tlsPolicy ?? new EndpointTlsPolicy;
+    }
 
     public function isAlive(string $endpoint): bool
     {
@@ -28,8 +36,7 @@ final class NodeEndpointVerifier
         }
 
         try {
-            return Http::timeout(self::LIVENESS_TIMEOUT_S)
-                ->withoutVerifying()
+            return $this->probeRequest()
                 ->withOptions($target[1])
                 ->get($endpoint.'/iicp/health')
                 ->successful();
@@ -53,8 +60,7 @@ final class NodeEndpointVerifier
         }
 
         try {
-            $response = Http::timeout(self::LIVENESS_TIMEOUT_S)
-                ->withoutVerifying()
+            $response = $this->probeRequest()
                 ->withOptions($target[1])
                 ->get($endpoint.'/iicp/health');
 
@@ -70,6 +76,13 @@ final class NodeEndpointVerifier
                     .$endpoint.'). Verify port-forwarding / public_endpoint.',
             ]);
         }
+    }
+
+    private function probeRequest(): PendingRequest
+    {
+        $request = Http::timeout(self::LIVENESS_TIMEOUT_S);
+
+        return $this->tlsPolicy->allowInsecureTestbed() ? $request->withoutVerifying() : $request;
     }
 
     /**

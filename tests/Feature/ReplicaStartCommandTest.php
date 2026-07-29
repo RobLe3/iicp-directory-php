@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Services\SeedDidResolver;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
@@ -129,6 +130,73 @@ class ReplicaStartCommandTest extends TestCase
         $this->assertSame(42, $state['since_seq']);
         $this->assertSame(44, $state['last_seq']);
         $this->assertSame('jwt.test.token', $state['replica_token']);
+    }
+
+    public function test_production_apply_refuses_to_mutate_without_seed_verification_key(): void
+    {
+        config(['app.env' => 'production', 'iicp.replica.dev_allow_unsigned_events' => true]);
+        $this->mock(SeedDidResolver::class, function ($mock): void {
+            $mock->shouldReceive('publicKey')->once()->andReturnNull();
+        });
+        Http::fake();
+
+        $exit = $this->artisan('iicp:replica-start', [
+            '--seed-url' => 'https://seed.test',
+            '--did' => 'did:web:replica.test',
+            '--endpoint' => 'https://replica.test',
+            '--state-file' => 'replica-strict-no-key.json',
+            '--apply' => true,
+            '--once' => true,
+        ])->run();
+
+        $this->assertSame(1, $exit);
+        $this->assertFalse(Storage::exists('replica-strict-no-key.json'));
+        Http::assertNothingSent();
+    }
+
+    public function test_strict_apply_skips_unsigned_snapshot_and_preserves_cursor_on_rejected_event(): void
+    {
+        Storage::fake();
+        config(['app.env' => 'production', 'iicp.replica.dev_allow_unsigned_events' => true]);
+        $this->mock(SeedDidResolver::class, function ($mock): void {
+            $mock->shouldReceive('publicKey')->once()->andReturn(str_repeat("\x01", 32));
+        });
+        Http::fake([
+            'https://seed.test/api/v1/replicas/register' => Http::response([
+                'replica_id' => 'rep-'.str_repeat('a', 32),
+                'replica_token' => 'jwt.test.token',
+                'since_seq' => 42,
+                'genesis_hash' => str_repeat('a', 64),
+            ], 200),
+            'https://seed.test/api/v1/events*' => Http::response([
+                'events' => [[
+                    'seq' => 1,
+                    'event_type' => 'REGISTER',
+                    'event_id' => 'unsigned-event',
+                    'node_id' => '550e8400-e29b-41d4-a716-446655440001',
+                    'ts_ms' => 1700000000,
+                    'signer_did' => 'did:web:seed.test',
+                    'payload' => ['endpoint' => 'https://node.test'],
+                    'sig' => null,
+                ]],
+                'genesis_hash' => str_repeat('a', 64),
+            ], 200),
+        ]);
+
+        $exit = $this->artisan('iicp:replica-start', [
+            '--seed-url' => 'https://seed.test',
+            '--did' => 'did:web:replica.test',
+            '--endpoint' => 'https://replica.test',
+            '--state-file' => 'replica-strict-cursor.json',
+            '--apply' => true,
+            '--once' => true,
+        ])->run();
+
+        $this->assertSame(0, $exit);
+        $state = json_decode(Storage::get('replica-strict-cursor.json'), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame(0, $state['since_seq']);
+        $this->assertSame(0, $state['last_seq']);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/api/v1/snapshot'));
     }
 
     public function test_registration_failure_returns_failure(): void

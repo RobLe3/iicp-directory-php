@@ -12,7 +12,7 @@ class ReleaseAuthorityTest extends TestCase
         $config = file_get_contents(base_path('config/app.php'));
         $policy = file_get_contents(base_path('RELEASE_POLICY.md'));
 
-        $this->assertSame('1.10.80.1', $version);
+        $this->assertSame('1.10.81.2', $version);
         $this->assertStringContainsString("'iicp_version' => 'v{$version}'", $config);
         $this->assertStringContainsString('authoritative PHP directory source', $policy);
         $this->assertMatchesRegularExpression('/do not define\\s+current\\s+source/', $policy);

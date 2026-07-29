@@ -64,8 +64,16 @@ class ReplicaEventApplier
             return $this->result(self::RESULT_REJECTED, 'invalid service_id', ['event_id' => $eventId]);
         }
 
+        $verificationRequired = $this->verificationRequired();
+        if ($verificationRequired && $verifyKey === null) {
+            return $this->result(self::RESULT_REJECTED, 'seed verification key unavailable', ['event_id' => $eventId]);
+        }
+
         if ($verifyKey !== null) {
             $sig = $event['sig'] ?? null;
+            if ($sig === null && $verificationRequired) {
+                return $this->result(self::RESULT_REJECTED, 'missing signature', ['event_id' => $eventId]);
+            }
             if ($sig !== null) {
                 // #458: hash-chain continuity — reject an event whose prev_hash does not link
                 // to the predecessor we just applied, even if its own signature is valid
@@ -90,6 +98,12 @@ class ReplicaEventApplier
             'HEALTH' => $this->applyHealth($nodeId, $payload, $eventId),
             default => $this->result(self::RESULT_SKIPPED, "unsupported event_type: {$type}", $event),
         };
+    }
+
+    private function verificationRequired(): bool
+    {
+        return config('app.env') === 'production'
+            || ! config('iicp.replica.dev_allow_unsigned_events', false);
     }
 
     /**
