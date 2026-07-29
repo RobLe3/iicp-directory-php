@@ -13,6 +13,16 @@
     },
     {
       "method": "GET",
+      "uri": ".well-known/iicp-deployment.json",
+      "classification": "public_deployment_provenance",
+      "openapi_path": null,
+      "middleware": [
+        "web"
+      ],
+      "rationale": "Signed well-known release and artifact metadata defined by the deployment-provenance profile rather than the /api/v1 OpenAPI projection."
+    },
+    {
+      "method": "GET",
       "uri": "/",
       "classification": "reference_landing",
       "openapi_path": null,
