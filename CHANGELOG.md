@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.10.81.1 — 2026-07-29
+
+- Restored TLS certificate verification for registration dial-back and lifecycle
+  probes. Insecure TLS is confined to an explicit non-production testbed flag.
+- Made federation verification fail closed in production: replicas wait for the
+  seed key, reject unsigned events and do not advance cursors past rejected
+  records. Strict replicas reconstruct state from the verified event chain
+  rather than applying an unsigned snapshot.
+- Added regression tests proving production cannot enable either development
+  bypass and that rejected federation input cannot mutate directory state.
+- No schema migration or task-data-plane behavior change is included.
+
 ## v1.10.80.1 — 2026-07-26
 
 - Made registry and replica non-secret settings safe under Laravel
