@@ -62,6 +62,8 @@ jobs:
       - run: composer quality:format
       - run: python3 scripts/check_semgrep_suppressions.py
       - run: python3 -m unittest scripts/test_semgrep_suppression_policy.py
+      - run: python3 -m unittest scripts/test_secret_hygiene.py
+      - run: python3 scripts/check_secret_hygiene.py
       - run: python3 -m unittest scripts/test_coverage_floor.py
       - run: python3 -m unittest scripts/test_operator_upgrade_rehearsal.py
       - run: scripts/test_shared_hosting_runtime_artifact.sh
@@ -107,7 +109,7 @@ jobs:
           --health-retries 20
     env:
       APP_ENV: testing
-      APP_KEY: base64:+Ks8E2HpJxEHq4rM2oNxGTVmAqFZXbmGiJvHaJXwXn4=
+      APP_KEY: '00000000000000000000000000000000'
       CACHE_STORE: array
       DB_CONNECTION: mysql
       DB_HOST: 127.0.0.1

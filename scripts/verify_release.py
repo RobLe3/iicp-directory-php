@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +69,14 @@ def verify(version: str, allow_untagged: bool) -> dict[str, object]:
     for forbidden in [".env", "auth.json", "ruvector.db"]:
         if forbidden in run("git", "ls-files").splitlines():
             raise RuntimeError(f"forbidden generated or secret file is tracked: {forbidden}")
+    secret_gate = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check_secret_hygiene.py")],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    if secret_gate.returncode != 0:
+        raise RuntimeError(secret_gate.stdout.strip() or "secret hygiene gate failed")
 
     return {
         "schema": "iicp.directory.release-manifest.v1",

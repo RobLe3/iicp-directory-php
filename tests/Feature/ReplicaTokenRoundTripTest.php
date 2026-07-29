@@ -5,6 +5,7 @@
 namespace Tests\Feature;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Support\TestAppKey;
 use Tests\TestCase;
 
 class ReplicaTokenRoundTripTest extends TestCase
@@ -62,7 +63,7 @@ PHP);
 
         config([
             'app.env' => 'local',
-            'app.key' => 'base64:/OAqqqyx1z7Q0IxZy6/tNTe0l7Jyf0nkru4AhZeHzso=',
+            'app.key' => TestAppKey::base64(),
         ]);
         config(['iicp.replica.dev_allow_http_did' => true]);
     }

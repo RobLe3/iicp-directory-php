@@ -4,6 +4,7 @@
 
 namespace App\Providers;
 
+use App\Support\AppKeyPolicy;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -15,6 +16,11 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        AppKeyPolicy::assertSafeForEnvironment(
+            (string) config('app.env'),
+            (string) config('app.key'),
+        );
+
         // POST /v1/register rate-limit (anti-spam-register abuse vector).
         // Maintainer directive 2026-05-27: defer in non-prod (dev convenience),
         // raise to 60/min in prod (was 10/min — too aggressive while feature

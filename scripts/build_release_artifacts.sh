@@ -21,6 +21,7 @@ VERIFY_ARGS=(--version "$VERSION")
 python3 "$ROOT/scripts/verify_release.py" "${VERIFY_ARGS[@]}" >/dev/null
 git -C "$ROOT" archive --format=tar --prefix="iicp-directory-php-v$VERSION/" HEAD \
   | gzip -n -9 >"$ARCHIVE"
+python3 "$ROOT/scripts/check_secret_hygiene.py" --archive "$ARCHIVE" >/dev/null
 python3 "$ROOT/scripts/verify_release.py" \
   "${VERIFY_ARGS[@]}" --archive "$ARCHIVE" --output "$MANIFEST" >/dev/null
 
