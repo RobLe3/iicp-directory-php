@@ -39,7 +39,7 @@ class JwtServiceTest extends TestCase
         $this->assertTrue($result->isValid());
         $this->assertSame($replicaId, $result->claims['sub']);
         $this->assertSame('replica', $result->claims['role']);
-        $this->assertSame('GET /v1/events', $result->claims['scope']);
+        $this->assertSame('GET /v1/snapshot', $result->claims['scope']);
         $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $result->claims['jti']);
     }
 
@@ -54,7 +54,7 @@ class JwtServiceTest extends TestCase
         $this->assertSame('invalid_profile', $replicaAsNode->failure);
     }
 
-    public function test_existing_replica_profile_without_jti_remains_valid(): void
+    public function test_existing_replica_profile_without_jti_and_legacy_scope_remains_valid(): void
     {
         $result = $this->jwt->verifyReplica(
             $this->signedToken($this->header(), $this->replicaClaims()),
@@ -86,7 +86,7 @@ class JwtServiceTest extends TestCase
         $stringExpiry = $this->nodeClaims();
         $stringExpiry['exp'] = (string) $stringExpiry['exp'];
         $wrongScope = $this->replicaClaims();
-        $wrongScope['scope'] = 'GET /v1/snapshot';
+        $wrongScope['scope'] = 'POST /v1/credits';
 
         $this->assertSame(
             'invalid_claims',

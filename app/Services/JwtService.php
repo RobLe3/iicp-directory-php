@@ -29,6 +29,10 @@ class JwtService
 {
     public const REPLICA_TTL_SECONDS = 90 * 86400;
 
+    public const REPLICA_SCOPE = 'GET /v1/snapshot';
+
+    public const LEGACY_REPLICA_SCOPE = 'GET /v1/events';
+
     private const NODE_TTL_SECONDS = 3600;
 
     private const ISSUER = 'iicp.network';
@@ -73,7 +77,7 @@ class JwtService
         ];
         if ($profile === self::PROFILE_REPLICA) {
             $claims['role'] = 'replica';
-            $claims['scope'] = 'GET /v1/events';
+            $claims['scope'] = self::REPLICA_SCOPE;
             // Re-registration must rotate the token even inside the same second.
             $claims['jti'] = bin2hex(random_bytes(16));
         }
@@ -146,7 +150,11 @@ class JwtService
         }
 
         return ($claims['role'] ?? null) === 'replica'
-            && ($claims['scope'] ?? null) === 'GET /v1/events';
+            && in_array(
+                $claims['scope'] ?? null,
+                [self::REPLICA_SCOPE, self::LEGACY_REPLICA_SCOPE],
+                true,
+            );
     }
 
     private function secret(): string

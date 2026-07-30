@@ -8,6 +8,7 @@ use App\Models\Replica;
 use App\Services\JwtService;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -53,6 +54,13 @@ class ReplicaTokenAuth
             return response()->json([
                 'error' => ['code' => 'unauthorized', 'message' => 'Replica not registered'],
             ], 401);
+        }
+
+        if (($verification->claims['scope'] ?? null) === JwtService::LEGACY_REPLICA_SCOPE) {
+            Log::notice('Accepted deprecated replica JWT scope for snapshot bootstrap.', [
+                'replica_id' => $verification->claims['sub'],
+                'replacement_scope' => JwtService::REPLICA_SCOPE,
+            ]);
         }
 
         // Replica MAY rotate its token via re-registration; reject if hash differs.

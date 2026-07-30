@@ -9,6 +9,7 @@ use App\Models\Replica;
 use App\Services\JwtService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
 class SnapshotEndpointTest extends TestCase
@@ -129,6 +130,34 @@ class SnapshotEndpointTest extends TestCase
         $resp->assertJsonPath('nodes.0.reputation_score', 0.85);
         $resp->assertJsonPath('nodes.0.cip_policy.allow_remote_inference', true);
         $resp->assertJsonPath('capabilities.0.intent', 'urn:iicp:intent:llm:chat:v1');
+    }
+
+    public function test_legacy_events_scope_is_accepted_for_one_compatibility_window(): void
+    {
+        $replica = Replica::firstOrFail();
+        $legacyToken = $this->issueJwt([
+            'sub' => $replica->replica_id,
+            'role' => 'replica',
+            'scope' => JwtService::LEGACY_REPLICA_SCOPE,
+            'iss' => 'iicp.network',
+            'iat' => time(),
+            'exp' => time() + 3600,
+        ]);
+        $replica->update(['replica_token_hash' => hash('sha256', $legacyToken)]);
+
+        Log::shouldReceive('notice')
+            ->once()
+            ->with(
+                'Accepted deprecated replica JWT scope for snapshot bootstrap.',
+                [
+                    'replica_id' => $replica->replica_id,
+                    'replacement_scope' => JwtService::REPLICA_SCOPE,
+                ],
+            );
+
+        $this->withToken($legacyToken)
+            ->getJson('/api/v1/snapshot')
+            ->assertOk();
     }
 
     public function test_snapshot_seq_zero_when_no_events(): void
