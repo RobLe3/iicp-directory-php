@@ -9,6 +9,10 @@
   and freshness-policy tests.
 - Documented PHP as the current Genesis implementation and Rust as the public
   pre-1.0 operator preview.
+- Reconciled replica-token scope with the protected snapshot endpoint. Newly
+  issued tokens use `GET /v1/snapshot`; the previous events scope remains
+  accepted for one compatibility window while the signed event tail stays
+  public.
 - No schema migration or task-data-plane behavior change is included.
 
 ## v1.10.81.2 — 2026-07-29
