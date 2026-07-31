@@ -9,6 +9,7 @@ use App\Services\JwtService;
 use App\Services\NodeEventLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -85,7 +86,10 @@ class ReplicasController extends Controller
                 'replica_token_hash' => hash('sha256', $newToken),
                 'expires_at' => now()->addSeconds(JwtService::REPLICA_TTL_SECONDS),
                 'last_seen_at' => now(),
+                'status' => Replica::STATUS_ACTIVE,
+                'trust_tier' => 'low',
             ]);
+            $this->emitReplicaRegistered($existing);
 
             return $this->successResponse($existing, $newToken, isNewRegistration: false);
         }
@@ -104,21 +108,62 @@ class ReplicasController extends Controller
         ]);
 
         // Emit REPLICA_REGISTERED event so other replicas mirror this registration
+        $this->emitReplicaRegistered($replica);
+
+        return $this->successResponse($replica, $replicaToken, isNewRegistration: true);
+    }
+
+    /**
+     * Authenticated, auditable replica decommissioning.
+     *
+     * The row is retained for audit, but its bearer credential is irreversibly
+     * tombstoned and the lifecycle state immediately excludes it from service.
+     */
+    public function deregister(Request $request): JsonResponse
+    {
+        /** @var Replica|null $authenticated */
+        $authenticated = $request->input('_authenticated_replica');
+        if ($authenticated === null) {
+            return response()->json([
+                'error' => ['code' => 'unauthorized', 'message' => 'Replica not authenticated'],
+            ], 401);
+        }
+
+        DB::transaction(function () use ($authenticated): void {
+            $replica = Replica::where('replica_id', $authenticated->replica_id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $replica->update([
+                'status' => Replica::STATUS_DECOMMISSIONED,
+                'expires_at' => now(),
+                // A random tombstone cannot authenticate and does not reveal the old hash.
+                'replica_token_hash' => hash('sha256', random_bytes(32)),
+                'last_seen_at' => now(),
+            ]);
+
+            $this->eventLogger->log('REPLICA_DEREGISTERED', $replica->replica_id, [
+                'did' => $replica->did,
+            ]);
+        });
+
+        return response()->json(['status' => 'decommissioned']);
+    }
+
+    private function emitReplicaRegistered(Replica $replica): void
+    {
         try {
-            $this->eventLogger->log('REPLICA_REGISTERED', $replicaId, [
-                'did' => $did,
-                'endpoint' => $endpoint,
+            $this->eventLogger->log('REPLICA_REGISTERED', $replica->replica_id, [
+                'did' => $replica->did,
+                'endpoint' => $replica->endpoint,
                 'trust_tier' => 'low',
             ]);
         } catch (\Throwable $e) {
-            // Event-log failure must not fail the registration — the row is durable
             Log::warning('REPLICA_REGISTERED event emission failed', [
-                'replica_id' => $replicaId,
+                'replica_id' => $replica->replica_id,
                 'error' => $e->getMessage(),
             ]);
         }
-
-        return $this->successResponse($replica, $replicaToken, isNewRegistration: true);
     }
 
     private function validateEndpointScheme(string $endpoint): ?string

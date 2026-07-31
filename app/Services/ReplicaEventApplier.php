@@ -18,7 +18,8 @@ use Illuminate\Support\Facades\Log;
  * no-op. Caller (ReplicaStartCommand) tracks last applied event_id.
  *
  * Closed event-type list per S.13 v0.3.0 §5.1 / DIR-FED-16:
- *   REGISTER, DEREGISTER, CREDIT_AWARD, REPLICA_REGISTERED, REPUTATION_DECAY
+ *   REGISTER, DEREGISTER, CREDIT_AWARD, REPLICA_REGISTERED,
+ *   REPLICA_DEREGISTERED, REPUTATION_DECAY
  *
  * NOT in scope here (P6-1.3b-iii):
  *   - Ed25519 signature verification (apply trusts the caller fetched
@@ -93,6 +94,7 @@ class ReplicaEventApplier
             'DEREGISTER' => $this->applyDeregister($nodeId, $eventId),
             'CREDIT_AWARD' => $this->applyCreditAward($nodeId, $payload, $eventId),
             'REPLICA_REGISTERED' => $this->applyReplicaRegistered($nodeId, $payload, $eventId),
+            'REPLICA_DEREGISTERED' => $this->applyReplicaDeregistered($nodeId, $payload, $eventId),
             'REPUTATION_DECAY' => $this->applyReputationDecay($nodeId, $payload, $eventId),
             'OPERATOR_OBSERVED' => $this->applyOperatorObserved($nodeId, $payload, $eventId),
             'HEALTH' => $this->applyHealth($nodeId, $payload, $eventId),
@@ -293,11 +295,32 @@ class ReplicaEventApplier
                 'replica_token_hash' => '',
                 'expires_at' => Carbon::now()->addDays(90),
                 'last_seen_at' => Carbon::now(),
+                'status' => Replica::STATUS_ACTIVE,
             ]
         );
 
         return $this->result(self::RESULT_APPLIED, 'REPLICA_REGISTERED applied', [
             'event_id' => $eventId, 'replica_id' => $replicaId, 'did' => $p['did'],
+        ]);
+    }
+
+    private function applyReplicaDeregistered(?string $replicaId, array $p, string $eventId): array
+    {
+        if (! $replicaId) {
+            return $this->result(self::RESULT_REJECTED, 'REPLICA_DEREGISTERED missing replica_id', ['event_id' => $eventId]);
+        }
+        $replica = Replica::where('replica_id', $replicaId)->first();
+        if (! $replica) {
+            return $this->result(self::RESULT_SKIPPED, 'REPLICA_DEREGISTERED for unknown replica', ['event_id' => $eventId]);
+        }
+        $replica->update([
+            'status' => Replica::STATUS_DECOMMISSIONED,
+            'expires_at' => Carbon::now(),
+            'replica_token_hash' => hash('sha256', random_bytes(32)),
+        ]);
+
+        return $this->result(self::RESULT_APPLIED, 'REPLICA_DEREGISTERED applied', [
+            'event_id' => $eventId, 'replica_id' => $replicaId, 'did' => $p['did'] ?? $replica->did,
         ]);
     }
 
