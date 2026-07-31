@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.10.83 — 2026-07-31
+
+- Added authenticated, atomic replica decommissioning with immediate bearer
+  invalidation and a signed `REPLICA_DEREGISTERED` lifecycle event.
+- Made persistent replica lifecycle and expiry state part of every replica-auth
+  decision.
+- Made same-DID re-registration reactivate at low trust with a rotated bearer.
+- Added versioned PHP/Rust HTTP and lifecycle contract fixtures.
+- No schema migration or task-data-plane behavior change is included.
+
 ## v1.10.82 — 2026-07-29
 
 - Added a fail-closed, signed `/.well-known/iicp-deployment.json` record that

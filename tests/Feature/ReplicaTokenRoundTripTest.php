@@ -4,6 +4,8 @@
 
 namespace Tests\Feature;
 
+use App\Models\NodeEvent;
+use App\Models\Replica;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\TestAppKey;
 use Tests\TestCase;
@@ -114,6 +116,60 @@ PHP);
         $this->withToken($secondToken)
             ->getJson('/api/v1/snapshot')
             ->assertOk();
+    }
+
+    public function test_deregister_revokes_bearer_emits_event_and_same_did_reactivates_at_low_trust(): void
+    {
+        $payload = [
+            'did' => "did:web:127.0.0.1%3A{$this->port}",
+            'endpoint' => "http://127.0.0.1:{$this->port}",
+        ];
+        $registration = $this->postJson('/api/v1/replicas/register', $payload)->assertOk();
+        $token = $registration->json('replica_token');
+        $replicaId = $registration->json('replica_id');
+        Replica::where('replica_id', $replicaId)->update(['trust_tier' => 'high']);
+
+        $this->withToken($token)
+            ->postJson('/api/v1/replicas/deregister')
+            ->assertOk()
+            ->assertExactJson(['status' => 'decommissioned']);
+
+        $replica = Replica::where('replica_id', $replicaId)->firstOrFail();
+        $this->assertSame(Replica::STATUS_DECOMMISSIONED, $replica->status);
+        $this->assertTrue($replica->expires_at->isPast());
+        $this->assertTrue(NodeEvent::where('event_type', 'REPLICA_DEREGISTERED')
+            ->where('node_id', $replicaId)->exists());
+        $this->withToken($token)->getJson('/api/v1/snapshot')->assertUnauthorized();
+
+        $reactivation = $this->postJson('/api/v1/replicas/register', $payload)
+            ->assertOk()
+            ->assertJsonPath('replica_id', $replicaId)
+            ->assertJsonPath('trust_tier', 'low');
+        $this->assertSame(Replica::STATUS_ACTIVE, Replica::where('replica_id', $replicaId)->value('status'));
+        $this->withToken($reactivation->json('replica_token'))->getJson('/api/v1/snapshot')->assertOk();
+    }
+
+    public function test_database_lifecycle_and_expiry_are_enforced_independently_of_jwt(): void
+    {
+        $payload = [
+            'did' => "did:web:127.0.0.1%3A{$this->port}",
+            'endpoint' => "http://127.0.0.1:{$this->port}",
+        ];
+        $registration = $this->postJson('/api/v1/replicas/register', $payload)->assertOk();
+        $token = $registration->json('replica_token');
+        $id = $registration->json('replica_id');
+
+        foreach ([Replica::STATUS_DORMANT, Replica::STATUS_ARCHIVED, Replica::STATUS_DECOMMISSIONED] as $status) {
+            Replica::where('replica_id', $id)->update(['status' => $status, 'expires_at' => now()->addHour()]);
+            $this->withToken($token)->getJson('/api/v1/snapshot')
+                ->assertUnauthorized()
+                ->assertJsonPath('error.message', 'Replica is not active; re-register to reactivate');
+        }
+
+        Replica::where('replica_id', $id)->update(['status' => Replica::STATUS_ACTIVE, 'expires_at' => now()->subSecond()]);
+        $this->withToken($token)->getJson('/api/v1/snapshot')
+            ->assertUnauthorized()
+            ->assertJsonPath('error.code', 'token_expired');
     }
 
     private function availablePort(): int

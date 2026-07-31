@@ -81,6 +81,9 @@ Route::prefix('v1')->group(function () {
     Route::middleware('throttle:5,60')
         ->post('/replicas/register', [ReplicasController::class, 'register']);
 
+    Route::middleware([ReplicaTokenAuth::class, 'throttle:5,60'])
+        ->post('/replicas/deregister', [ReplicasController::class, 'deregister']);
+
     // Phase 6 — Snapshot bootstrap (S.13 §5.5 / DIR-FED-15/17, P6-1.3b-iii)
     // 5 req/replica/hour: bootstrap is infrequent; abuse prevention.
     Route::middleware([ReplicaTokenAuth::class, 'throttle:5,60'])

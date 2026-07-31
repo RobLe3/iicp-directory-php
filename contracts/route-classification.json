@@ -479,6 +479,18 @@
     },
     {
       "method": "POST",
+      "uri": "api/v1/replicas/deregister",
+      "classification": "federation_extension_unprojected",
+      "openapi_path": null,
+      "middleware": [
+        "api",
+        "App\\Http\\Middleware\\ReplicaTokenAuth",
+        "Illuminate\\Routing\\Middleware\\ThrottleRequests:5,60"
+      ],
+      "rationale": "Normative authenticated federation lifecycle extension; excluded from the core OpenAPI projection until the complete federation projection is reviewed."
+    },
+    {
+      "method": "POST",
       "uri": "api/v1/replicas/register",
       "classification": "federation_extension_unprojected",
       "openapi_path": null,

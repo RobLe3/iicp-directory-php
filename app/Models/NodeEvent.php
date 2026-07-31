@@ -41,6 +41,10 @@ class NodeEvent extends Model
         'REPUTATION_UPDATE',
         'CREDIT_AWARD',
         'DEREGISTER',
+        'REPLICA_REGISTERED',
+        'REPLICA_DEREGISTERED',
+        'REPUTATION_DECAY',
+        'OPERATOR_OBSERVED',
         // ADR-048 (#374): per-node, per-evaluator health vector gossiped for
         // federation-wide mesh_health aggregation.
         'HEALTH',

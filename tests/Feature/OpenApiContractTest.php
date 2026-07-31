@@ -34,7 +34,7 @@ class OpenApiContractTest extends TestCase
     private function sharedHttpContract(): array
     {
         return json_decode(
-            file_get_contents(base_path('parity/http-contract-v1.json')),
+            file_get_contents(base_path('parity/http-contract-v2.json')),
             true,
             flags: JSON_THROW_ON_ERROR,
         );
@@ -195,8 +195,8 @@ class OpenApiContractTest extends TestCase
     public function test_shared_http_contract_is_normalized_from_reviewed_runtime_routes(): void
     {
         $fixture = $this->sharedHttpContract();
-        $this->assertSame('iicp.directory.http-contract.v1', $fixture['schema']);
-        $this->assertSame('v1.10.80.1', $fixture['authority']['runtime_version']);
+        $this->assertSame('iicp.directory.http-contract.v2', $fixture['schema']);
+        $this->assertSame('v1.10.83', $fixture['authority']['runtime_version']);
         $this->assertSame('/api/v1', $fixture['canonical_prefix']);
 
         $classified = [];

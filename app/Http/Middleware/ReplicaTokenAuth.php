@@ -56,6 +56,18 @@ class ReplicaTokenAuth
             ], 401);
         }
 
+        if ($replica->status !== Replica::STATUS_ACTIVE) {
+            return response()->json([
+                'error' => ['code' => 'unauthorized', 'message' => 'Replica is not active; re-register to reactivate'],
+            ], 401);
+        }
+
+        if (! $replica->expires_at->isFuture()) {
+            return response()->json([
+                'error' => ['code' => 'token_expired', 'message' => 'Replica registration has expired; re-register via POST /v1/replicas/register'],
+            ], 401);
+        }
+
         if (($verification->claims['scope'] ?? null) === JwtService::LEGACY_REPLICA_SCOPE) {
             Log::notice('Accepted deprecated replica JWT scope for snapshot bootstrap.', [
                 'replica_id' => $verification->claims['sub'],

@@ -170,6 +170,45 @@ class ReplicaEventApplierTest extends TestCase
         $this->assertSame(1, Replica::where('did', 'did:web:r2.test')->count());
     }
 
+    public function test_replica_deregistered_decommissions_known_replica(): void
+    {
+        $replica = Replica::create([
+            'replica_id' => 'rep-'.str_repeat('c', 32),
+            'did' => 'did:web:r3.test',
+            'endpoint' => 'https://r3.test',
+            'trust_tier' => 'verified',
+            'replica_token_hash' => hash('sha256', 'live-token'),
+            'expires_at' => now()->addDay(),
+            'status' => Replica::STATUS_ACTIVE,
+        ]);
+
+        $result = $this->applier->apply($this->event(
+            'REPLICA_DEREGISTERED',
+            $replica->replica_id,
+            ['did' => $replica->did],
+        ));
+
+        $this->assertSame(ReplicaEventApplier::RESULT_APPLIED, $result['status']);
+        $replica->refresh();
+        $this->assertSame(Replica::STATUS_DECOMMISSIONED, $replica->status);
+        $this->assertTrue($replica->expires_at->isPast());
+        $this->assertNotSame(hash('sha256', 'live-token'), $replica->replica_token_hash);
+    }
+
+    public function test_replica_deregistered_rejects_missing_identity_and_skips_unknown_replica(): void
+    {
+        $missing = $this->applier->apply($this->event('REPLICA_DEREGISTERED', '', []));
+        $this->assertSame(ReplicaEventApplier::RESULT_REJECTED, $missing['status']);
+
+        $unknown = $this->applier->apply($this->event(
+            'REPLICA_DEREGISTERED',
+            'rep-'.str_repeat('d', 32),
+            [],
+            'evt-test-2',
+        ));
+        $this->assertSame(ReplicaEventApplier::RESULT_SKIPPED, $unknown['status']);
+    }
+
     public function test_reputation_decay_writes_new_score(): void
     {
         Node::create([
