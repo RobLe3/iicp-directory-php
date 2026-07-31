@@ -64,6 +64,15 @@ class SharedBehaviorContractTest extends TestCase
         }
     }
 
+    public function test_v11083_manifest_pins_replica_lifecycle_contracts(): void
+    {
+        $manifest = json_decode(file_get_contents(base_path('parity/contract-v1.10.83.json')), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame('v1.10.83', $manifest['contract_version']);
+        foreach ($manifest['fixtures'] as $file => $digest) {
+            $this->assertSame($digest, hash_file('sha256', base_path('parity/'.$file)), $file);
+        }
+    }
+
     public function test_shared_ranking_cases_match_authoritative_policy(): void
     {
         $fixture = $this->fixture();

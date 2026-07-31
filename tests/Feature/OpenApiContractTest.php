@@ -196,7 +196,7 @@ class OpenApiContractTest extends TestCase
     {
         $fixture = $this->sharedHttpContract();
         $this->assertSame('iicp.directory.http-contract.v2', $fixture['schema']);
-        $this->assertSame('v1.10.80.1', $fixture['authority']['runtime_version']);
+        $this->assertSame('v1.10.83', $fixture['authority']['runtime_version']);
         $this->assertSame('/api/v1', $fixture['canonical_prefix']);
 
         $classified = [];
