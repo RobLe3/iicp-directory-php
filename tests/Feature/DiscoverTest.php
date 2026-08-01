@@ -1165,7 +1165,7 @@ class DiscoverTest extends TestCase
         $cap = [['intent' => $intent, 'models' => ['m'], 'max_tokens' => 100]];
         $node = $this->createNode([
             'sdk_version' => '0.7.98',
-            'sdk_latest_seen' => '0.7.100',
+            'sdk_latest_seen' => '0.7.101',
             'backend_stability' => [
                 'backend_state' => 'degraded',
                 'reason_class' => 'backend_cold',

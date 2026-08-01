@@ -2,8 +2,11 @@
 
 ## Unreleased
 
-- Corrected the discovery evidence `latest_known` default to the current
-  released SDK version. Compatibility and upgrade-required floors are unchanged.
+## v1.10.85 — 2026-08-01
+
+- Advanced SDK release-currency evidence to the coordinated `0.7.101` release.
+- Preserved compatibility floors, ranking, eligibility, routes and database schema.
+- Added an immutable v1.10.85 parity manifest while retaining the v1.10.84 fixture archive.
 
 ## v1.10.84 — 2026-08-01
 
