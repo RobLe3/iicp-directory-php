@@ -25,7 +25,7 @@ class ReleaseAuthorityTest extends TestCase
 
         $this->assertStringContainsString("tags:\n", $workflow);
         $this->assertStringNotContainsString('workflow_dispatch', $workflow);
-        $this->assertStringContainsString('actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26', $workflow);
+        $this->assertStringContainsString('actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d', $workflow);
         $this->assertStringContainsString('release already exists; assets are immutable', $workflow);
         $this->assertStringContainsString('--verify-tag', $workflow);
     }

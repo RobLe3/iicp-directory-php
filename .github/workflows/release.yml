@@ -69,7 +69,7 @@ jobs:
           ./scripts/build_release_artifacts.sh "$version" dist
           (cd dist && sha256sum --check SHA256SUMS)
       - name: Attest source archive
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: dist/iicp-directory-php-${{ github.ref_name }}.tar.gz
       - name: Publish immutable GitHub release
