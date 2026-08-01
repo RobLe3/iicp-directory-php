@@ -214,6 +214,7 @@ class DiscoverController extends Controller
         $relayAvailable = ! empty(array_filter($nodes, fn ($n) => ($n['relay_capable'] ?? false) === true));
         $view = $validated['view'] ?? 'dispatch';
         $responseNodes = $view === 'public' ? $this->publicDiscoverNodes($nodes) : $nodes;
+        $diversityEvidence = $this->diversityEvidence($nodes);
         $dataClass = $view === 'public' ? 'public_presentation' : 'route_dispatch';
         $this->usage->record($view === 'public'
             ? DispatchUsageCounter::PUBLIC_VIEW
@@ -222,6 +223,7 @@ class DiscoverController extends Controller
         $response = $timing->measure('response_build', fn () => response()->json([
             'nodes' => $responseNodes,
             'count' => count($nodes),
+            'diversity_evidence' => $diversityEvidence,
             'relay_available' => $relayAvailable,
             'query_ms' => $queryMs,
             // #611 — makes the public/dispatch split machine-visible. Public
@@ -334,8 +336,11 @@ class DiscoverController extends Controller
             'sdk_status' => $node['sdk_status'] ?? null,
             'sdk_baseline_version' => $node['sdk_baseline_version'] ?? null,
             'upgrade_required' => $node['upgrade_required'] ?? null,
+            'sdk_release' => $node['sdk_release'] ?? null,
             'health_label' => $node['health_label'] ?? null,
             'health_confidence' => $node['health_confidence'] ?? null,
+            'health_reasons' => $node['health_reasons'] ?? null,
+            'latency_evidence' => $node['latency_evidence'] ?? null,
             'performance' => $node['performance'] ?? null,
             'backend_stability' => $node['backend_stability'] ?? null,
             'reputation_score' => $node['reputation_score'] ?? null,
@@ -381,6 +386,41 @@ class DiscoverController extends Controller
         }
 
         return 'unknown';
+    }
+
+    /**
+     * Aggregate verified-operator and region counts without exposing identity keys.
+     * Failure domains remain unknown until operators can attest them explicitly.
+     *
+     * @param  array<int,array<string,mixed>>  $nodes
+     * @return array<string,mixed>
+     */
+    private function diversityEvidence(array $nodes): array
+    {
+        $ids = array_values(array_filter(array_map(
+            fn (array $node) => is_string($node['node_id'] ?? null) ? $node['node_id'] : null,
+            $nodes,
+        )));
+        $verified = $ids === [] ? collect() : Node::query()
+            ->whereIn('id', $ids)
+            ->where('operator_verified', true)
+            ->whereNotNull('operator_pubkey')
+            ->pluck('operator_pubkey');
+        $regions = array_values(array_unique(array_filter(array_map(
+            fn (array $node) => is_string($node['region'] ?? null) && $node['region'] !== '' ? $node['region'] : null,
+            $nodes,
+        ))));
+
+        return [
+            'nodes' => count($nodes),
+            'nodes_with_verified_operator' => $verified->count(),
+            'distinct_verified_operators' => $verified->unique()->count(),
+            'distinct_regions' => count($regions),
+            'operator_basis' => 'verified_operator_key_aggregate',
+            'failure_domain_count' => null,
+            'failure_domain_basis' => 'not_attested',
+            'identity_material_exposed' => false,
+        ];
     }
 
     /**

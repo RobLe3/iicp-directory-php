@@ -157,6 +157,10 @@ return [
     // enables fixed-name subphase timings; public timing remains aggregate-only.
     'iicp_discovery_profile' => (bool) env('IICP_DISCOVERY_PROFILE', false),
 
+    // Release-manifest value used only to describe SDK currency. Compatibility
+    // continues to use the independent minimum baseline in NodeReadinessPolicy.
+    'iicp_sdk_latest_known_version' => env('IICP_SDK_LATEST_KNOWN_VERSION', '0.7.99'),
+
     // #310 founder recognition (§5.4). The founder-era anchor: founder tier windows
     // (Genesis-50 ≤3mo / Founders-500 ≤6mo / Founders-1000 ≤12mo) are measured from this
     // instant. Maintainer-ratified 2026-06-06 = 1780704000000 (2026-06-06T00:00:00Z).

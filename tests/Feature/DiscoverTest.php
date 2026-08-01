@@ -1159,6 +1159,71 @@ class DiscoverTest extends TestCase
         $this->assertNull($response->json('nodes.0.latency_estimate_ms'));
     }
 
+    public function test_discovery_explains_latency_trust_sdk_and_health_without_changing_ranking(): void
+    {
+        $intent = 'urn:iicp:intent:llm:chat:v1';
+        $cap = [['intent' => $intent, 'models' => ['m'], 'max_tokens' => 100]];
+        $node = $this->createNode([
+            'sdk_version' => '0.7.98',
+            'sdk_latest_seen' => '0.7.99',
+            'backend_stability' => [
+                'backend_state' => 'degraded',
+                'reason_class' => 'backend_cold',
+            ],
+        ], $cap);
+        $node->reputation()->create([
+            'score' => 0.60,
+            'completed_tasks_count' => 104,
+            'observed_latency_ms' => 142.5,
+        ]);
+
+        $response = $this->getJson("/api/v1/discover?intent={$intent}");
+
+        $response->assertOk()
+            ->assertJsonPath('nodes.0.latency_evidence.estimate_ms', 143)
+            ->assertJsonPath('nodes.0.latency_evidence.basis', 'multi_proxy_ema')
+            ->assertJsonPath('nodes.0.trust_progress.gold_task_threshold_met', true)
+            ->assertJsonPath('nodes.0.trust_progress.gold_reputation_threshold_met', false)
+            ->assertJsonPath('nodes.0.trust_progress.remaining_gold_requirements.0', 'reputation_score')
+            ->assertJsonPath('nodes.0.sdk_release.compatibility', 'current')
+            ->assertJsonPath('nodes.0.sdk_release.relation', 'behind_known')
+            ->assertJsonPath('nodes.0.sdk_release.latest_known_source', 'directory_release_manifest')
+            ->assertJsonPath('nodes.0.health_reasons.1.dimension', 'backend')
+            ->assertJsonPath('nodes.0.health_reasons.1.state', 'degraded')
+            ->assertJsonPath('nodes.0.health_reasons.1.reason', 'backend_cold')
+            ->assertJsonPath('nodes.0.health_reasons.3.dimension', 'policy')
+            ->assertJsonPath('nodes.0.health_reasons.3.state', 'missing');
+    }
+
+    public function test_discovery_diversity_is_aggregate_only_and_does_not_expose_operator_keys(): void
+    {
+        $intent = 'urn:iicp:intent:llm:chat:v1';
+        $cap = [['intent' => $intent, 'models' => ['m'], 'max_tokens' => 100]];
+        $operatorKey = base64_encode(str_repeat('a', 32));
+        $this->createNode([
+            'operator_pubkey' => $operatorKey,
+            'operator_verified' => true,
+            'region' => 'eu-test',
+        ], $cap);
+        $this->createNode([
+            'operator_pubkey' => $operatorKey,
+            'operator_verified' => true,
+            'region' => 'eu-test',
+        ], $cap);
+
+        $response = $this->getJson("/api/v1/discover?intent={$intent}&view=public");
+
+        $response->assertOk()
+            ->assertJsonPath('diversity_evidence.nodes', 2)
+            ->assertJsonPath('diversity_evidence.nodes_with_verified_operator', 2)
+            ->assertJsonPath('diversity_evidence.distinct_verified_operators', 1)
+            ->assertJsonPath('diversity_evidence.distinct_regions', 1)
+            ->assertJsonPath('diversity_evidence.failure_domain_count', null)
+            ->assertJsonPath('diversity_evidence.identity_material_exposed', false);
+        $this->assertStringNotContainsString($operatorKey, $response->getContent());
+        $this->assertStringNotContainsString('operator_pubkey', $response->getContent());
+    }
+
     /** @test CX-01/CX-02/#557: discover surfaces only the canonical CX key */
     public function test_discover_surfaces_cx_public_key(): void
     {
