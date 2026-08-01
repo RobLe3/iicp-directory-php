@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Corrected the discovery evidence `latest_known` default to the current
+  released SDK version. Compatibility and upgrade-required floors are unchanged.
+
 ## v1.10.84 — 2026-08-01
 
 - Added content-free explanations for health dimensions, Gold threshold state,
