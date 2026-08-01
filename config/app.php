@@ -123,7 +123,7 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
-    'iicp_version' => 'v1.10.84',
+    'iicp_version' => 'v1.10.85',
 
     // Secret-free digest of the tracked deployable directory source. Release
     // artifacts inject this value so equal version strings cannot hide a
@@ -159,7 +159,7 @@ return [
 
     // Release-manifest value used only to describe SDK currency. Compatibility
     // continues to use the independent minimum baseline in NodeReadinessPolicy.
-    'iicp_sdk_latest_known_version' => env('IICP_SDK_LATEST_KNOWN_VERSION', '0.7.100'),
+    'iicp_sdk_latest_known_version' => env('IICP_SDK_LATEST_KNOWN_VERSION', '0.7.101'),
 
     // #310 founder recognition (§5.4). The founder-era anchor: founder tier windows
     // (Genesis-50 ≤3mo / Founders-500 ≤6mo / Founders-1000 ≤12mo) are measured from this

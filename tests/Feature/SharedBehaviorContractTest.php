@@ -82,6 +82,16 @@ class SharedBehaviorContractTest extends TestCase
         }
     }
 
+    public function test_v11085_manifest_pins_sdk_release_currency(): void
+    {
+        $manifest = json_decode(file_get_contents(base_path('parity/contract-v1.10.85.json')), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame('v1.10.85', $manifest['contract_version']);
+        $this->assertSame('v1.10.85', $manifest['authority']['runtime_version']);
+        foreach ($manifest['fixtures'] as $file => $digest) {
+            $this->assertSame($digest, hash_file('sha256', base_path('parity/'.$file)), $file);
+        }
+    }
+
     public function test_shared_ranking_cases_match_authoritative_policy(): void
     {
         $fixture = $this->fixture();
