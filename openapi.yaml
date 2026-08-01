@@ -498,12 +498,12 @@ components:
         - view
         - data_class
         - route_fields_present
+        - diversity_evidence
       properties:
         nodes:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: "#/components/schemas/DiscoveryNode"
         count: { type: integer, minimum: 0 }
         relay_available: { type: boolean }
         query_ms: { type: number, minimum: 0 }
@@ -512,6 +512,67 @@ components:
         route_fields_present: { type: boolean }
         dispatch_ticket_endpoint: { type: string }
         ticketed_dispatch_available: { type: boolean }
+        diversity_evidence:
+          $ref: "#/components/schemas/DiversityEvidence"
+
+    DiscoveryNode:
+      type: object
+      additionalProperties: true
+      properties:
+        latency_evidence:
+          type: object
+          required: [estimate_ms, basis]
+          properties:
+            estimate_ms: { type: [integer, "null"], minimum: 0 }
+            basis: { type: string, enum: [multi_proxy_ema, none] }
+        health_reasons:
+          type: array
+          items:
+            type: object
+            required: [dimension, state, reason, evidence]
+            properties:
+              dimension: { type: string, enum: [reachability, backend, trust, policy] }
+              state: { type: string }
+              reason: { type: string }
+              evidence: { type: string }
+        sdk_release:
+          type: object
+          required: [compatibility, relation, latest_known_version, latest_known_source]
+          properties:
+            compatibility: { type: string, enum: [current, downlevel] }
+            relation: { type: string, enum: [latest_known, behind_known, ahead_of_known, unknown] }
+            latest_known_version: { type: [string, "null"] }
+            latest_known_source: { type: string, enum: [directory_release_manifest, none] }
+        trust_progress:
+          type: object
+          additionalProperties: true
+          properties:
+            gold_task_threshold_met: { type: boolean }
+            gold_reputation_threshold_met: { type: boolean }
+            remaining_gold_requirements:
+              type: array
+              items: { type: string, enum: [completed_tasks, reputation_score] }
+
+    DiversityEvidence:
+      type: object
+      required:
+        - nodes
+        - nodes_with_verified_operator
+        - distinct_verified_operators
+        - distinct_regions
+        - operator_basis
+        - failure_domain_count
+        - failure_domain_basis
+        - identity_material_exposed
+      properties:
+        nodes: { type: integer, minimum: 0 }
+        nodes_with_verified_operator: { type: integer, minimum: 0 }
+        distinct_verified_operators: { type: integer, minimum: 0 }
+        distinct_regions: { type: integer, minimum: 0 }
+        operator_basis: { type: string, const: verified_operator_key_aggregate }
+        failure_domain_count: { type: "null" }
+        failure_domain_basis: { type: string, const: not_attested }
+        identity_material_exposed: { type: boolean, const: false }
 
     NodeDetail:
       type: object

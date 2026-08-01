@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added content-free explanations for health dimensions, Gold threshold state,
+  latency basis, SDK compatibility versus release currency, and aggregate
+  verified-operator diversity.
+- Kept ranking, eligibility, route exposure and failure-domain claims unchanged.
+
 ## v1.10.83 — 2026-07-31
 
 - Added authenticated, atomic replica decommissioning with immediate bearer

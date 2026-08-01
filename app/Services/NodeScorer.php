@@ -147,6 +147,7 @@ class NodeScorer
             $health = $healthByNode[$node->id] ?? $this->health->forNode($node);
             $capabilitySummary = $this->capabilitySummary($node, $registeredModels, $liveModels);
             $routingSignals = self::routingSignals($node, $health);
+            $policyManifest = self::policyManifest($node);
             $out = [
                 'node_id' => $node->id,
                 'endpoint' => $node->endpoint,
@@ -190,6 +191,7 @@ class NodeScorer
                 'latency_estimate_ms' => $node->reputation?->observed_latency_ms !== null
                     ? (int) round($node->reputation->observed_latency_ms)
                     : null,
+                'latency_evidence' => self::latencyEvidence($node),
                 ...self::performanceSignals($node),
                 'available' => $node->available,
                 'relay_capable' => (bool) $node->relay_capable,
@@ -214,6 +216,7 @@ class NodeScorer
                 // prefer healthy nodes without a second round-trip to node detail.
                 'health_label' => $health['label'],
                 'health_confidence' => $health['confidence'] ?? null,
+                'health_reasons' => self::healthReasons($node, $health, $policyManifest),
                 'region' => $node->region,
                 'reputation_score' => $node->reputation?->score ?? 0.5,
                 'reputation_tier' => self::reputationTier($node),
@@ -232,7 +235,7 @@ class NodeScorer
                 'inference_engine' => $node->capabilities->pluck('inference_engine')->filter()->unique()->values()->all(),
                 'backend' => $node->backend,
                 'backend_stability' => self::backendStability($node),
-                'node_policy_manifest' => self::policyManifest($node),
+                'node_policy_manifest' => $policyManifest,
                 // CIP-D1: Provider opt-in policy block (spec S.12 §2.1)
                 'cip_policy' => [
                     'allow_remote_inference' => (bool) $node->allow_remote_inference,
@@ -306,6 +309,14 @@ class NodeScorer
     public static function trustProgress(Node $node): array
     {
         $completed = (int) ($node->reputation?->completed_tasks_count ?? 0);
+        $score = (float) ($node->reputation?->getAttribute('score') ?? 0.5);
+        $remainingGoldRequirements = [];
+        if ($completed < 100) {
+            $remainingGoldRequirements[] = 'completed_tasks';
+        }
+        if ($score < 0.65) {
+            $remainingGoldRequirements[] = 'reputation_score';
+        }
 
         return [
             'completed_tasks' => $completed,
@@ -313,7 +324,63 @@ class NodeScorer
             'platinum_min_tasks' => 1000,
             'tasks_until_gold' => max(0, 100 - $completed),
             'tasks_until_platinum' => max(0, 1000 - $completed),
+            'gold_task_threshold_met' => $completed >= 100,
+            'gold_reputation_threshold_met' => $score >= 0.65,
+            'remaining_gold_requirements' => $remainingGoldRequirements,
             'probation' => $completed < 100,
+        ];
+    }
+
+    /** @return array{estimate_ms:int|null,basis:string} */
+    public static function latencyEvidence(Node $node): array
+    {
+        $estimate = self::positiveFloat($node->reputation?->getAttribute('observed_latency_ms'));
+
+        return [
+            'estimate_ms' => $estimate !== null ? (int) round($estimate) : null,
+            'basis' => $estimate !== null ? 'multi_proxy_ema' : 'none',
+        ];
+    }
+
+    /**
+     * Explain independent health dimensions without changing the composed label.
+     *
+     * @param  array<string,mixed>|null  $health
+     * @param  array<string,mixed>|null  $policyManifest
+     * @return list<array{dimension:string,state:string,reason:string,evidence:string}>
+     */
+    public static function healthReasons(Node $node, ?array $health, ?array $policyManifest): array
+    {
+        $observedReachable = self::directoryObservedReachable($health);
+        $backend = self::backendStability($node);
+        $policyStatus = $policyManifest['verification']['status'] ?? null;
+        $trust = self::trustProgress($node);
+
+        return [
+            [
+                'dimension' => 'reachability',
+                'state' => $observedReachable === true ? 'reachable' : ($observedReachable === false ? 'unreachable' : 'unknown'),
+                'reason' => $observedReachable === null ? 'not_directory_observed' : 'directory_observation',
+                'evidence' => $health['evidence_level'] ?? 'none',
+            ],
+            [
+                'dimension' => 'backend',
+                'state' => (string) ($backend['backend_state'] ?? 'unknown'),
+                'reason' => (string) ($backend['reason_class'] ?? 'not_reported'),
+                'evidence' => (string) ($backend['evidence'] ?? 'not_reported'),
+            ],
+            [
+                'dimension' => 'trust',
+                'state' => $trust['probation'] ? 'probation' : 'established',
+                'reason' => $trust['probation'] ? 'task_threshold_pending' : 'task_threshold_met',
+                'evidence' => 'directory_accounting',
+            ],
+            [
+                'dimension' => 'policy',
+                'state' => $policyManifest === null ? 'missing' : ($policyStatus === 'verified' ? 'verified' : 'unverified'),
+                'reason' => $policyManifest === null ? 'manifest_not_provided' : (string) ($policyStatus ?? 'signature_not_verified'),
+                'evidence' => $policyManifest === null ? 'none' : 'manifest_projection',
+            ],
         ];
     }
 
@@ -414,11 +481,25 @@ class NodeScorer
     {
         $sdkStatus = (new NodeReadinessPolicy)->sdkStatus($node->sdk_version);
         $keyReady = $node->cx_public_key !== null;
+        $latestSeen = config('app.iicp_sdk_latest_known_version');
+        $latestSeen = is_string($latestSeen) && $latestSeen !== '' ? $latestSeen : null;
+        $releaseRelation = match (true) {
+            $node->sdk_version === null || $latestSeen === null => 'unknown',
+            version_compare($node->sdk_version, $latestSeen, '=') => 'latest_known',
+            version_compare($node->sdk_version, $latestSeen, '<') => 'behind_known',
+            default => 'ahead_of_known',
+        };
 
         return [
             'sdk_status' => $sdkStatus,
             'sdk_baseline_version' => self::SDK_BASELINE_VERSION,
             'upgrade_required' => $sdkStatus !== 'current',
+            'sdk_release' => [
+                'compatibility' => $sdkStatus,
+                'relation' => $releaseRelation,
+                'latest_known_version' => $latestSeen,
+                'latest_known_source' => $latestSeen === null ? 'none' : 'directory_release_manifest',
+            ],
             'key_ready' => $keyReady,
             'privacy_routing_status' => $keyReady ? 'key_ready' : 'transitional',
             'auto_update' => [
