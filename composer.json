@@ -1,10 +1,15 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "laravel/laravel",
+    "name": "iicp/directory-php",
     "type": "project",
-    "description": "The skeleton application for the Laravel framework.",
-    "keywords": ["laravel", "framework"],
+    "description": "PHP reference implementation of the IICP directory control plane and current Genesis code line.",
+    "keywords": ["iicp", "agent-discovery", "control-plane", "directory", "laravel"],
     "license": "Apache-2.0",
+    "homepage": "https://github.com/RobLe3/iicp-directory-php",
+    "support": {
+        "issues": "https://github.com/RobLe3/iicp-directory-php/issues",
+        "security": "https://github.com/RobLe3/iicp-directory-php/security/policy"
+    },
     "require": {
         "php": "^8.3",
         "laravel/framework": "^13.8",

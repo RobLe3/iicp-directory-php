@@ -5,6 +5,7 @@ on:
   schedule:
     - cron: '27 3 * * 1'
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'infection.json5'
       - 'composer.json'
@@ -35,7 +36,7 @@ concurrency:
 
 jobs:
   targeted-mutation:
-    if: github.event_name != 'pull_request' || github.head_ref == 'quality/coverage-mutation-ratchets'
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'mutation-required')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -115,6 +116,7 @@ jobs:
           retention-days: 14
 
   node-readiness-mutation:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'mutation-required')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -143,6 +145,7 @@ jobs:
           retention-days: 14
 
   node-pricing-mutation:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'mutation-required')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -171,6 +174,7 @@ jobs:
           retention-days: 14
 
   backend-stability-mutation:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'mutation-required')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -199,6 +203,7 @@ jobs:
           retention-days: 14
 
   node-eligibility-mutation:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'mutation-required')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -227,6 +232,7 @@ jobs:
           retention-days: 14
 
   node-ranking-mutation:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'mutation-required')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -255,6 +261,7 @@ jobs:
           retention-days: 14
 
   node-endpoint-verifier-mutation:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'mutation-required')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -284,6 +291,7 @@ jobs:
           retention-days: 14
 
   node-registration-persistence-mutation:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'mutation-required')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
