@@ -54,6 +54,12 @@ python3 scripts/check_seed_parity.py \
   --git-revision c489d4e02a636b337ba4237f8543f83675162db0
 ```
 
+Run the released lifecycle profile against a disposable SQLite database and
+loopback test server with `./scripts/run_lifecycle_conformance.sh`. The lane
+pins the IICP v1.10.8 runner, rechecks the production SSRF boundary, uses the
+existing testing-only liveness bypass and emits only a content-free summary. It
+does not contact or modify Genesis.
+
 The versioned parity manifests identify and preserve the reviewed extraction
 snapshot at the pinned public Git revision. Current development is authoritative
 in this public repository; it is not required to remain a live mirror of a
