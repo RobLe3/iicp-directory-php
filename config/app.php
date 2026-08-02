@@ -135,7 +135,7 @@ return [
         'release_tag' => env('IICP_RELEASE_TAG'),
         'source_commit' => env('IICP_SOURCE_COMMIT'),
         'deployed_at' => env('IICP_DEPLOYED_AT'),
-        'openapi_version' => env('IICP_OPENAPI_VERSION', '1.6.0'),
+        'openapi_version' => env('IICP_OPENAPI_VERSION', '1.7.0'),
         'protocol_min' => env('IICP_PROTOCOL_MIN', '1.9.0'),
         'protocol_max' => env('IICP_PROTOCOL_MAX', '1.9.0'),
         'root_key_id' => env('IICP_ROOT_KEY_ID'),

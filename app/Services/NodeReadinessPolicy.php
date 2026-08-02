@@ -25,7 +25,7 @@ final class NodeReadinessPolicy
     public function multiplier(Node $node): float
     {
         $multiplier = 1.0;
-        if ($this->sdkStatus($node->sdk_version) !== 'current') {
+        if ($this->sdkStatus($node->effectiveSdkCompatibilityVersion()) !== 'current') {
             $multiplier -= 0.08;
         }
         if ($node->cx_public_key === null) {

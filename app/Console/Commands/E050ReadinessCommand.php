@@ -18,9 +18,9 @@ class E050ReadinessCommand extends Command
         $nodes = Node::where('available', true)
             ->where('status', 'active')
             ->where('last_seen', '>=', now()->subSeconds(90))
-            ->get(['sdk_version', 'operator_pubkey', 'cx_public_key']);
+            ->get(['sdk_version', 'sdk_compatibility_version', 'operator_pubkey', 'cx_public_key']);
         $secured = $nodes->filter(fn (Node $node) => filled($node->operator_pubkey) || filled($node->cx_public_key))->count();
-        $capable = $nodes->filter(fn (Node $node) => $this->tokenCapable($node->sdk_version))->count();
+        $capable = $nodes->filter(fn (Node $node) => $this->tokenCapable($node->effectiveSdkCompatibilityVersion()))->count();
         $total = $nodes->count();
         $payload = [
             'schema' => 'iicp.e050_readiness.v1',

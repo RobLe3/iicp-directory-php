@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added separate provider implementation name/version and SDK compatibility
+  version axes, with a legacy `sdk_version` alias and fail-closed conflict
+  validation.
+- Advanced the additive OpenAPI projection to 1.7.0 and kept SDK readiness,
+  adoption and E050 decisions on the effective compatibility version.
+
 ## v1.10.85 — 2026-08-01
 
 - Advanced SDK release-currency evidence to the coordinated `0.7.101` release.

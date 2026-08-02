@@ -270,7 +270,10 @@ class DataSubjectRightsService
             'dormant_since' => $this->date($node->dormant_since),
             'policy_manifest' => is_array($node->policy_manifest) ? $this->redactPayload($node->policy_manifest) : null,
             'sdk_language' => $node->sdk_language,
-            'sdk_version' => $node->sdk_version,
+            'implementation_name' => $node->implementation_name,
+            'implementation_version' => $node->implementation_version,
+            'sdk_compatibility_version' => $node->effectiveSdkCompatibilityVersion(),
+            'sdk_version' => $node->effectiveSdkCompatibilityVersion(),
             'secret_fields_present' => [
                 'node_token_hash' => $node->node_token_hash !== null,
                 'proxy_token_hash' => $node->proxy_token_hash !== null,

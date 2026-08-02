@@ -1186,4 +1186,69 @@ class RegisterTest extends TestCase
             'endpoint' => 'https://new.example.com',
         ]))->assertStatus(201);
     }
+
+    public function test_registration_separates_implementation_and_sdk_compatibility_versions(): void
+    {
+        $nodeId = (string) Str::uuid();
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'implementation_name' => 'iicp-web-node',
+            'implementation_version' => '0.2.2',
+            'sdk_compatibility_version' => '0.7.101',
+        ]))->assertStatus(201);
+
+        $node = Node::findOrFail($nodeId);
+        $this->assertSame('iicp-web-node', $node->implementation_name);
+        $this->assertSame('0.2.2', $node->implementation_version);
+        $this->assertSame('0.7.101', $node->sdk_compatibility_version);
+        $this->assertSame('0.7.101', $node->sdk_version);
+    }
+
+    public function test_registration_backfills_preferred_compatibility_from_legacy_sdk_version(): void
+    {
+        $nodeId = (string) Str::uuid();
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'sdk_version' => '0.7.99',
+        ]))->assertStatus(201);
+
+        $node = Node::findOrFail($nodeId);
+        $this->assertSame('0.7.99', $node->effectiveSdkCompatibilityVersion());
+        $this->assertSame('0.7.99', $node->sdk_compatibility_version);
+    }
+
+    public function test_registration_rejects_conflicting_sdk_compatibility_versions(): void
+    {
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'sdk_version' => '0.7.99',
+            'sdk_compatibility_version' => '0.7.101',
+        ]))->assertStatus(422)
+            ->assertJsonPath('error.fields.sdk_compatibility_version.0', 'Must match sdk_version when both fields are supplied.');
+    }
+
+    public function test_shared_implementation_metadata_fixture(): void
+    {
+        $fixture = json_decode(
+            file_get_contents(base_path('parity/directory-implementation-metadata-v1.json')),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+
+        foreach ($fixture['cases'] as $case) {
+            $response = $this->postJson('/api/v1/register', array_merge(
+                $this->validPayload,
+                ['node_id' => (string) Str::uuid()],
+                $case['input'],
+            ));
+            $response->assertStatus($case['accepted'] ? 201 : $case['status']);
+            if ($case['accepted']) {
+                $node = Node::findOrFail($response->json('node_id'));
+                $this->assertSame(
+                    $case['effective_sdk_compatibility_version'],
+                    $node->effectiveSdkCompatibilityVersion(),
+                    $case['name'],
+                );
+            }
+        }
+    }
 }

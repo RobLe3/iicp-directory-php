@@ -1164,7 +1164,9 @@ class DiscoverTest extends TestCase
         $intent = 'urn:iicp:intent:llm:chat:v1';
         $cap = [['intent' => $intent, 'models' => ['m'], 'max_tokens' => 100]];
         $node = $this->createNode([
-            'sdk_version' => '0.7.98',
+            'implementation_name' => 'iicp-web-node',
+            'implementation_version' => '0.2.2',
+            'sdk_compatibility_version' => '0.7.98',
             'sdk_latest_seen' => '0.7.101',
             'backend_stability' => [
                 'backend_state' => 'degraded',
@@ -1180,6 +1182,10 @@ class DiscoverTest extends TestCase
         $response = $this->getJson("/api/v1/discover?intent={$intent}");
 
         $response->assertOk()
+            ->assertJsonPath('nodes.0.implementation_name', 'iicp-web-node')
+            ->assertJsonPath('nodes.0.implementation_version', '0.2.2')
+            ->assertJsonPath('nodes.0.sdk_compatibility_version', '0.7.98')
+            ->assertJsonPath('nodes.0.sdk_version', '0.7.98')
             ->assertJsonPath('nodes.0.latency_evidence.estimate_ms', 143)
             ->assertJsonPath('nodes.0.latency_evidence.basis', 'multi_proxy_ema')
             ->assertJsonPath('nodes.0.trust_progress.gold_task_threshold_met', true)
