@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.10.86 — 2026-08-02
+
 - Added separate provider implementation name/version and SDK compatibility
   version axes, with a legacy `sdk_version` alias and fail-closed conflict
   validation.
