@@ -145,7 +145,7 @@ class StatsController extends Controller
         $active = Node::where('available', true)
             ->where('status', 'active')
             ->where('last_seen', '>=', now()->subSeconds(90))
-            ->get(['sdk_language', 'sdk_version']);
+            ->get(['sdk_language', 'sdk_version', 'sdk_compatibility_version']);
 
         $total = $active->count();
         // Return plain arrays (not Collections) so the value survives the stats
@@ -154,7 +154,7 @@ class StatsController extends Controller
         $byLanguage = $active->groupBy(fn ($n) => $n->sdk_language ?: 'unknown')
             ->map(fn ($g) => $g->count())
             ->toArray();
-        $byVersion = $active->groupBy(fn ($n) => $n->sdk_version ?: 'unknown')
+        $byVersion = $active->groupBy(fn ($n) => $n->effectiveSdkCompatibilityVersion() ?: 'unknown')
             ->map(fn ($g) => $g->count())
             ->sortDesc()
             ->toArray();
@@ -234,8 +234,8 @@ class StatsController extends Controller
             ->whereNotNull('cx_public_key')
             ->count();
         $downlevel = (clone $base)
-            ->get(['sdk_version'])
-            ->filter(fn (Node $n) => NodeScorer::sdkStatus($n->sdk_version) !== 'current')
+            ->get(['sdk_version', 'sdk_compatibility_version'])
+            ->filter(fn (Node $n) => NodeScorer::sdkStatus($n->effectiveSdkCompatibilityVersion()) !== 'current')
             ->count();
 
         // #335 — surface stale-active rows (active=true but last_seen >24h ago)

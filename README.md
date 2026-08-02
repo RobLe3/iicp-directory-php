@@ -66,7 +66,7 @@ The repository uses separate version namespaces that should not be compared as
 one release sequence:
 
 - `openapi: 3.1.0` selects the OpenAPI format;
-- `info.version: 1.6.0` versions the documented OpenAPI contract;
+- `info.version: 1.7.0` versions the documented OpenAPI contract;
 - runtime `v1.10.85` identifies the current application release; and
 - parity manifest `v1.10.76.2` identifies the final historical extraction
   snapshot from the earlier seed source.

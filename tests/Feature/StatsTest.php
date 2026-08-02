@@ -754,7 +754,7 @@ class StatsTest extends TestCase
     /** @test #531 — /stats exposes sdk_version + sdk_language adoption distribution */
     public function test_stats_includes_sdk_adoption_distribution(): void
     {
-        $mk = function (string $lang, string $ver) {
+        $mk = function (string $lang, string $ver, bool $preferred = false) {
             Node::create([
                 'id' => (string) Str::uuid(),
                 'endpoint' => 'https://node.example.com',
@@ -767,12 +767,13 @@ class StatsTest extends TestCase
                 'status' => 'active',
                 'last_seen' => now(),
                 'sdk_language' => $lang,
-                'sdk_version' => $ver,
+                'sdk_compatibility_version' => $preferred ? $ver : null,
+                'sdk_version' => $preferred ? null : $ver,
             ]);
         };
         $mk('rust', '0.7.58');
         $mk('rust', '0.7.58');
-        $mk('python', '0.7.57');
+        $mk('python', '0.7.57', true);
 
         $resp = $this->getJson('/api/v1/stats')->assertStatus(200)
             ->assertJsonStructure(['sdk_adoption' => ['total_active', 'by_language', 'by_version']]);

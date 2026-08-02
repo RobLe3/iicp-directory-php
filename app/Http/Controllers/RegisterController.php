@@ -219,7 +219,10 @@ class RegisterController extends Controller
             // SDK identification — free-form lowercase string so future
             // C/C++/Java/Go SDKs can self-tag without a directory migration.
             'sdk_language' => ['sometimes', 'nullable', 'string', 'max:32', 'regex:/^[a-z0-9_-]+$/'],
-            'sdk_version' => ['sometimes', 'nullable', 'string', 'max:32'],
+            'implementation_name' => ['sometimes', 'nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9@][A-Za-z0-9._\/@+\-]{0,63}$/'],
+            'implementation_version' => ['sometimes', 'nullable', 'string', 'max:32', 'regex:/^[0-9A-Za-z][0-9A-Za-z._+\-]{0,31}$/'],
+            'sdk_compatibility_version' => ['sometimes', 'nullable', 'string', 'max:32', 'regex:/^[0-9A-Za-z][0-9A-Za-z._+\-]{0,31}$/'],
+            'sdk_version' => ['sometimes', 'nullable', 'string', 'max:32', 'regex:/^[0-9A-Za-z][0-9A-Za-z._+\-]{0,31}$/'],
             // Pre-normative receipt-profile adoption signal. Stored for migration
             // measurement only; it MUST NOT alter routing, trust, credits or settlement.
             'supported_receipt_profiles' => ['sometimes', 'array', 'max:4'],
@@ -247,6 +250,20 @@ class RegisterController extends Controller
             'cx_public_key.features' => ['sometimes', 'array', 'max:16'],
             'cx_public_key.features.*' => ['string', 'max:64'],
         ]);
+
+        $preferredSdk = $validated['sdk_compatibility_version'] ?? null;
+        $legacySdk = $validated['sdk_version'] ?? null;
+        if ($preferredSdk !== null && $legacySdk !== null && $preferredSdk !== $legacySdk) {
+            throw ValidationException::withMessages([
+                'sdk_compatibility_version' => ['Must match sdk_version when both fields are supplied.'],
+            ]);
+        }
+        $effectiveSdk = $preferredSdk ?? $legacySdk;
+        if ($effectiveSdk !== null) {
+            // Keep both projections populated during the compatibility window.
+            $validated['sdk_compatibility_version'] = $effectiveSdk;
+            $validated['sdk_version'] = $effectiveSdk;
+        }
         // Laravel's nested-array validated projection can omit an optional
         // additive list even when each item passed validation. Preserve the
         // already-validated feature list explicitly for capability negotiation.

@@ -86,6 +86,9 @@ class Node extends Model
         'endpoint_verified_dead_at',
         // SDK identification — free-form so future languages can self-tag
         'sdk_language',
+        'implementation_name',
+        'implementation_version',
+        'sdk_compatibility_version',
         'sdk_version',
         'supported_receipt_profiles',
         // #521 follow-up — optional updater evidence from provider heartbeats
@@ -162,6 +165,12 @@ class Node extends Model
     }
 
     protected $hidden = ['node_token_hash', 'proxy_token_hash', 'node_hmac_key'];
+
+    /** Effective SDK protocol-compatibility version during the legacy transition. */
+    public function effectiveSdkCompatibilityVersion(): ?string
+    {
+        return $this->sdk_compatibility_version ?? $this->sdk_version;
+    }
 
     /** @return HasMany<Capability, $this> */
     public function capabilities(): HasMany

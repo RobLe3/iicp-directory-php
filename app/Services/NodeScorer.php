@@ -161,7 +161,10 @@ class NodeScorer
                 // render a language badge (#338 follow-up). Free-form for future
                 // C / C++ / Java / Go / WASM SDKs.
                 'sdk_language' => $node->sdk_language,
-                'sdk_version' => $node->sdk_version,
+                'implementation_name' => $node->implementation_name,
+                'implementation_version' => $node->implementation_version,
+                'sdk_compatibility_version' => $node->effectiveSdkCompatibilityVersion(),
+                'sdk_version' => $node->effectiveSdkCompatibilityVersion(),
                 // Pre-normative migration evidence only. Never expose the raw
                 // mutable profile list or use it as a routing/trust signal.
                 'consumer_cosignature_ready' => in_array(
@@ -479,14 +482,14 @@ class NodeScorer
 
     public static function complianceSignals(Node $node): array
     {
-        $sdkStatus = (new NodeReadinessPolicy)->sdkStatus($node->sdk_version);
+        $sdkStatus = (new NodeReadinessPolicy)->sdkStatus($node->effectiveSdkCompatibilityVersion());
         $keyReady = $node->cx_public_key !== null;
         $latestSeen = config('app.iicp_sdk_latest_known_version');
         $latestSeen = is_string($latestSeen) && $latestSeen !== '' ? $latestSeen : null;
         $releaseRelation = match (true) {
-            $node->sdk_version === null || $latestSeen === null => 'unknown',
-            version_compare($node->sdk_version, $latestSeen, '=') => 'latest_known',
-            version_compare($node->sdk_version, $latestSeen, '<') => 'behind_known',
+            $node->effectiveSdkCompatibilityVersion() === null || $latestSeen === null => 'unknown',
+            version_compare($node->effectiveSdkCompatibilityVersion(), $latestSeen, '=') => 'latest_known',
+            version_compare($node->effectiveSdkCompatibilityVersion(), $latestSeen, '<') => 'behind_known',
             default => 'ahead_of_known',
         };
 
