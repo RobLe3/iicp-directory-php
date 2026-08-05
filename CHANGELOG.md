@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v1.10.87 — 2026-08-05
+
+- Updated the runtime Guzzle dependency to 7.15.2 to reject noncanonical URI
+  hosts and cookie domains covered by GHSA-v5mv-p594-2x33 and
+  GHSA-f7vp-7xgx-4w4r.
+- Preserved the existing endpoint-verification, DNS pinning, API, schema,
+  OpenAPI and wire contracts. No database migration is included.
+
 ## v1.10.86 — 2026-08-02
 
 - Added separate provider implementation name/version and SDK compatibility

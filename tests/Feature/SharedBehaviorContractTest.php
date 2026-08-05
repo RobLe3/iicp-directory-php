@@ -94,9 +94,12 @@ class SharedBehaviorContractTest extends TestCase
 
     public function test_v11086_manifest_pins_provider_version_axes(): void
     {
-        $manifest = json_decode(file_get_contents(base_path('parity/contract-v1.10.86.json')), true, flags: JSON_THROW_ON_ERROR);
-        $this->assertSame('v1.10.86', $manifest['contract_version']);
-        $this->assertSame('v1.10.86', $manifest['authority']['runtime_version']);
+        $manifest = json_decode(file_get_contents(base_path('parity/contract-v1.10.87.json')), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame('v1.10.87', $manifest['contract_version']);
+        $this->assertSame('v1.10.87', $manifest['authority']['runtime_version']);
+        $this->assertContains('guzzle_7.15.2_security_update', $manifest['scope']);
+        $this->assertContains('unchanged_wire_contract', $manifest['scope']);
+        $this->assertContains('no_schema_migration', $manifest['scope']);
         foreach ($manifest['fixtures'] as $file => $digest) {
             $this->assertSame($digest, hash_file('sha256', base_path('parity/'.$file)), $file);
         }
