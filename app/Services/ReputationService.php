@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\Node;
 use App\Models\Reputation;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Delta-based reputation scoring for the Control Plane (spec/iicp-semantics.md §11.2).
@@ -67,10 +68,31 @@ class ReputationService
 
     public function upsert(string $nodeId, int $tasksSuccess, int $tasksFailed, float $avgLatencyMs): void
     {
-        $rep = Reputation::firstOrCreate(
-            ['node_id' => $nodeId],
-            ['score' => 0.5, 'tasks_total' => 0, 'tasks_failed' => 0, 'completed_tasks_count' => 0, 'avg_latency_ms' => 0.0],
-        );
+        DB::transaction(function () use ($nodeId, $tasksSuccess, $tasksFailed, $avgLatencyMs): void {
+            $this->upsertLocked($nodeId, $tasksSuccess, $tasksFailed, $avgLatencyMs);
+        }, 3);
+    }
+
+    /**
+     * Update both canonical reputation rows while the node lock serializes one
+     * node's hourly budget. Call only from upsert()'s transaction.
+     */
+    private function upsertLocked(string $nodeId, int $tasksSuccess, int $tasksFailed, float $avgLatencyMs): void
+    {
+        // Lock the node first for every writer. This also serializes creation of
+        // its reputation row and keeps the lock order stable across heartbeats.
+        $node = Node::query()->whereKey($nodeId)->lockForUpdate()->first();
+        $rep = Reputation::query()->whereKey($nodeId)->lockForUpdate()->first();
+        if ($rep === null) {
+            $rep = Reputation::create([
+                'node_id' => $nodeId,
+                'score' => 0.5,
+                'tasks_total' => 0,
+                'tasks_failed' => 0,
+                'completed_tasks_count' => 0,
+                'avg_latency_ms' => 0.0,
+            ]);
+        }
 
         // RT-01b: clamp the advisory-counter contribution (not the score path).
         $countedSuccess = min($tasksSuccess, self::MAX_COUNTED_SUCCESS_PER_HEARTBEAT);
@@ -86,7 +108,6 @@ class ReputationService
         $delta = $this->computeDelta($tasksSuccess, $tasksFailed, $avgLatencyMs);
 
         // RT-01b (#381): per-node hourly velocity ceiling. Check rolling 1h window on nodes.
-        $node = Node::find($nodeId);
         if ($node && $delta > 0) {
             $windowStart = $node->rep_hourly_window_start;
             $hourlyGain = (float) ($node->rep_hourly_gain ?? 0.0);
@@ -94,6 +115,7 @@ class ReputationService
             if ($windowStart === null || $windowStart->diffInSeconds(now()) >= 3600) {
                 // Window expired — reset
                 $hourlyGain = 0.0;
+                $node->rep_hourly_gain = 0.0;
                 $node->rep_hourly_window_start = now();
             }
 
