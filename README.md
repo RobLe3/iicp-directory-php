@@ -73,7 +73,7 @@ one release sequence:
 
 - `openapi: 3.1.0` selects the OpenAPI format;
 - `info.version: 1.7.0` versions the documented OpenAPI contract;
-- runtime `v1.10.87` identifies the current application release; and
+- runtime `v1.10.88` identifies the current application release; and
 - parity manifest `v1.10.76.2` identifies the final historical extraction
   snapshot from the earlier seed source.
 

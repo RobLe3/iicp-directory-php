@@ -123,7 +123,7 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
-    'iicp_version' => 'v1.10.87',
+    'iicp_version' => 'v1.10.88',
 
     // Secret-free digest of the tracked deployable directory source. Release
     // artifacts inject this value so equal version strings cannot hide a
