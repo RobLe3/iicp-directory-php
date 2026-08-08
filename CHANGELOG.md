@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## v1.10.89 — 2026-08-08
+
+- Made each reputation score, task-counter and hourly positive-gain update one
+  node-locked database transaction. Concurrent heartbeats now share the same
+  persisted `+0.20` hourly budget.
+- Corrected expired-window persistence so the first positive update in a new
+  hour stores the reset budget before applying its delta.
+- Added real-MariaDB concurrency evidence plus restart, 3599/3600-second
+  boundary and negative-delta regression cases.
+- No database migration, OpenAPI, route or task-data-plane change is included.
+
 ## v1.10.88 — 2026-08-08
 
 - Updated Laravel to 13.24.0 and `league/commonmark` to 2.9.0, resolving the
