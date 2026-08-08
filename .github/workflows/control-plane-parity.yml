@@ -128,7 +128,7 @@ jobs:
       - run: mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
       - run: composer install --no-interaction --prefer-dist
       - run: php artisan migrate:fresh --force
-      - run: php artisan test --compact tests/Feature/NodeEventLoggerConcurrencyTest.php tests/Feature/CreditLedgerConcurrencyTest.php
+      - run: php artisan test --compact tests/Feature/NodeEventLoggerConcurrencyTest.php tests/Feature/CreditLedgerConcurrencyTest.php tests/Feature/ReputationVelocityConcurrencyTest.php
 
   operator-image:
     runs-on: ubuntu-latest

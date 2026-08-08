@@ -174,4 +174,47 @@ class ReputationServiceTest extends TestCase
         $this->assertGreaterThan($scoreBefore, $scoreAfter,
             'RT-01b: after 1h window expiry, a new heartbeat must be able to increase score');
     }
+
+    public function test_rt01b_window_boundary_is_closed_at_3600_seconds(): void
+    {
+        $anchor = now()->startOfSecond();
+        $this->travelTo($anchor);
+        $node = $this->makeNode();
+
+        $this->service->upsert($node->id, tasksSuccess: 10, tasksFailed: 0, avgLatencyMs: 100.0);
+        $this->service->upsert($node->id, tasksSuccess: 10, tasksFailed: 0, avgLatencyMs: 100.0);
+
+        $node->forceFill(['rep_hourly_window_start' => $anchor->copy()->subSeconds(3599)])->save();
+        $this->service->upsert($node->id, tasksSuccess: 10, tasksFailed: 0, avgLatencyMs: 100.0);
+        $this->assertSame(0.7, (float) $node->fresh()->reputation_score);
+
+        $node->forceFill(['rep_hourly_window_start' => $anchor->copy()->subSeconds(3600)])->save();
+        $this->service->upsert($node->id, tasksSuccess: 10, tasksFailed: 0, avgLatencyMs: 100.0);
+        $this->assertSame(0.8, (float) $node->fresh()->reputation_score);
+        $this->assertSame(0.1, (float) $node->fresh()->rep_hourly_gain);
+    }
+
+    public function test_rt01b_negative_delta_does_not_consume_or_restore_positive_budget(): void
+    {
+        $node = $this->makeNode();
+
+        $this->service->upsert($node->id, tasksSuccess: 10, tasksFailed: 0, avgLatencyMs: 100.0);
+        $this->service->upsert($node->id, tasksSuccess: 0, tasksFailed: 1, avgLatencyMs: 0.0);
+
+        $node->refresh();
+        $this->assertSame(0.1, (float) $node->rep_hourly_gain);
+        $this->assertSame(0.55, (float) $node->reputation_score);
+
+        app()->forgetInstance(ReputationService::class);
+        app(ReputationService::class)->upsert(
+            $node->id,
+            tasksSuccess: 10,
+            tasksFailed: 0,
+            avgLatencyMs: 100.0,
+        );
+
+        $node->refresh();
+        $this->assertSame(0.2, (float) $node->rep_hourly_gain);
+        $this->assertSame(0.65, (float) $node->reputation_score);
+    }
 }
