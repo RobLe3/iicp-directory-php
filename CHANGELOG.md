@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v1.10.88 — 2026-08-08
+
+- Updated Laravel to 13.24.0 and `league/commonmark` to 2.9.0, resolving the
+  reviewed CommonMark denial-of-service and unsafe-link advisories.
+- No database migration, OpenAPI, wire, ranking, routing or conformance
+  behavior changed.
+
 ## v1.10.87 — 2026-08-05
 
 - Updated the runtime Guzzle dependency to 7.15.2 to reject noncanonical URI
