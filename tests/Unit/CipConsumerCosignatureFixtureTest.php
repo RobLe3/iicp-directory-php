@@ -147,10 +147,14 @@ class CipConsumerCosignatureFixtureTest extends TestCase
             return ['action' => 'reject', 'reason' => 'provider_signature_invalid', 'trust_weight' => '0.0'];
         }
         if ($value['consumer_signature'] !== 'valid') {
-            if ($value['consumer_signature'] === 'missing' && $value['mode'] === 'optional') {
-                return ['action' => 'accept_legacy', 'reason' => 'consumer_signature_missing_optional', 'trust_weight' => '0.0'];
+            if ($value['consumer_signature'] === 'missing' && $value['mode'] === 'legacy') {
+                return ['action' => 'accept_legacy', 'reason' => 'consumer_signature_missing_legacy', 'trust_weight' => '0.0'];
             }
-            $reason = $value['consumer_signature'] === 'missing' ? 'consumer_signature_required' : 'consumer_signature_invalid';
+            $reason = match ($value['consumer_signature']) {
+                'missing' => 'consumer_signature_required',
+                'wrong_signer' => 'consumer_signer_mismatch',
+                default => 'consumer_signature_invalid',
+            };
 
             return ['action' => 'reject', 'reason' => $reason, 'trust_weight' => '0.0'];
         }
