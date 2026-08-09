@@ -3,6 +3,17 @@
 Changes must preserve the control-plane boundary: registration, discovery and
 route authorization belong here; task execution does not.
 
+Use this repository's issue forms for reproducible PHP implementation defects
+and implementation-specific proposals. Use the public IICP specification
+repository for protocol or cross-component proposals, the IICP forum for
+open-ended discussion, and GitHub's private security-advisory form for
+vulnerabilities. Do not include credentials, production topology, task
+payloads, operator records or personal data in public issues.
+
+Participation does not confer protocol authority. Decisions and objections on
+public proposals are recorded in their public issue or pull request under the
+current founder-led governance process.
+
 Before opening a pull request, run:
 
 ```bash
