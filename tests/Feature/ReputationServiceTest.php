@@ -152,6 +152,30 @@ class ReputationServiceTest extends TestCase
         );
     }
 
+    /** Shared pre-normative RT-01b fixture stays aligned with the local service contract. */
+    public function test_rt01b_shared_hourly_velocity_fixture_matches_service_contract(): void
+    {
+        $fixture = json_decode(
+            file_get_contents(base_path('parity/reputation-hourly-velocity-v0.json')),
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        );
+
+        $this->assertSame('0.1.0-draft', $fixture['fixture_version']);
+        $this->assertSame(['php', 'rust'], $fixture['scope']['implementation_flavors']);
+        $this->assertSame('disposable_mysql', $fixture['scope']['database_mode']);
+        $this->assertSame(ReputationService::MAX_HOURLY_REPUTATION_GAIN, $fixture['inputs']['maximum_hourly_positive_gain']);
+        $this->assertSame(4, $fixture['inputs']['workers']);
+        $this->assertSame(10, $fixture['inputs']['tasks_success_per_worker']);
+        $this->assertSame(0.7, $fixture['expected']['concurrent_score']);
+        $this->assertSame(0.2, $fixture['expected']['concurrent_hourly_gain']);
+        $this->assertSame(40, $fixture['expected']['concurrent_tasks_total']);
+        $this->assertSame(3599, $fixture['expected']['same_window_age_seconds']);
+        $this->assertSame(3600, $fixture['expected']['next_window_age_seconds']);
+        $this->assertSame(0.85, $fixture['expected']['final_score_after_reload_and_negative']);
+    }
+
     /** RT-01b: velocity window resets after 1 hour (allows another 0.20 gain cycle). */
     public function test_rt01b_velocity_window_resets_after_one_hour(): void
     {

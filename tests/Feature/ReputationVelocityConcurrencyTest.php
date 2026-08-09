@@ -14,7 +14,15 @@ use Tests\TestCase;
 /** Real MariaDB evidence for the RT-01b hourly reputation budget. */
 class ReputationVelocityConcurrencyTest extends TestCase
 {
-    private const WORKERS = 4;
+    private function fixture(): array
+    {
+        return json_decode(
+            file_get_contents(base_path('parity/reputation-hourly-velocity-v0.json')),
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        );
+    }
 
     protected function setUp(): void
     {
@@ -33,6 +41,10 @@ class ReputationVelocityConcurrencyTest extends TestCase
 
     public function test_concurrent_heartbeats_share_one_persisted_hourly_budget(): void
     {
+        $fixture = $this->fixture();
+        $inputs = $fixture['inputs'];
+        $expected = $fixture['expected'];
+
         $node = Node::create([
             'id' => (string) Str::uuid(),
             'endpoint' => 'https://reputation-concurrency.example.com',
@@ -48,7 +60,7 @@ class ReputationVelocityConcurrencyTest extends TestCase
         $errorPrefix = sys_get_temp_dir()."/iicp-reputation-error-{$runId}";
         $children = [];
 
-        for ($worker = 0; $worker < self::WORKERS; $worker++) {
+        for ($worker = 0; $worker < $inputs['workers']; $worker++) {
             $pid = pcntl_fork();
             $this->assertNotSame(-1, $pid, 'pcntl_fork failed');
             if ($pid === 0) {
@@ -61,7 +73,7 @@ class ReputationVelocityConcurrencyTest extends TestCase
                 try {
                     app(ReputationService::class)->upsert(
                         (string) $node->id,
-                        tasksSuccess: 10,
+                        tasksSuccess: $inputs['tasks_success_per_worker'],
                         tasksFailed: 0,
                         avgLatencyMs: 100.0,
                     );
@@ -97,10 +109,10 @@ class ReputationVelocityConcurrencyTest extends TestCase
         $storedNode = Node::findOrFail($node->id);
         $reputation = Reputation::findOrFail($node->id);
 
-        $this->assertSame(0.7, (float) $storedNode->reputation_score);
-        $this->assertSame(0.7, (float) $reputation->score);
-        $this->assertSame(ReputationService::MAX_HOURLY_REPUTATION_GAIN, (float) $storedNode->rep_hourly_gain);
-        $this->assertSame(40, (int) $reputation->completed_tasks_count);
-        $this->assertSame(40, (int) $storedNode->tasks_total);
+        $this->assertSame($expected['concurrent_score'], (float) $storedNode->reputation_score);
+        $this->assertSame($expected['concurrent_score'], (float) $reputation->score);
+        $this->assertSame($expected['concurrent_hourly_gain'], (float) $storedNode->rep_hourly_gain);
+        $this->assertSame($expected['concurrent_tasks_total'], (int) $reputation->completed_tasks_count);
+        $this->assertSame($expected['concurrent_tasks_total'], (int) $storedNode->tasks_total);
     }
 }
