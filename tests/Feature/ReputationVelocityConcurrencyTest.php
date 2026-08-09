@@ -152,6 +152,16 @@ class ReputationVelocityConcurrencyTest extends TestCase
             $this->assertSame($expected['next_window_score_after_first_positive'], (float) $nextWindow->reputation_score);
             $this->assertSame($expected['next_window_hourly_gain_after_first_positive'], (float) $nextWindow->rep_hourly_gain);
 
+            // Consume the remaining positive budget, then resolve another
+            // service instance before applying a negative delta. This proves
+            // the persisted window state, rather than in-memory service state,
+            // governs both operations after reload.
+            app(ReputationService::class)->upsert(
+                (string) $node->id,
+                tasksSuccess: 10,
+                tasksFailed: 0,
+                avgLatencyMs: 100.0,
+            );
             app()->forgetInstance(ReputationService::class);
             app(ReputationService::class)->upsert(
                 (string) $node->id,
