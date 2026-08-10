@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v1.10.90 — 2026-08-10
+
+- Bounded the public 24-hour stats aggregate lookup to the newest deterministic
+  row per metric in SQL instead of hydrating the complete history in PHP.
+- Added regression coverage for long histories, tied newest timestamps and
+  later-inserted older backfills.
+- No database migration, OpenAPI, route, task-data-plane or cache-key change is
+  included.
+
 ## v1.10.89 — 2026-08-08
 
 - Made each reputation score, task-counter and hourly positive-gain update one
