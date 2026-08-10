@@ -92,13 +92,13 @@ class SharedBehaviorContractTest extends TestCase
         }
     }
 
-    public function test_v11089_manifest_pins_atomic_reputation_update_and_unchanged_wire(): void
+    public function test_v11090_manifest_pins_bounded_stats_lookup_and_unchanged_wire(): void
     {
-        $manifest = json_decode(file_get_contents(base_path('parity/contract-v1.10.89.json')), true, flags: JSON_THROW_ON_ERROR);
-        $this->assertSame('v1.10.89', $manifest['contract_version']);
-        $this->assertSame('v1.10.89', $manifest['authority']['runtime_version']);
-        $this->assertContains('atomic_reputation_velocity_transaction', $manifest['scope']);
-        $this->assertContains('shared_hourly_gain_budget', $manifest['scope']);
+        $manifest = json_decode(file_get_contents(base_path('parity/contract-v1.10.90.json')), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame('v1.10.90', $manifest['contract_version']);
+        $this->assertSame('v1.10.90', $manifest['authority']['runtime_version']);
+        $this->assertContains('bounded_stats_aggregate_lookup', $manifest['scope']);
+        $this->assertContains('deterministic_latest_metric_selection', $manifest['scope']);
         $this->assertContains('unchanged_wire_contract', $manifest['scope']);
         $this->assertContains('no_schema_migration', $manifest['scope']);
         foreach ($manifest['fixtures'] as $file => $digest) {
