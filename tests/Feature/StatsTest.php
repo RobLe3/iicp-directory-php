@@ -11,6 +11,7 @@ use App\Models\NodeHealthObservation;
 use App\Models\TelemetryProbe;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -469,6 +470,63 @@ class StatsTest extends TestCase
 
         $response->assertStatus(200)
             ->assertJsonStructure(['probes' => ['aggregate_24h' => ['task_success_rate_pct']]]);
+    }
+
+    public function test_stats_aggregate_selects_one_latest_row_per_metric_from_large_history(): void
+    {
+        $history = [];
+        for ($i = 0; $i < 2000; $i++) {
+            $history[] = [
+                'window' => '24h',
+                'metric' => $i % 2 === 0 ? 'discover_p50_ms' : 'discover_p95_ms',
+                'value' => (float) $i,
+                'sample_count' => 1,
+                'computed_at' => now()->subHour(),
+            ];
+        }
+        foreach (array_chunk($history, 250) as $chunk) {
+            DB::table('iicp_telemetry_aggregates')->insert($chunk);
+        }
+
+        // Equal timestamps make insertion id the deterministic tie-breaker.
+        DB::table('iicp_telemetry_aggregates')->insert([
+            [
+                'window' => '24h',
+                'metric' => 'discover_p50_ms',
+                'value' => 41.0,
+                'sample_count' => 7,
+                'computed_at' => now(),
+            ],
+            [
+                'window' => '24h',
+                'metric' => 'discover_p50_ms',
+                'value' => 42.0,
+                'sample_count' => 8,
+                'computed_at' => now(),
+            ],
+            [
+                'window' => '24h',
+                'metric' => 'discover_p95_ms',
+                'value' => 95.0,
+                'sample_count' => 9,
+                'computed_at' => now(),
+            ],
+            [
+                // A late backfill has a larger id but must not displace a row
+                // with a newer computed_at value.
+                'window' => '24h',
+                'metric' => 'discover_p95_ms',
+                'value' => 999.0,
+                'sample_count' => 1,
+                'computed_at' => now()->subDays(2),
+            ],
+        ]);
+
+        Cache::forget('stats.public');
+        $aggregate = $this->getJson('/api/v1/stats')->assertOk()->json('probes.aggregate_24h');
+
+        $this->assertEquals(42.0, $aggregate['discover_p50_ms']);
+        $this->assertEquals(95.0, $aggregate['discover_p95_ms']);
     }
 
     /*

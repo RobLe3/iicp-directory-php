@@ -291,11 +291,28 @@ class StatsController extends Controller
 
     private function aggregate(string $window): array
     {
-        $rows = DB::table('iicp_telemetry_aggregates')
+        // Keep historical aggregates for retention/evidence, but never hydrate
+        // the full history into PHP. Production accumulated >190k rows for 19
+        // metrics, which exhausted the shared-host CLI during cache warming and
+        // exposed cache-miss web requests to the same failure. Resolve the newest
+        // timestamp in SQL, then MAX(id) only among tied newest rows.
+        $latestTimes = DB::table('iicp_telemetry_aggregates')
+            ->select('metric')
+            ->selectRaw('MAX(computed_at) AS latest_at')
             ->where('window', $window)
-            ->orderByDesc('computed_at')
+            ->groupBy('metric');
+        $latestIds = DB::table('iicp_telemetry_aggregates as candidate')
+            ->joinSub($latestTimes, 'latest', function ($join): void {
+                $join->on('latest.metric', '=', 'candidate.metric')
+                    ->on('latest.latest_at', '=', 'candidate.computed_at');
+            })
+            ->where('candidate.window', $window)
+            ->groupBy('candidate.metric')
+            ->selectRaw('MAX(candidate.id)');
+
+        $rows = DB::table('iicp_telemetry_aggregates')
+            ->whereIn('id', $latestIds)
             ->get()
-            ->unique('metric')
             ->keyBy('metric');
 
         // D2-READ (W-042/D5prime prep): Task success rate now derived from canonical
