@@ -41,12 +41,13 @@ remain in a private temporary directory only with `--keep`; never commit them.
 Set `IICP_OPERATOR_REHEARSAL_OUTPUT` to copy only the content-free JSON result
 to a chosen private path before cleanup.
 
-For a real immutable previous-to-next check, run:
+For a real immutable previous-to-next check, set `PREVIOUS_TAG` and `NEXT_TAG`
+to reviewed immutable release tags, then run:
 
 ```bash
 IICP_OPERATOR_UPGRADE_OUTPUT=/private/path/result.json \
   scripts/rehearse_operator_upgrade.sh \
-  --previous-tag v1.10.79.1 --next-tag v1.10.80.1
+  --previous-tag "$PREVIOUS_TAG" --next-tag "$NEXT_TAG"
 ```
 
 This builds both tags in detached worktrees, upgrades through the explicit
@@ -60,7 +61,8 @@ Before preparing an operator artifact, verify both checksum and provenance:
 
 ```bash
 sha256sum --check SHA256SUMS
-gh attestation verify iicp-directory-php-v1.10.80.1.tar.gz \
+version="$(cat VERSION)"
+gh attestation verify "iicp-directory-php-v${version}.tar.gz" \
   --repo RobLe3/iicp-directory-php
 ```
 
