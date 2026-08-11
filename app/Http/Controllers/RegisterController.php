@@ -251,19 +251,7 @@ class RegisterController extends Controller
             'cx_public_key.features.*' => ['string', 'max:64'],
         ]);
 
-        $preferredSdk = $validated['sdk_compatibility_version'] ?? null;
-        $legacySdk = $validated['sdk_version'] ?? null;
-        if ($preferredSdk !== null && $legacySdk !== null && $preferredSdk !== $legacySdk) {
-            throw ValidationException::withMessages([
-                'sdk_compatibility_version' => ['Must match sdk_version when both fields are supplied.'],
-            ]);
-        }
-        $effectiveSdk = $preferredSdk ?? $legacySdk;
-        if ($effectiveSdk !== null) {
-            // Keep both projections populated during the compatibility window.
-            $validated['sdk_compatibility_version'] = $effectiveSdk;
-            $validated['sdk_version'] = $effectiveSdk;
-        }
+        $validated = $this->normalizeSdkVersions($validated);
         // Laravel's nested-array validated projection can omit an optional
         // additive list even when each item passed validation. Preserve the
         // already-validated feature list explicitly for capability negotiation.
@@ -386,5 +374,31 @@ class RegisterController extends Controller
         $span->end();
 
         return response()->json($result, 201);
+    }
+
+    /**
+     * Keep the preferred and legacy SDK-version projections equivalent during
+     * the compatibility window.
+     *
+     * @param  array<string, mixed>  $validated
+     * @return array<string, mixed>
+     */
+    private function normalizeSdkVersions(array $validated): array
+    {
+        $preferredSdk = $validated['sdk_compatibility_version'] ?? null;
+        $legacySdk = $validated['sdk_version'] ?? null;
+        if ($preferredSdk !== null && $legacySdk !== null && $preferredSdk !== $legacySdk) {
+            throw ValidationException::withMessages([
+                'sdk_compatibility_version' => ['Must match sdk_version when both fields are supplied.'],
+            ]);
+        }
+
+        $effectiveSdk = $preferredSdk ?? $legacySdk;
+        if ($effectiveSdk !== null) {
+            $validated['sdk_compatibility_version'] = $effectiveSdk;
+            $validated['sdk_version'] = $effectiveSdk;
+        }
+
+        return $validated;
     }
 }
