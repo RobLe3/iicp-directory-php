@@ -73,6 +73,7 @@ class SnapshotController extends Controller
                 'intent' => $c->intent,
                 'models' => $c->models,
                 'max_tokens' => $c->max_tokens,
+                'supported_profiles' => $c->supported_profiles ?: [],
             ])->all(),
         ]);
     }

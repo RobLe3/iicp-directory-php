@@ -107,6 +107,7 @@ class SnapshotEndpointTest extends TestCase
             'node_id' => '550e8400-e29b-41d4-a716-446655440001',
             'intent' => 'urn:iicp:intent:llm:chat:v1',
             'models' => ['gpt-test'], 'max_tokens' => 4096,
+            'supported_profiles' => ['urn:iicp:profile:service-lifecycle:v1'],
         ]);
         NodeEvent::create([
             'event_id' => 'evt-1', 'seq' => 42, 'event_type' => 'REGISTER',
@@ -124,12 +125,13 @@ class SnapshotEndpointTest extends TestCase
             'schema_version', 'snapshot_seq', 'snapshot_ts_ms', 'genesis_hash',
             'nodes' => [['node_id', 'endpoint', 'region', 'available', 'reputation_score',
                 'credit_balance', 'cip_policy', 'pricing']],
-            'capabilities' => [['node_id', 'intent', 'models', 'max_tokens']],
+            'capabilities' => [['node_id', 'intent', 'models', 'max_tokens', 'supported_profiles']],
         ]);
         $resp->assertJsonPath('nodes.0.node_id', '550e8400-e29b-41d4-a716-446655440001');
         $resp->assertJsonPath('nodes.0.reputation_score', 0.85);
         $resp->assertJsonPath('nodes.0.cip_policy.allow_remote_inference', true);
         $resp->assertJsonPath('capabilities.0.intent', 'urn:iicp:intent:llm:chat:v1');
+        $resp->assertJsonPath('capabilities.0.supported_profiles.0', 'urn:iicp:profile:service-lifecycle:v1');
     }
 
     public function test_legacy_events_scope_is_accepted_for_one_compatibility_window(): void

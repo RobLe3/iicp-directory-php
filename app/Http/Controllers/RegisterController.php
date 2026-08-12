@@ -138,6 +138,13 @@ class RegisterController extends Controller
             // #408/ADR-046 — input modalities a capability accepts (default text-only).
             'capabilities.*.input_modalities' => ['sometimes', 'nullable', 'array'],
             'capabilities.*.input_modalities.*' => ['string', 'in:text,image,audio,video'],
+            'capabilities.*.supported_profiles' => ['sometimes', 'array', 'max:16'],
+            'capabilities.*.supported_profiles.*' => [
+                'string',
+                'max:160',
+                'distinct',
+                'regex:/^urn:iicp:profile:[a-z0-9][a-z0-9._:-]*$/',
+            ],
             // ADR-045 Phase A (#407) — optional verifiable operator→node delegation (ed25519).
             'operator_delegation' => ['sometimes', 'nullable', 'array'],
             'operator_delegation.node_id' => ['required_with:operator_delegation', 'string'],
@@ -354,6 +361,7 @@ class RegisterController extends Controller
                 'models' => $c['models'],
                 'max_tokens' => $c['max_tokens'],
                 'input_modalities' => $c['input_modalities'] ?? ['text'],
+                'supported_profiles' => $c['supported_profiles'] ?? [],
             ], $validated['capabilities']),
         ]);
 

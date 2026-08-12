@@ -17,12 +17,14 @@ class Capability extends Model
         'quantization',
         'inference_engine',
         'input_modalities',
+        'supported_profiles',
     ];
 
     protected $casts = [
         'models' => 'array',
         // #408/ADR-046 — ["text"] | ["text","image"] (vision). Default text-only.
         'input_modalities' => 'array',
+        'supported_profiles' => 'array',
     ];
 
     public function node(): BelongsTo

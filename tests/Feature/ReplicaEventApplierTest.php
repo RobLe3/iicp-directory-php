@@ -64,7 +64,7 @@ class ReplicaEventApplierTest extends TestCase
             'endpoint' => 'https://node-cap.test',
             'region' => 'eu-central',
             'capabilities' => [
-                ['intent' => 'urn:iicp:intent:llm:chat:v1', 'models' => ['llama-3-8b'], 'max_tokens' => 4096, 'input_modalities' => ['text']],
+                ['intent' => 'urn:iicp:intent:llm:chat:v1', 'models' => ['llama-3-8b'], 'max_tokens' => 4096, 'input_modalities' => ['text'], 'supported_profiles' => ['urn:iicp:profile:service-lifecycle:v1']],
                 ['intent' => 'urn:iicp:intent:audio:transcribe:v1', 'models' => ['whisper-1'], 'max_tokens' => 1],
             ],
         ]));
@@ -77,6 +77,7 @@ class ReplicaEventApplierTest extends TestCase
         $this->assertNotNull($chat, 'chat capability must exist for discover');
         $this->assertEquals(['llama-3-8b'], $chat->models);
         $this->assertEquals(['text'], $chat->input_modalities); // #408 default applied
+        $this->assertEquals(['urn:iicp:profile:service-lifecycle:v1'], $chat->supported_profiles);
     }
 
     public function test_register_capabilities_replace_idempotently(): void
