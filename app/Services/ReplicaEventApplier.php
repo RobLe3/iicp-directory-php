@@ -244,6 +244,7 @@ class ReplicaEventApplier
                     'models' => $cap['models'] ?? [],
                     'max_tokens' => $cap['max_tokens'] ?? 1,
                     'input_modalities' => $cap['input_modalities'] ?? ['text'],
+                    'supported_profiles' => $cap['supported_profiles'] ?? [],
                 ]);
             }
         }

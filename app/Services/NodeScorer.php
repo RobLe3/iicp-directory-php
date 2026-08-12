@@ -140,7 +140,7 @@ class NodeScorer
         $enrichHealth = fn () => $this->health->forNodes($scored->pluck('node'));
         $healthByNode = $timing !== null ? $timing->profile('health_enrichment', $enrichHealth) : $enrichHealth();
 
-        $project = fn () => $scored->map(function (array $item) use ($model, $scoreVersion, $healthByNode): array {
+        $project = fn () => $scored->map(function (array $item) use ($intent, $model, $scoreVersion, $healthByNode): array {
             $node = $item['node'];
             $registeredModels = $this->capabilityEvidence->registeredModels($node);
             $liveModels = $this->capabilityEvidence->liveModels($node, $registeredModels);
@@ -234,6 +234,9 @@ class NodeScorer
                 // (e.g. ["text","image"] when the node has a vision model). Default ["text"].
                 'input_modalities' => $node->capabilities
                     ->flatMap(fn ($c) => $c->input_modalities ?: ['text'])->unique()->values()->all(),
+                'supported_profiles' => $node->capabilities
+                    ->where('intent', $intent)
+                    ->flatMap(fn ($c) => $c->supported_profiles ?: [])->unique()->values()->all(),
                 'quantization' => $node->capabilities->pluck('quantization')->filter()->unique()->values()->all(),
                 'inference_engine' => $node->capabilities->pluck('inference_engine')->filter()->unique()->values()->all(),
                 'backend' => $node->backend,

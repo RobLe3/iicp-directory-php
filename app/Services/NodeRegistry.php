@@ -110,6 +110,7 @@ class NodeRegistry
                 'inference_engine' => $cap['inference_engine'] ?? null,
                 // #408/ADR-046 — default text-only for pre-0.7.33 nodes.
                 'input_modalities' => $cap['input_modalities'] ?? ['text'],
+                'supported_profiles' => $cap['supported_profiles'] ?? [],
             ]);
         }
 

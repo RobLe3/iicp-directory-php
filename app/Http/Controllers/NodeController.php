@@ -92,6 +92,7 @@ class NodeController extends Controller
                 'models' => $c->models,
                 'max_tokens' => $c->max_tokens,
                 'input_modalities' => $c->input_modalities ?: ['text'],
+                'supported_profiles' => $c->supported_profiles ?: [],
             ]),
         ]);
     }

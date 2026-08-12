@@ -104,6 +104,8 @@ class RegistryController extends Controller
                 'probation' => ($n->reputation?->completed_tasks_count ?? 0) < 100,
                 'intents' => $n->capabilities->pluck('intent')->unique()->values()->all(),
                 'models' => $n->capabilities->flatMap(fn ($c) => $c->models ?? [])->unique()->values()->all(),
+                'supported_profiles' => $n->capabilities
+                    ->flatMap(fn ($c) => $c->supported_profiles ?: [])->unique()->values()->all(),
                 'capability_summary' => $scorer->capabilitySummary($n),
                 'quantization' => $n->capabilities->pluck('quantization')->filter()->unique()->values()->all(),
                 'inference_engine' => $n->capabilities->pluck('inference_engine')->filter()->unique()->values()->all(),
@@ -202,6 +204,8 @@ class RegistryController extends Controller
             'completed_tasks' => $rep?->completed_tasks_count ?? 0,
             'intents' => $node->capabilities->pluck('intent')->unique()->values()->all(),
             'models' => $node->capabilities->flatMap(fn ($c) => $c->models ?? [])->unique()->values()->all(),
+            'supported_profiles' => $node->capabilities
+                ->flatMap(fn ($c) => $c->supported_profiles ?: [])->unique()->values()->all(),
             'quantization' => $node->capabilities->pluck('quantization')->filter()->unique()->values()->all(),
             'inference_engine' => $node->capabilities->pluck('inference_engine')->filter()->unique()->values()->all(),
             'backend' => $node->backend,
