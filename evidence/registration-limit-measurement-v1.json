@@ -1,0 +1,37 @@
+{
+  "schema_version": "iicp-registration-limit-measurement-v1",
+  "status": "blank-disposable-measurement-template",
+  "result_present": false,
+  "measured_at_utc": null,
+  "implementation_version": "1.10.90",
+  "source_commit": null,
+  "environment": {
+    "disposable_database": true,
+    "loopback_only": true,
+    "production_endpoint_used": false,
+    "production_database_used": false
+  },
+  "scenarios": {
+    "fresh_registration": null,
+    "authenticated_reregistration": null,
+    "heartbeat": null,
+    "malformed_registration": null
+  },
+  "observations": [],
+  "recommendation": null,
+  "claim_boundary": {
+    "changes_runtime_limits": false,
+    "authorizes_production_change": false,
+    "represents_shared_nat_fairness": false,
+    "represents_external_operator_load": false,
+    "is_an_sla": false
+  },
+  "privacy": {
+    "node_ids": false,
+    "tokens": false,
+    "endpoints": false,
+    "source_addresses": false,
+    "payloads": false,
+    "raw_responses": false
+  }
+}
