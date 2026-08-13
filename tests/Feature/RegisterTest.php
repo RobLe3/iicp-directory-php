@@ -1168,6 +1168,37 @@ class RegisterTest extends TestCase
         ]))->assertStatus(201);
     }
 
+    public function test_strict_e050_rejects_malformed_and_stale_tokens_without_damaging_current_credential(): void
+    {
+        config(['app.iicp_e050_strict_secured' => true]);
+        $nodeId = (string) Str::uuid();
+        $firstToken = $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'cx_public_key' => $this->cxKey,
+        ]))->assertStatus(201)->json('node_token');
+
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'cx_public_key' => $this->cxKey,
+            'current_node_token' => 'malformed-token',
+        ]))->assertStatus(403)->assertJsonPath('error.code', 'IICP-E050');
+        $this->assertTrue(password_verify($firstToken, Node::findOrFail($nodeId)->node_token_hash));
+
+        $secondToken = $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'cx_public_key' => $this->cxKey,
+            'current_node_token' => $firstToken,
+        ]))->assertStatus(201)->json('node_token');
+
+        $this->postJson('/api/v1/register', array_merge($this->validPayload, [
+            'node_id' => $nodeId,
+            'cx_public_key' => $this->cxKey,
+            'current_node_token' => $firstToken,
+        ]))->assertStatus(403)->assertJsonPath('error.code', 'IICP-E050');
+        $this->assertFalse(password_verify($firstToken, Node::findOrFail($nodeId)->node_token_hash));
+        $this->assertTrue(password_verify($secondToken, Node::findOrFail($nodeId)->node_token_hash));
+    }
+
     public function test_strict_e050_unsecured_node_keeps_soft_dead_endpoint_fallback(): void
     {
         config(['app.iicp_e050_strict_secured' => true]);
