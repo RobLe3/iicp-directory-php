@@ -71,9 +71,17 @@ class SnapshotController extends Controller
             'capabilities' => $capabilities->map(fn (Capability $c) => [
                 'node_id' => $c->node_id,
                 'intent' => $c->intent,
+                'variant_id' => $c->variant_id,
                 'models' => $c->models,
                 'max_tokens' => $c->max_tokens,
+                'input_modalities' => $c->input_modalities,
+                'output_modalities' => $c->output_modalities,
+                'features' => $c->features,
+                'execution_capabilities' => $c->execution_capabilities,
+                'limits' => $c->capability_limits,
                 'supported_profiles' => $c->supported_profiles ?: [],
+                'claim_provenance' => $c->claim_provenance,
+                'extensions' => $c->extensions,
             ])->all(),
         ]);
     }

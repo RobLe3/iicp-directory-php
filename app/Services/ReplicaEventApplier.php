@@ -242,9 +242,16 @@ class ReplicaEventApplier
                 $node->capabilities()->create([
                     'intent' => $cap['intent'],
                     'models' => $cap['models'] ?? [],
-                    'max_tokens' => $cap['max_tokens'] ?? 1,
+                    'max_tokens' => $cap['max_tokens'] ?? 0,
+                    'variant_id' => $cap['variant_id'] ?? null,
                     'input_modalities' => $cap['input_modalities'] ?? ['text'],
+                    'output_modalities' => $cap['output_modalities'] ?? null,
+                    'features' => $cap['features'] ?? null,
+                    'execution_capabilities' => $cap['execution_capabilities'] ?? null,
+                    'capability_limits' => $cap['limits'] ?? null,
                     'supported_profiles' => $cap['supported_profiles'] ?? [],
+                    'claim_provenance' => $cap['claim_provenance'] ?? null,
+                    'extensions' => $cap['extensions'] ?? null,
                 ]);
             }
         }

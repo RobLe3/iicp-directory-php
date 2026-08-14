@@ -104,13 +104,20 @@ class NodeRegistry
         foreach ($data['capabilities'] as $cap) {
             $node->capabilities()->create([
                 'intent' => $cap['intent'],
-                'models' => $cap['models'],
-                'max_tokens' => $cap['max_tokens'],
+                'variant_id' => $cap['variant_id'] ?? null,
+                'models' => $cap['models'] ?? [],
+                'max_tokens' => $cap['max_tokens'] ?? 0,
                 'quantization' => $cap['quantization'] ?? null,
                 'inference_engine' => $cap['inference_engine'] ?? null,
                 // #408/ADR-046 — default text-only for pre-0.7.33 nodes.
                 'input_modalities' => $cap['input_modalities'] ?? ['text'],
+                'output_modalities' => $cap['output_modalities'] ?? null,
+                'features' => $cap['features'] ?? null,
+                'execution_capabilities' => $cap['execution_capabilities'] ?? null,
+                'capability_limits' => $cap['limits'] ?? null,
                 'supported_profiles' => $cap['supported_profiles'] ?? [],
+                'claim_provenance' => $cap['claim_provenance'] ?? null,
+                'extensions' => $cap['extensions'] ?? null,
             ]);
         }
 

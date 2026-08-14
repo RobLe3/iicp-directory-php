@@ -40,6 +40,8 @@ use Illuminate\Validation\ValidationException;
 
 class RegisterController extends Controller
 {
+    private const CAPABILITY_LIMIT_UNITS = ['tokens', 'items', 'bytes', 'milliseconds', 'dimensions'];
+
     /**
      * Intent URN format (ADR-007 + iter-245 / issue #244):
      *   Standard:  urn:iicp:intent:<domain>:<verb>:v<major>
@@ -51,6 +53,49 @@ class RegisterController extends Controller
      * them (#244).
      */
     private const INTENT_PATTERN = '/^urn:iicp:intent:(?:[a-z][a-z0-9_]*|x\.[a-z][a-z0-9-]*):[a-z][a-z0-9_-]*:v[1-9][0-9]*$/';
+
+    private function sortCapability(array $value): array
+    {
+        ksort($value);
+        foreach ($value as &$item) {
+            if (is_array($item) && ! array_is_list($item)) {
+                $item = $this->sortCapability($item);
+            }
+        }
+
+        return $value;
+    }
+
+    private function validateEffectiveCapabilityMaps(array $capability, int $index): void
+    {
+        foreach (($capability['limits'] ?? []) as $name => $limit) {
+            $valid = is_string($name)
+                && preg_match('/^[a-z][a-z0-9_]{0,63}$/', $name) === 1
+                && is_array($limit)
+                && count($limit) === 2
+                && array_key_exists('value', $limit)
+                && array_key_exists('unit', $limit)
+                && is_numeric($limit['value'])
+                && $limit['value'] >= 0
+                && in_array($limit['unit'], self::CAPABILITY_LIMIT_UNITS, true);
+            if (! $valid) {
+                throw ValidationException::withMessages(["capabilities.$index.limits" => ['Invalid typed capability limit.']]);
+            }
+        }
+        foreach (($capability['extensions'] ?? []) as $name => $extension) {
+            $valid = is_string($name)
+                && preg_match('/^[a-z0-9][a-z0-9._:-]{2,127}$/', $name) === 1
+                && str_contains($name, '.')
+                && is_array($extension)
+                && array_key_exists('required', $extension)
+                && is_bool($extension['required'])
+                && array_key_exists('value', $extension)
+                && count($extension) === 2;
+            if (! $valid) {
+                throw ValidationException::withMessages(["capabilities.$index.extensions" => ['Invalid namespaced capability extension.']]);
+            }
+        }
+    }
 
     /**
      * Region character set — safe alphanumeric-plus-separator format.
@@ -129,15 +174,29 @@ class RegisterController extends Controller
             'public_key' => ['sometimes', 'nullable', 'string'],
             'capabilities' => ['required', 'array', 'min:1'],
             'capabilities.*.intent' => ['required', 'string', 'regex:'.self::INTENT_PATTERN],
-            'capabilities.*.models' => ['required', 'array', 'min:1'],
-            'capabilities.*.models.*' => ['required', 'string'],
-            'capabilities.*.max_tokens' => ['required', 'integer', 'min:1'],
+            'capabilities.*.variant_id' => ['sometimes', 'string', 'max:64', 'regex:/^[A-Za-z0-9][A-Za-z0-9._:-]*$/'],
+            'capabilities.*.models' => ['sometimes', 'array', 'max:64'],
+            'capabilities.*.models.*' => ['string', 'max:255', 'distinct'],
+            'capabilities.*.max_tokens' => ['sometimes', 'integer', 'min:1'],
             // Advisory fields per iicp-core.md §2.1 v1.2.4 (#118) — nullable, no enum restriction
             'capabilities.*.quantization' => ['sometimes', 'nullable', 'string', 'max:32'],
             'capabilities.*.inference_engine' => ['sometimes', 'nullable', 'string', 'max:32'],
             // #408/ADR-046 — input modalities a capability accepts (default text-only).
             'capabilities.*.input_modalities' => ['sometimes', 'nullable', 'array'],
             'capabilities.*.input_modalities.*' => ['string', 'in:text,image,audio,video'],
+            'capabilities.*.output_modalities' => ['sometimes', 'array', 'max:16'],
+            'capabilities.*.output_modalities.*' => ['string', 'in:text,image,audio,video', 'distinct'],
+            'capabilities.*.features' => ['sometimes', 'array', 'max:64'],
+            'capabilities.*.features.*' => ['string', 'max:255', 'distinct'],
+            'capabilities.*.execution_capabilities' => ['sometimes', 'array', 'max:64'],
+            'capabilities.*.execution_capabilities.*' => ['string', 'max:255', 'distinct'],
+            'capabilities.*.limits' => ['sometimes', 'array', 'max:32'],
+            'capabilities.*.claim_provenance' => ['sometimes', 'array'],
+            'capabilities.*.claim_provenance.source' => ['required_with:capabilities.*.claim_provenance', 'string', 'in:heuristic_fallback,operator_assertion,provider_metadata,runtime_introspection,conformance_probe'],
+            'capabilities.*.claim_provenance.observed_at' => ['sometimes', 'date'],
+            'capabilities.*.claim_provenance.valid_until' => ['sometimes', 'date'],
+            'capabilities.*.claim_provenance.evidence_ref' => ['sometimes', 'string', 'max:255'],
+            'capabilities.*.extensions' => ['sometimes', 'array', 'max:32'],
             'capabilities.*.supported_profiles' => ['sometimes', 'array', 'max:16'],
             'capabilities.*.supported_profiles.*' => [
                 'string',
@@ -274,6 +333,23 @@ class RegisterController extends Controller
                 throw ValidationException::withMessages(["capabilities.$idx.intent" => [$message]]);
             }
         }
+        $seenVariants = [];
+        $seenObjects = [];
+        foreach (($validated['capabilities'] ?? []) as $idx => $capability) {
+            $canonical = json_encode($this->sortCapability($capability), JSON_THROW_ON_ERROR);
+            if (isset($seenObjects[$canonical])) {
+                throw ValidationException::withMessages(["capabilities.$idx" => ['Exact duplicate capability variants are not allowed.']]);
+            }
+            $seenObjects[$canonical] = true;
+            if (isset($capability['variant_id'])) {
+                $identity = $capability['intent']."\0".$capability['variant_id'];
+                if (isset($seenVariants[$identity])) {
+                    throw ValidationException::withMessages(["capabilities.$idx.variant_id" => ['variant_id must be unique for this intent.']]);
+                }
+                $seenVariants[$identity] = true;
+            }
+            $this->validateEffectiveCapabilityMaps($capability, $idx);
+        }
 
         if (isset($validated['policy_manifest']) && is_array($validated['policy_manifest'])) {
             $verification = NodePolicyManifestVerifier::verify($validated['policy_manifest']);
@@ -358,10 +434,17 @@ class RegisterController extends Controller
             // discover-relevant fields; replicas rebuild capability rows from these.
             'capabilities' => array_map(fn ($c) => [
                 'intent' => $c['intent'],
-                'models' => $c['models'],
-                'max_tokens' => $c['max_tokens'],
+                'variant_id' => $c['variant_id'] ?? null,
+                'models' => $c['models'] ?? [],
+                'max_tokens' => $c['max_tokens'] ?? null,
                 'input_modalities' => $c['input_modalities'] ?? ['text'],
+                'output_modalities' => $c['output_modalities'] ?? null,
+                'features' => $c['features'] ?? null,
+                'execution_capabilities' => $c['execution_capabilities'] ?? null,
+                'limits' => $c['limits'] ?? null,
                 'supported_profiles' => $c['supported_profiles'] ?? [],
+                'claim_provenance' => $c['claim_provenance'] ?? null,
+                'extensions' => $c['extensions'] ?? null,
             ], $validated['capabilities']),
         ]);
 
