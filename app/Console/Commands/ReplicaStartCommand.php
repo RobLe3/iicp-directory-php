@@ -274,11 +274,16 @@ class ReplicaStartCommand extends Command
             }
             foreach ($caps as $c) {
                 Capability::updateOrCreate(
-                    ['node_id' => $c['node_id'] ?? null, 'intent' => $c['intent'] ?? null],
                     [
+                        'node_id' => $c['node_id'] ?? null,
+                        'intent' => $c['intent'] ?? null,
+                        'variant_id' => $c['variant_id'] ?? null,
+                    ],
+                    [
+                        'capability_version' => $c['version'] ?? null,
+                        'capability_phase' => $c['phase'] ?? null,
                         'models' => $c['models'] ?? [],
                         'max_tokens' => $c['max_tokens'] ?? 0,
-                        'variant_id' => $c['variant_id'] ?? null,
                         'input_modalities' => $c['input_modalities'] ?? ['text'],
                         'output_modalities' => $c['output_modalities'] ?? null,
                         'features' => $c['features'] ?? null,

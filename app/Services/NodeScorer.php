@@ -230,6 +230,9 @@ class NodeScorer
                 // otherwise fall back to static capabilities (backward compat, null = unknown).
                 'models' => $liveModels,
                 'capability_summary' => $capabilitySummary,
+                'capabilities' => $node->capabilities
+                    ->map(fn ($capability) => $capability->toEffectiveCapabilityArray())
+                    ->values()->all(),
                 // #408/ADR-046 — union of input modalities across this intent's capabilities
                 // (e.g. ["text","image"] when the node has a vision model). Default ["text"].
                 'input_modalities' => $node->capabilities

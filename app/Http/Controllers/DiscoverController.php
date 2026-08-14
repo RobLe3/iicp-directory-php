@@ -352,6 +352,7 @@ class DiscoverController extends Controller
             'probation' => $node['probation'] ?? null,
             'models' => $node['models'] ?? null,
             'capability_summary' => $node['capability_summary'] ?? null,
+            'capabilities' => $node['capabilities'] ?? null,
             'input_modalities' => $node['input_modalities'] ?? null,
             'quantization' => $node['quantization'] ?? null,
             'inference_engine' => $node['inference_engine'] ?? null,
