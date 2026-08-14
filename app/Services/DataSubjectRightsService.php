@@ -42,7 +42,10 @@ class DataSubjectRightsService
                 'operators' => $this->exportOperators($subject['operators']),
                 'nodes' => $this->exportNodes($subject['nodes']),
                 'capabilities' => $this->tableRows('capabilities', $subject['node_ids'], [
-                    'node_id', 'intent', 'models', 'max_tokens', 'quantization', 'inference_engine', 'input_modalities',
+                    'node_id', 'intent', 'capability_version as version', 'capability_phase as phase',
+                    'variant_id', 'models', 'max_tokens', 'quantization', 'inference_engine',
+                    'input_modalities', 'output_modalities', 'features', 'execution_capabilities',
+                    'capability_limits as limits', 'supported_profiles', 'claim_provenance', 'extensions',
                 ]),
                 'credits' => $this->tableRows('credits', $subject['node_ids'], [
                     'node_id', 'balance', 'free_credit_last_allocation_at', 'created_at', 'updated_at',
@@ -296,7 +299,11 @@ class DataSubjectRightsService
             ->get($columns)
             ->map(function ($row) {
                 $record = (array) $row;
-                foreach (['models', 'input_modalities'] as $jsonColumn) {
+                foreach ([
+                    'models', 'input_modalities', 'output_modalities', 'features',
+                    'execution_capabilities', 'limits', 'supported_profiles',
+                    'claim_provenance', 'extensions',
+                ] as $jsonColumn) {
                     if (isset($record[$jsonColumn]) && is_string($record[$jsonColumn])) {
                         $decoded = json_decode($record[$jsonColumn], true);
                         if (json_last_error() === JSON_ERROR_NONE) {

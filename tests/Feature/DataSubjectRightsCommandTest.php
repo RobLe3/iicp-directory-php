@@ -4,6 +4,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Capability;
 use App\Models\Credit;
 use App\Models\CreditTransaction;
 use App\Models\DataSubjectAction;
@@ -82,6 +83,26 @@ class DataSubjectRightsCommandTest extends TestCase
             'credit_balance' => 12.5,
         ]);
 
+        Capability::create([
+            'node_id' => $this->nodeId,
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'capability_version' => '1',
+            'capability_phase' => 1,
+            'variant_id' => 'dsr-effective-v1',
+            'models' => ['dsr-model'],
+            'max_tokens' => 4096,
+            'quantization' => 'Q4_K_M',
+            'inference_engine' => 'test-runtime',
+            'input_modalities' => ['text', 'image'],
+            'output_modalities' => ['text'],
+            'features' => ['tool_calling'],
+            'execution_capabilities' => ['tool_execution'],
+            'capability_limits' => ['context_tokens' => 4096],
+            'supported_profiles' => ['urn:iicp:profile:effective-capability:v1'],
+            'claim_provenance' => ['source' => 'conformance_probe'],
+            'extensions' => ['test.example/fixture' => true],
+        ]);
+
         Credit::create(['node_id' => $this->nodeId, 'balance' => 12.5]);
         CreditTransaction::create([
             'node_id' => $this->nodeId,
@@ -140,13 +161,13 @@ class DataSubjectRightsCommandTest extends TestCase
 
     public function test_related_record_contract_is_complete_and_mirrored(): void
     {
-        $seed = file_get_contents(base_path('parity/dsr-related-records-v1.json'));
+        $seed = file_get_contents(base_path('parity/dsr-related-records-v2.json'));
         $this->assertNotFalse($seed);
 
         // The monorepo verifies the mirrored Rust fixture byte-for-byte.  The
         // dedicated PHP repository intentionally has no Rust sibling, so its
         // own contract validation must remain independently runnable there.
-        $rustPath = base_path('../iicp-directory-rs/parity/dsr-related-records-v1.json');
+        $rustPath = base_path('../iicp-directory-rs/parity/dsr-related-records-v2.json');
         if (is_file($rustPath)) {
             $rust = file_get_contents($rustPath);
             $this->assertNotFalse($rust);
@@ -154,7 +175,7 @@ class DataSubjectRightsCommandTest extends TestCase
         }
 
         $contract = json_decode($seed, true, 512, JSON_THROW_ON_ERROR);
-        $this->assertSame('iicp.directory.dsr-related-records-parity.v1', $contract['schema']);
+        $this->assertSame('iicp.directory.dsr-related-records-parity.v2', $contract['schema']);
         $this->assertSame(500, $contract['record_limit_per_family']);
         $this->assertSame('restricted', $contract['restricted_identity_status']);
         $this->assertCount(11, $contract['record_families']);
@@ -186,6 +207,15 @@ class DataSubjectRightsCommandTest extends TestCase
         $this->assertStringNotContainsString($this->operatorPubkey, json_encode($json));
         $this->assertSame('[redacted]', $json['records']['node_events'][0]['payload']['operator_pubkey']);
         $this->assertSame('[redacted]', $json['records']['node_events'][0]['payload']['node_token']);
+        $capability = $json['records']['capabilities'][0];
+        $this->assertSame('1', $capability['version']);
+        $this->assertSame(1, $capability['phase']);
+        $this->assertSame(['text', 'image'], $capability['input_modalities']);
+        $this->assertSame(['tool_calling'], $capability['features']);
+        $this->assertSame(['tool_execution'], $capability['execution_capabilities']);
+        $this->assertSame(['context_tokens' => 4096], $capability['limits']);
+        $this->assertSame(['source' => 'conformance_probe'], $capability['claim_provenance']);
+        $this->assertSame(['test.example/fixture' => true], $capability['extensions']);
         $this->assertCount(1, $json['records']['credit_transactions']);
         $this->assertCount(1, $json['records']['node_address_history']);
     }
