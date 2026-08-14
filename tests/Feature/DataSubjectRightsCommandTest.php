@@ -4,6 +4,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Capability;
 use App\Models\Credit;
 use App\Models\CreditTransaction;
 use App\Models\DataSubjectAction;
@@ -80,6 +81,26 @@ class DataSubjectRightsCommandTest extends TestCase
             'cx_public_key' => ['algorithm' => 'X25519', 'key_id' => 'k1', 'key' => base64_encode(random_bytes(32))],
             'gossip_public_key' => base64_encode(random_bytes(32)),
             'credit_balance' => 12.5,
+        ]);
+
+        Capability::create([
+            'node_id' => $this->nodeId,
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'capability_version' => '1',
+            'capability_phase' => 1,
+            'variant_id' => 'dsr-effective-v1',
+            'models' => ['dsr-model'],
+            'max_tokens' => 4096,
+            'quantization' => 'Q4_K_M',
+            'inference_engine' => 'test-runtime',
+            'input_modalities' => ['text', 'image'],
+            'output_modalities' => ['text'],
+            'features' => ['tool_calling'],
+            'execution_capabilities' => ['tool_execution'],
+            'capability_limits' => ['context_tokens' => 4096],
+            'supported_profiles' => ['urn:iicp:profile:effective-capability:v1'],
+            'claim_provenance' => ['source' => 'conformance_probe'],
+            'extensions' => ['test.example/fixture' => true],
         ]);
 
         Credit::create(['node_id' => $this->nodeId, 'balance' => 12.5]);
@@ -186,6 +207,15 @@ class DataSubjectRightsCommandTest extends TestCase
         $this->assertStringNotContainsString($this->operatorPubkey, json_encode($json));
         $this->assertSame('[redacted]', $json['records']['node_events'][0]['payload']['operator_pubkey']);
         $this->assertSame('[redacted]', $json['records']['node_events'][0]['payload']['node_token']);
+        $capability = $json['records']['capabilities'][0];
+        $this->assertSame('1', $capability['version']);
+        $this->assertSame(1, $capability['phase']);
+        $this->assertSame(['text', 'image'], $capability['input_modalities']);
+        $this->assertSame(['tool_calling'], $capability['features']);
+        $this->assertSame(['tool_execution'], $capability['execution_capabilities']);
+        $this->assertSame(['context_tokens' => 4096], $capability['limits']);
+        $this->assertSame(['source' => 'conformance_probe'], $capability['claim_provenance']);
+        $this->assertSame(['test.example/fixture' => true], $capability['extensions']);
         $this->assertCount(1, $json['records']['credit_transactions']);
         $this->assertCount(1, $json['records']['node_address_history']);
     }
