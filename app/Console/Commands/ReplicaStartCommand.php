@@ -277,8 +277,16 @@ class ReplicaStartCommand extends Command
                     ['node_id' => $c['node_id'] ?? null, 'intent' => $c['intent'] ?? null],
                     [
                         'models' => $c['models'] ?? [],
-                        'max_tokens' => $c['max_tokens'] ?? null,
+                        'max_tokens' => $c['max_tokens'] ?? 0,
+                        'variant_id' => $c['variant_id'] ?? null,
+                        'input_modalities' => $c['input_modalities'] ?? ['text'],
+                        'output_modalities' => $c['output_modalities'] ?? null,
+                        'features' => $c['features'] ?? null,
+                        'execution_capabilities' => $c['execution_capabilities'] ?? null,
+                        'capability_limits' => $c['limits'] ?? null,
                         'supported_profiles' => $c['supported_profiles'] ?? [],
+                        'claim_provenance' => $c['claim_provenance'] ?? null,
+                        'extensions' => $c['extensions'] ?? null,
                     ]
                 );
             }
