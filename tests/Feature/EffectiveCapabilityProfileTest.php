@@ -16,7 +16,7 @@ class EffectiveCapabilityProfileTest extends TestCase
     {
         $path = base_path('parity/effective-capability-v1/fixture.json');
         $this->assertSame(
-            'cdc8fa5131525ba5ef49cbea2aba02c9183411e01b1ead7ea3bd1503ba528d88',
+            'e6e3c32aa7c4cf814e639d3a97cd1c1cb49ac020ed6ebe7e1e16bc2314e14761',
             hash_file('sha256', $path),
         );
         $this->assertSame(
@@ -29,7 +29,7 @@ class EffectiveCapabilityProfileTest extends TestCase
     {
         Http::fake(['https://capability-node.example/iicp/health' => Http::response('ok', 200)]);
         $response = $this->postJson('/api/v1/register', $this->payload([[
-            'intent' => 'urn:iicp:intent:tool:invoke:v1',
+            'intent' => 'urn:iicp:intent:llm:chat:v1',
             'variant_id' => 'sandboxed-tool',
             'execution_capabilities' => ['tool_execution'],
             'limits' => ['payload_bytes' => ['value' => 1048576, 'unit' => 'bytes']],
