@@ -161,13 +161,13 @@ class DataSubjectRightsCommandTest extends TestCase
 
     public function test_related_record_contract_is_complete_and_mirrored(): void
     {
-        $seed = file_get_contents(base_path('parity/dsr-related-records-v1.json'));
+        $seed = file_get_contents(base_path('parity/dsr-related-records-v2.json'));
         $this->assertNotFalse($seed);
 
         // The monorepo verifies the mirrored Rust fixture byte-for-byte.  The
         // dedicated PHP repository intentionally has no Rust sibling, so its
         // own contract validation must remain independently runnable there.
-        $rustPath = base_path('../iicp-directory-rs/parity/dsr-related-records-v1.json');
+        $rustPath = base_path('../iicp-directory-rs/parity/dsr-related-records-v2.json');
         if (is_file($rustPath)) {
             $rust = file_get_contents($rustPath);
             $this->assertNotFalse($rust);
@@ -175,7 +175,7 @@ class DataSubjectRightsCommandTest extends TestCase
         }
 
         $contract = json_decode($seed, true, 512, JSON_THROW_ON_ERROR);
-        $this->assertSame('iicp.directory.dsr-related-records-parity.v1', $contract['schema']);
+        $this->assertSame('iicp.directory.dsr-related-records-parity.v2', $contract['schema']);
         $this->assertSame(500, $contract['record_limit_per_family']);
         $this->assertSame('restricted', $contract['restricted_identity_status']);
         $this->assertCount(11, $contract['record_families']);
