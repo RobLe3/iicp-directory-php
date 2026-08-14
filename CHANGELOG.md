@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v1.10.91 — 2026-08-14
+
+- Persist, project and match explicit effective-capability-v1 variants without combining requirements across variants.
+- Preserve capability version, lifecycle phase, bounded provenance, optional extensions and policy-denial separation through registration, discovery, snapshots and replica replay.
+- Add an expand-first migration for capability version and phase. Legacy capability fields and default discovery behavior remain available.
+- Add strict E050 replay and registration-rate measurement evidence without enabling either production cutover.
+- Advance additive SDK release-currency evidence to the coordinated 0.7.104 candidate.
+
 ## v1.10.90 — 2026-08-10
 
 - Bounded the public 24-hour stats aggregate lookup to the newest deterministic
