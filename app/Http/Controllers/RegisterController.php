@@ -174,6 +174,8 @@ class RegisterController extends Controller
             'public_key' => ['sometimes', 'nullable', 'string'],
             'capabilities' => ['required', 'array', 'min:1'],
             'capabilities.*.intent' => ['required', 'string', 'regex:'.self::INTENT_PATTERN],
+            'capabilities.*.version' => ['sometimes', 'string', 'min:1', 'max:32'],
+            'capabilities.*.phase' => ['sometimes', 'integer', 'min:1'],
             'capabilities.*.variant_id' => ['sometimes', 'string', 'max:64', 'regex:/^[A-Za-z0-9][A-Za-z0-9._:-]*$/'],
             'capabilities.*.models' => ['sometimes', 'array', 'max:64'],
             'capabilities.*.models.*' => ['string', 'max:255', 'distinct'],
@@ -434,6 +436,8 @@ class RegisterController extends Controller
             // discover-relevant fields; replicas rebuild capability rows from these.
             'capabilities' => array_map(fn ($c) => [
                 'intent' => $c['intent'],
+                'version' => $c['version'] ?? null,
+                'phase' => $c['phase'] ?? null,
                 'variant_id' => $c['variant_id'] ?? null,
                 'models' => $c['models'] ?? [],
                 'max_tokens' => $c['max_tokens'] ?? null,

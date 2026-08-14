@@ -104,6 +104,8 @@ class NodeRegistry
         foreach ($data['capabilities'] as $cap) {
             $node->capabilities()->create([
                 'intent' => $cap['intent'],
+                'capability_version' => $cap['version'] ?? null,
+                'capability_phase' => $cap['phase'] ?? null,
                 'variant_id' => $cap['variant_id'] ?? null,
                 'models' => $cap['models'] ?? [],
                 'max_tokens' => $cap['max_tokens'] ?? 0,

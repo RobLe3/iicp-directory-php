@@ -30,6 +30,8 @@ class EffectiveCapabilityProfileTest extends TestCase
         Http::fake(['https://capability-node.example/iicp/health' => Http::response('ok', 200)]);
         $response = $this->postJson('/api/v1/register', $this->payload([[
             'intent' => 'urn:iicp:intent:llm:chat:v1',
+            'version' => '1.0.0',
+            'phase' => 1,
             'variant_id' => 'sandboxed-tool',
             'execution_capabilities' => ['tool_execution'],
             'limits' => ['payload_bytes' => ['value' => 1048576, 'unit' => 'bytes']],
@@ -41,6 +43,8 @@ class EffectiveCapabilityProfileTest extends TestCase
 
         $detail = $this->getJson('/api/v1/node/'.$response->json('node_id'))
             ->assertOk()
+            ->assertJsonPath('capabilities.0.version', '1.0.0')
+            ->assertJsonPath('capabilities.0.phase', 1)
             ->assertJsonPath('capabilities.0.variant_id', 'sandboxed-tool')
             ->assertJsonPath('capabilities.0.execution_capabilities.0', 'tool_execution')
             ->assertJsonPath('capabilities.0.limits.payload_bytes.unit', 'bytes')
@@ -48,6 +52,11 @@ class EffectiveCapabilityProfileTest extends TestCase
         $this->assertFalse(
             $detail->json('capabilities.0.extensions')['org.example.optional-batching']['required']
         );
+
+        $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')
+            ->assertOk()
+            ->assertJsonPath('nodes.0.capabilities.0.version', '1.0.0')
+            ->assertJsonPath('nodes.0.capabilities.0.variant_id', 'sandboxed-tool');
     }
 
     public function test_exact_duplicates_and_duplicate_variant_ids_are_rejected(): void

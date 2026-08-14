@@ -12,6 +12,8 @@ class Capability extends Model
     protected $fillable = [
         'node_id',
         'intent',
+        'capability_version',
+        'capability_phase',
         'variant_id',
         'models',
         'max_tokens',
@@ -27,8 +29,31 @@ class Capability extends Model
         'extensions',
     ];
 
+    public function toEffectiveCapabilityArray(): array
+    {
+        return array_filter([
+            'intent' => $this->intent,
+            'version' => $this->capability_version,
+            'phase' => $this->capability_phase,
+            'variant_id' => $this->variant_id,
+            'models' => $this->models ?: [],
+            'max_tokens' => $this->max_tokens ?: null,
+            'quantization' => $this->quantization,
+            'inference_engine' => $this->inference_engine,
+            'input_modalities' => $this->input_modalities ?: ['text'],
+            'output_modalities' => $this->output_modalities,
+            'features' => $this->features,
+            'execution_capabilities' => $this->execution_capabilities,
+            'limits' => $this->capability_limits,
+            'supported_profiles' => $this->supported_profiles ?: [],
+            'claim_provenance' => $this->claim_provenance,
+            'extensions' => $this->extensions,
+        ], fn (mixed $value): bool => $value !== null);
+    }
+
     protected $casts = [
         'models' => 'array',
+        'capability_phase' => 'integer',
         // #408/ADR-046 — ["text"] | ["text","image"] (vision). Default text-only.
         'input_modalities' => 'array',
         'output_modalities' => 'array',
