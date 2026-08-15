@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v1.10.92 — 2026-08-15
+
+- Advance additive SDK release-currency evidence to the coordinated 0.7.105 line.
+- Preserve the existing HTTP contract, schema, security defaults and deployment boundary.
+
+
 ## v1.10.91 — 2026-08-14
 
 - Persist, project and match explicit effective-capability-v1 variants without combining requirements across variants.

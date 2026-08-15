@@ -109,6 +109,23 @@ class SharedBehaviorContractTest extends TestCase
         $this->assertContains('effective_capability_v1', $manifest['scope']);
         $this->assertContains('same_intent_variant_matching', $manifest['scope']);
         $this->assertContains('additive_schema_migration', $manifest['scope']);
+        foreach (array_filter(
+            $manifest['fixtures'],
+            static fn (string $file): bool => str_starts_with($file, 'effective-capability-v1/'),
+            ARRAY_FILTER_USE_KEY,
+        ) as $file => $digest) {
+            $this->assertSame($digest, hash_file('sha256', base_path('parity/'.$file)), $file);
+        }
+    }
+
+    public function test_v11092_manifest_pins_sdk_release_currency(): void
+    {
+        $manifest = json_decode(file_get_contents(base_path('parity/contract-v1.10.92.json')), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame('v1.10.92', $manifest['contract_version']);
+        $this->assertSame('v1.10.92', $manifest['authority']['runtime_version']);
+        $this->assertContains('sdk_release_currency_0_7_105', $manifest['scope']);
+        $this->assertContains('unchanged_wire_contract', $manifest['scope']);
+        $this->assertContains('no_schema_migration', $manifest['scope']);
         foreach ($manifest['fixtures'] as $file => $digest) {
             $this->assertSame($digest, hash_file('sha256', base_path('parity/'.$file)), $file);
         }
