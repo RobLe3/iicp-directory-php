@@ -19,6 +19,7 @@ class DiscoveryEvidenceFixtureTest extends TestCase
             flags: JSON_THROW_ON_ERROR,
         );
         $cases = collect($fixture['cases'])->keyBy('id');
+        $this->assertSame('0.7.105', $fixture['invariants']['sdk_latest_known_version']);
 
         $trustInput = $cases['DIR-EVIDENCE-01'];
         $node = new Node(['sdk_version' => '0.7.98']);
