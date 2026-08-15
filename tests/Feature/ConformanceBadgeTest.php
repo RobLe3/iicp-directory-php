@@ -13,14 +13,16 @@ class ConformanceBadgeTest extends TestCase
 
     private function validBadge(array $overrides = []): array
     {
+        $now = Carbon::now('UTC');
+
         return array_merge([
             'badge_id' => '550e8400-e29b-41d4-a716-446655440000',
             'tier' => 'iicp:core:v1',
             'subject_did' => 'did:web:node.example.com',
             'subject_component' => 'adapter',
             'suite_version' => '1.0.0',
-            'passed_at' => '2026-05-18T00:00:00Z',
-            'expires_at' => '2026-08-15T00:00:00Z',
+            'passed_at' => $now->copy()->subDay()->toIso8601String(),
+            'expires_at' => $now->copy()->addDays(89)->toIso8601String(),
             'test_results_url' => 'https://example.com/results.json',
             'issuer_did' => 'did:web:node.example.com',
             'verification_mode' => 'self-attested',
@@ -277,14 +279,16 @@ class ConformanceBadgeTest extends TestCase
 
     public function test_svg_badge_returns_svg_for_active_badge(): void
     {
+        $now = Carbon::now('UTC');
+
         ConformanceBadge::create([
             'badge_id' => '990e8400-e29b-41d4-a716-446655440004',
             'tier' => 'iicp:core:v1',
             'subject_did' => 'did:web:svg.example.com',
             'subject_component' => 'adapter',
             'suite_version' => '1.0.0',
-            'passed_at' => '2026-05-18 00:00:00',
-            'expires_at' => '2026-08-15 00:00:00',
+            'passed_at' => $now->copy()->subDay()->format('Y-m-d H:i:s'),
+            'expires_at' => $now->copy()->addDays(89)->format('Y-m-d H:i:s'),
             'test_results_url' => 'https://example.com/r.json',
             'issuer_did' => 'did:web:svg.example.com',
             'verification_mode' => 'self-attested',
