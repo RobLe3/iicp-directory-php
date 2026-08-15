@@ -6,6 +6,12 @@ and health evidence, selects eligible routes, and issues control-plane tokens
 and receipts. Task payloads are sent directly between consumers and selected
 providers and must not pass through the directory.
 
+This makes the directory an intent-resolution and provider-eligibility control
+plane, not a task-execution protocol or universal agent runtime. MCP, A2A, HTTP
+or another negotiated binding may execute after selection. See the public
+[protocol positioning](https://github.com/RobLe3/IICP/blob/main/standards/IICP_PROTOCOL_POSITIONING.md)
+and [adjacent-protocol comparison](https://github.com/RobLe3/IICP/blob/main/standards/PROTOCOL_COMPARISON_2026-08-15.md).
+
 ## Maturity
 
 This is active pre-1.0 software and the implementation used by the current
