@@ -222,6 +222,8 @@ class NodeScorer
                 'health_reasons' => self::healthReasons($node, $health, $policyManifest),
                 'region' => $node->region,
                 'reputation_score' => $node->reputation?->score ?? 0.5,
+                'reputation_model' => $node->reputation_model ?? 'legacy',
+                'reputation_epoch' => $node->reputation_epoch,
                 'reputation_tier' => self::reputationTier($node),
                 'max_concurrent' => $node->max_concurrent,
                 'active_jobs' => $node->active_jobs,

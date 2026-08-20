@@ -347,6 +347,8 @@ class DiscoverController extends Controller
             'performance' => $node['performance'] ?? null,
             'backend_stability' => $node['backend_stability'] ?? null,
             'reputation_score' => $node['reputation_score'] ?? null,
+            'reputation_model' => $node['reputation_model'] ?? 'legacy',
+            'reputation_epoch' => $node['reputation_epoch'] ?? null,
             'reputation_tier' => $node['reputation_tier'] ?? null,
             'trust_progress' => $node['trust_progress'] ?? null,
             'probation' => $node['probation'] ?? null,

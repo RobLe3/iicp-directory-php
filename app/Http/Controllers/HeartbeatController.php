@@ -71,6 +71,9 @@ class HeartbeatController extends Controller
             'metrics.tasks_success' => ['sometimes', 'integer', 'min:0', 'max:1000'],
             'metrics.tasks_failed' => ['sometimes', 'integer', 'min:0', 'max:1000'],
             'metrics.avg_latency_ms' => ['sometimes', 'numeric', 'min:0'],
+            // Optional during the legacy-SDK migration window. New SDKs send it
+            // whenever metrics are present; absent IDs retain legacy at-most-once behavior.
+            'metrics_batch_id' => ['sometimes', 'string', 'min:1', 'max:64', 'regex:/^[!-~]+$/'],
             // ADR-019 pricing update
             'pricing' => ['sometimes', 'array'],
             'pricing.credit_cost_multiplier' => ['sometimes', 'numeric', 'min:0', 'max:1000'],
@@ -194,33 +197,7 @@ class HeartbeatController extends Controller
 
         $this->addressObserver->observe($node, $observedIp, 'heartbeat');
 
-        // Update reputation if adapter reported task metrics
-        $metrics = $validated['metrics'] ?? [];
-        $tasksSuccess = $metrics['tasks_success'] ?? 0;
-        $tasksFailed = $metrics['tasks_failed'] ?? 0;
-        $avgLatencyMs = (float) ($metrics['avg_latency_ms'] ?? 0.0);
-
-        if ($tasksSuccess > 0 || $tasksFailed > 0) {
-            $this->reputation->upsert($node->id, $tasksSuccess, $tasksFailed, $avgLatencyMs);
-            // Accumulate lifetime jobs for bootstrap floor threshold. RT-01b
-            // (#525, G1a): clamp the advisory success contribution to a realistic
-            // per-heartbeat throughput ceiling so the tally can't be inflated
-            // toward the validation max (failures are not capped).
-            $countedSuccess = min($tasksSuccess, ReputationService::MAX_COUNTED_SUCCESS_PER_HEARTBEAT);
-            $node->increment('lifetime_jobs', $countedSuccess + $tasksFailed);
-            // Reload reputation so the event carries the fresh post-upsert score.
-            $node->load('reputation');
-            $updatedScore = (float) ($node->reputation?->score ?? 0.5);
-            // Phase 6 prereq: REPUTATION_UPDATE event lets replicas track score changes
-            // from adapter-reported metrics (separate signal from proxy SCORE_UPDATE events).
-            $this->eventLogger->log('REPUTATION_UPDATE', $node->id, [
-                'source' => 'heartbeat_metrics',
-                'tasks_success' => $tasksSuccess,
-                'tasks_failed' => $tasksFailed,
-                'avg_latency_ms' => $avgLatencyMs,
-                'reputation_score' => $updatedScore,
-            ]);
-        }
+        $node = $this->applyMetrics($node, $validated);
 
         // W-042 / db-D4prime: HEARTBEAT event emission removed.
         // Per S.13 v0.3.0 (db-D3prime): replicas derive liveness from
@@ -243,10 +220,53 @@ class HeartbeatController extends Controller
             'ok' => true,
             'next_heartbeat_ms' => 30000,
             'reputation_score' => $reputationScore,
+            'reputation_model' => $node->reputation_model ?? 'legacy',
+            'reputation_epoch' => $node->reputation_epoch,
+            'metrics_batch_accepted' => $validated['metrics_batch_id'] ?? null,
             // ADR-047 Part A (#411) — HMAC this with node_hmac_key, return as
             // `challenge_response` next beat to prove liveness without dial-back.
             'challenge' => $nextChallenge,
         ]);
+    }
+
+    /** @param array<string,mixed> $validated */
+    private function applyMetrics(Node $node, array $validated): Node
+    {
+        $metrics = $validated['metrics'] ?? [];
+        $tasksSuccess = $metrics['tasks_success'] ?? 0;
+        $tasksFailed = $metrics['tasks_failed'] ?? 0;
+        if ($tasksSuccess === 0 && $tasksFailed === 0) {
+            return $node;
+        }
+
+        $avgLatencyMs = (float) ($metrics['avg_latency_ms'] ?? 0.0);
+        $metricsBatchId = $validated['metrics_batch_id'] ?? null;
+        $applied = $this->reputation->upsert(
+            $node->id,
+            $tasksSuccess,
+            $tasksFailed,
+            $avgLatencyMs,
+            $metricsBatchId,
+        );
+        if ($applied) {
+            $countedSuccess = min($tasksSuccess, ReputationService::MAX_COUNTED_SUCCESS_PER_HEARTBEAT);
+            $node->increment('lifetime_jobs', $countedSuccess + $tasksFailed);
+        }
+
+        $node->refresh()->load('reputation');
+        if ($applied) {
+            $this->eventLogger->log('REPUTATION_UPDATE', $node->id, [
+                'source' => 'heartbeat_metrics',
+                'tasks_success' => $tasksSuccess,
+                'tasks_failed' => $tasksFailed,
+                'avg_latency_ms' => $avgLatencyMs,
+                'reputation_score' => (float) ($node->reputation?->score ?? 0.5),
+                'reputation_model' => $node->reputation_model ?? 'legacy',
+                'metrics_batch_id' => $metricsBatchId,
+            ]);
+        }
+
+        return $node;
     }
 
     /** @param array<string,mixed> $validated @return array<string,mixed> */

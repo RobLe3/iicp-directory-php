@@ -63,6 +63,10 @@ class Node extends Model
         'liveness_verified_at',
         // W-042 / db-D1prime — canonical denormalized fields
         'reputation_score',
+        'legacy_reputation_score',
+        'reputation_model',
+        'reputation_epoch',
+        'last_metrics_batch_id',
         'credit_balance',
         // D2prime-followup — remaining canonical fields denormalized for Phase 2 drop safety
         'tasks_total',
@@ -129,6 +133,7 @@ class Node extends Model
         'lifetime_jobs' => 'integer',
         // W-042 / db-D1prime — canonical denormalized fields
         'reputation_score' => 'float',
+        'legacy_reputation_score' => 'float',
         'credit_balance' => 'decimal:4',
         // D2prime-followup
         'tasks_total' => 'integer',
