@@ -1,5 +1,10 @@
 # Directory implementation parity
 
+`restricted-trust-domain-membership-v0.json` is the shared pre-normative
+Ed25519 known-answer fixture for peer-verifiable membership and authenticated
+gossip. The directory bearer credential remains a separate API credential and
+must not be copied into peer artifacts.
+
 `directory/` is the current IICP control-plane reference implementation.  The
 versioned contract in this directory prevents standalone implementations from
 quietly drifting behind its public API, migration, privacy, and operations

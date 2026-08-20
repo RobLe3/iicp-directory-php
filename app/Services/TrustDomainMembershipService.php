@@ -10,6 +10,8 @@ use Illuminate\Support\Str;
 
 class TrustDomainMembershipService
 {
+    public function __construct(private RestrictedDomainMembershipAssertionService $assertions) {}
+
     /** @return array{membership: TrustDomainMembership, token: string} */
     public function issue(
         string $subjectKind,
@@ -21,6 +23,7 @@ class TrustDomainMembershipService
         $this->assertConfigured();
         $token = 'iicp_mem_'.Str::random(64);
         $maxTtl = (int) config('iicp.restricted_domain.max_credential_ttl_seconds', 86400);
+
         $membership = DB::transaction(fn (): TrustDomainMembership => $this->persistRotation(
             (string) config('iicp.restricted_domain.domain_id'),
             $subjectKind,
@@ -31,6 +34,32 @@ class TrustDomainMembershipService
         ));
 
         return ['membership' => $membership, 'token' => $token];
+    }
+
+    /** @return array{membership: TrustDomainMembership, token: string, assertion: array} */
+    public function issueWithAssertion(
+        string $subjectKind,
+        string $subjectId,
+        array $scopes,
+        int $ttlSeconds,
+        string $subjectKeyId,
+        string $subjectPublicKey,
+    ): array {
+        $this->assertSubjectKind($subjectKind);
+        $this->assertConfigured();
+        $token = 'iicp_mem_'.Str::random(64);
+        $maxTtl = (int) config('iicp.restricted_domain.max_credential_ttl_seconds', 86400);
+
+        return DB::transaction(fn (): array => $this->persistIssuedMembership(
+            $subjectKind,
+            $subjectId,
+            $scopes,
+            $ttlSeconds,
+            $maxTtl,
+            $token,
+            $subjectKeyId,
+            $subjectPublicKey,
+        ));
     }
 
     public function verify(string $token, string $subjectId, string $operation): ?TrustDomainMembership
@@ -120,6 +149,33 @@ class TrustDomainMembershipService
             'subject_kind' => $subjectKind,
             'subject_id' => $subjectId,
         ]);
+    }
+
+    /** @return array{membership: TrustDomainMembership, token: string, assertion: array} */
+    private function persistIssuedMembership(
+        string $subjectKind,
+        string $subjectId,
+        array $scopes,
+        int $ttlSeconds,
+        int $maxTtl,
+        string $token,
+        string $subjectKeyId,
+        string $subjectPublicKey,
+    ): array {
+        $membership = $this->persistRotation(
+            (string) config('iicp.restricted_domain.domain_id'),
+            $subjectKind,
+            $subjectId,
+            $token,
+            $this->normalizeScopes($scopes),
+            max(60, min($ttlSeconds, $maxTtl)),
+        );
+
+        return [
+            'membership' => $membership,
+            'token' => $token,
+            'assertion' => $this->assertions->issue($membership, $subjectKeyId, $subjectPublicKey),
+        ];
     }
 
     private function replaceMembership(TrustDomainMembership $membership, array $values): TrustDomainMembership
