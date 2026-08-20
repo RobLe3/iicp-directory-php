@@ -114,6 +114,11 @@ current OpenAPI projection.
 
 ## Configuration and operations
 
+An optional, disabled-by-default restricted trust-domain membership foundation
+is documented in [`docs/RESTRICTED_TRUST_DOMAIN.md`](docs/RESTRICTED_TRUST_DOMAIN.md).
+It does not alter public defaults, enable federation or represent a production
+Genesis deployment.
+
 - `.env.example` contains placeholders and safe defaults only.
 - `APP_ENV=local` or `testing` permits local endpoints for development;
   production mode rejects private and loopback provider routes.

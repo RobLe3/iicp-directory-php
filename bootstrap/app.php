@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\ReplicaModeRedirect;
+use App\Http\Middleware\RestrictedDomainAuth;
 use App\Http\Middleware\SignReplicaResponse;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -18,6 +19,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->alias([
+            'restricted-domain' => RestrictedDomainAuth::class,
+        ]);
         // Replica-mode write-gate (P6-1.3b-ii / S.13): when IICP_REPLICA_MODE=true,
         // all unsafe HTTP methods are 307-redirected to the seed at IICP_SEED_URL.
         // No-op on the genesis seed (IICP_REPLICA_MODE=false). Prepended so it runs

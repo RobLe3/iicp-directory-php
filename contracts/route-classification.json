@@ -83,6 +83,7 @@
       "openapi_path": null,
       "middleware": [
         "api",
+        "restricted-domain:bootstrap",
         "App\\Http\\Middleware\\LoadRedirect",
         "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
       ],
@@ -140,6 +141,7 @@
       "middleware": [
         "api",
         "App\\Http\\Middleware\\NodeTokenAuth",
+        "restricted-domain:consumer_token",
         "Illuminate\\Routing\\Middleware\\ThrottleRequests:consumer-token"
       ],
       "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
@@ -217,6 +219,7 @@
       "openapi_path": "/discover",
       "middleware": [
         "api",
+        "restricted-domain:discovery",
         "App\\Http\\Middleware\\LoadRedirect",
         "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
       ],
@@ -229,6 +232,7 @@
       "openapi_path": "/dispatch/ticket",
       "middleware": [
         "api",
+        "restricted-domain:dispatch",
         "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
       ],
       "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
@@ -251,6 +255,7 @@
       "middleware": [
         "api",
         "App\\Http\\Middleware\\NodeTokenAuth",
+        "restricted-domain:heartbeat",
         "Illuminate\\Routing\\Middleware\\ThrottleRequests:heartbeat"
       ],
       "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
@@ -284,6 +289,7 @@
       "openapi_path": "/node/{id}",
       "middleware": [
         "api",
+        "restricted-domain:discovery",
         "App\\Http\\Middleware\\LoadRedirect",
         "Illuminate\\Routing\\Middleware\\ThrottleRequests:60,1"
       ],
@@ -384,7 +390,8 @@
       "openapi_path": null,
       "middleware": [
         "api",
-        "App\\Http\\Middleware\\NodeTokenAuth"
+        "App\\Http\\Middleware\\NodeTokenAuth",
+        "restricted-domain:peers"
       ],
       "rationale": "Federation/preparation extension retained as runtime API but excluded until its normative OpenAPI schema is reviewed."
     },
@@ -406,7 +413,8 @@
       "openapi_path": null,
       "middleware": [
         "api",
-        "App\\Http\\Middleware\\NodeTokenAuth"
+        "App\\Http\\Middleware\\NodeTokenAuth",
+        "restricted-domain:registration"
       ],
       "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
     },
@@ -417,6 +425,7 @@
       "openapi_path": "/register",
       "middleware": [
         "api",
+        "restricted-domain:registration",
         "Illuminate\\Routing\\Middleware\\ThrottleRequests:register"
       ],
       "rationale": "Supported runtime API; omitted from the current OpenAPI projection only when openapi_path is null."
@@ -473,6 +482,7 @@
       "middleware": [
         "api",
         "App\\Http\\Middleware\\NodeTokenAuth",
+        "restricted-domain:relay",
         "Illuminate\\Routing\\Middleware\\ThrottleRequests:consumer-token"
       ],
       "rationale": "Supported authenticated protocol extension explicitly excluded from the core projection pending its reviewed request/response schema."
