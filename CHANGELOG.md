@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.10.93 — 2026-08-20
 
 - Add a disabled-by-default restricted trust-domain membership foundation with
   domain-scoped node/client credentials, bounded scopes and expiry, atomic
@@ -15,6 +15,11 @@
   deployment or claim complete cross-implementation conformance.
 - Update `paragonie/sodium_compat` from 2.5.0 to 2.5.2, resolving
   PKSA-32g2-byr9-drtw (incorrect Ed25519 public-key validation).
+- Introduce the outcome-v2 reputation epoch, separating successful execution
+  outcomes from latency, health and integrity evidence.
+- Make heartbeat metric batches idempotent so SDK retries cannot double-count
+  task outcomes.
+- Advance SDK release-currency evidence to the coordinated 0.7.106 candidate.
 
 ## v1.10.92 — 2026-08-15
 
