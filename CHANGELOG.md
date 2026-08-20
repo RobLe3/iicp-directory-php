@@ -5,6 +5,8 @@
 - Add a disabled-by-default restricted trust-domain membership foundation with
   domain-scoped node/client credentials, bounded scopes and expiry, atomic
   rotation, immediate revocation and membership-epoch invalidation.
+- Pin and execute all 30 pre-normative CUG-01 through CUG-10 semantic vectors
+  at the canonical fixture digest.
 - Protect registration, discovery, bootstrap, peer, consumer-token, dispatch
   and relay authority routes when the mode is enabled, while preserving public
   defaults.
