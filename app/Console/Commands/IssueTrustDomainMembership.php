@@ -33,7 +33,7 @@ class IssueTrustDomainMembership extends Command
         $membership = $issued['membership'];
         $this->warn('Store this credential now. It will not be shown again.');
         $this->line($issued['token']);
-        $this->writeAssertion($issued['assertion']);
+        $this->writeAssertion($issued['assertion'] ?? null);
         $this->newLine();
         $this->info(sprintf(
             'Issued %s membership for %s in %s; generation %d; expires %s.',

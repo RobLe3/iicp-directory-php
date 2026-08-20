@@ -39,6 +39,18 @@ class RestrictedDomainMembershipAssertionTest extends TestCase
         }
     }
 
+    public function test_malformed_envelopes_and_public_keys_fail_closed(): void
+    {
+        $service = app(RestrictedDomainMembershipAssertionService::class);
+
+        $this->assertFalse($service->verify([], str_repeat('A', 43)));
+        $this->assertFalse($service->verify(['assertion' => []], str_repeat('A', 43)));
+        $this->assertFalse($service->verify([
+            'assertion' => [],
+            'signature' => ['value' => 'not+base64url'],
+        ], str_repeat('A', 43)));
+    }
+
     private function decode(string $value): string
     {
         return base64_decode(strtr($value, '-_', '+/').str_repeat('=', (4 - strlen($value) % 4) % 4), true);

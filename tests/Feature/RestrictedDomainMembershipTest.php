@@ -186,6 +186,41 @@ class RestrictedDomainMembershipTest extends TestCase
         }
     }
 
+    public function test_membership_issue_command_supports_bearer_only_and_signed_assertion_paths(): void
+    {
+        $this->artisan('iicp:membership-issue', [
+            'kind' => 'client',
+            'subject' => 'client-cli',
+            '--scope' => ['discovery'],
+            '--ttl' => 3600,
+        ])->assertSuccessful();
+
+        $authority = sodium_crypto_sign_keypair();
+        $subject = sodium_crypto_sign_keypair();
+        config()->set('app.genesis_ed25519_secret_key', sodium_bin2hex(sodium_crypto_sign_secretkey($authority)));
+        $publicKey = rtrim(strtr(base64_encode(sodium_crypto_sign_publickey($subject)), '+/', '-_'), '=');
+        $this->artisan('iicp:membership-issue', [
+            'kind' => 'node',
+            'subject' => 'node-cli',
+            '--scope' => ['peers'],
+            '--ttl' => 3600,
+            '--key-id' => 'node-cli#key-1',
+            '--public-key' => $publicKey,
+        ])->expectsOutputToContain('"schema":"iicp.restricted-trust-domain.membership-assertion.v0"')
+            ->assertSuccessful();
+    }
+
+    public function test_membership_issue_command_rejects_an_incomplete_subject_key_pair(): void
+    {
+        $this->artisan('iicp:membership-issue', [
+            'kind' => 'node',
+            'subject' => 'node-cli',
+            '--scope' => ['peers'],
+            '--key-id' => 'node-cli#key-1',
+        ])->expectsOutputToContain('--key-id and --public-key must be supplied together')
+            ->assertFailed();
+    }
+
     public function test_restricted_configuration_fails_closed_before_runtime_start(): void
     {
         config()->set('iicp.restricted_domain.domain_id', '');
