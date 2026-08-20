@@ -118,14 +118,15 @@ class SharedBehaviorContractTest extends TestCase
         }
     }
 
-    public function test_v11092_manifest_pins_sdk_release_currency(): void
+    public function test_v11093_manifest_pins_outcome_and_restricted_domain_contracts(): void
     {
-        $manifest = json_decode(file_get_contents(base_path('parity/contract-v1.10.92.json')), true, flags: JSON_THROW_ON_ERROR);
-        $this->assertSame('v1.10.92', $manifest['contract_version']);
-        $this->assertSame('v1.10.92', $manifest['authority']['runtime_version']);
-        $this->assertContains('sdk_release_currency_0_7_105', $manifest['scope']);
-        $this->assertContains('unchanged_wire_contract', $manifest['scope']);
-        $this->assertContains('no_schema_migration', $manifest['scope']);
+        $manifest = json_decode(file_get_contents(base_path('parity/contract-v1.10.93.json')), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame('v1.10.93', $manifest['contract_version']);
+        $this->assertSame('v1.10.93', $manifest['authority']['runtime_version']);
+        $this->assertContains('sdk_release_currency_0_7_106', $manifest['scope']);
+        $this->assertContains('restricted_trust_domain_preview_disabled_by_default', $manifest['scope']);
+        $this->assertContains('reputation_outcome_v2_epoch', $manifest['scope']);
+        $this->assertContains('schema_migration_2026_08_20_130000', $manifest['scope']);
         foreach ($manifest['fixtures'] as $file => $digest) {
             $this->assertSame($digest, hash_file('sha256', base_path('parity/'.$file)), $file);
         }
