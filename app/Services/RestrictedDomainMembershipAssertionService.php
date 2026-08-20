@@ -15,7 +15,7 @@ final class RestrictedDomainMembershipAssertionService
     public function issue(TrustDomainMembership $membership, string $subjectKeyId, string $subjectPublicKey): array
     {
         $secretHex = $this->signingSecret();
-        $this->decoded($subjectPublicKey, SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES);
+        $this->decoded($subjectPublicKey, \SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES);
         $this->assertSubjectKeyId($subjectKeyId);
         $peerScopes = $this->peerScopes($membership);
         $assertion = $this->unsignedAssertion($membership, $subjectKeyId, $subjectPublicKey, $peerScopes);
@@ -31,8 +31,8 @@ final class RestrictedDomainMembershipAssertionService
         try {
             $assertion = $this->assertionFrom($envelope);
             $signature = $this->signatureFrom($envelope);
-            $public = $this->decoded($authorityPublicKey, SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES);
-            $detached = $this->decoded($signature, SODIUM_CRYPTO_SIGN_BYTES);
+            $public = $this->decoded($authorityPublicKey, \SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES);
+            $detached = $this->decoded($signature, \SODIUM_CRYPTO_SIGN_BYTES);
         } catch (\InvalidArgumentException) {
             return false;
         }
