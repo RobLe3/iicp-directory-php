@@ -5,6 +5,7 @@
 namespace Tests\Feature;
 
 use App\Models\TrustDomainMembership;
+use App\Services\RestrictedDomainMembershipAssertionService;
 use App\Services\TrustDomainMembershipService;
 use App\Support\RestrictedDomainConfig;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -135,6 +136,54 @@ class RestrictedDomainMembershipTest extends TestCase
 
         $this->assertSame(hash('sha256', $issued['token']), $row->getRawOriginal('token_hash'));
         $this->assertStringNotContainsString($issued['token'], $row->toJson());
+    }
+
+    public function test_peer_assertion_is_signed_without_exposing_the_bearer_credential(): void
+    {
+        $authority = sodium_crypto_sign_keypair();
+        $subject = sodium_crypto_sign_keypair();
+        config()->set('app.genesis_ed25519_secret_key', sodium_bin2hex(sodium_crypto_sign_secretkey($authority)));
+        config()->set('iicp.restricted_domain.authority_key_id', 'did:key:directory#key-1');
+        $subjectPublic = rtrim(strtr(base64_encode(sodium_crypto_sign_publickey($subject)), '+/', '-_'), '=');
+
+        $issued = app(TrustDomainMembershipService::class)->issueWithAssertion(
+            'node',
+            'did:key:node-a',
+            ['bootstrap', 'peers'],
+            3600,
+            'did:key:node-a#key-1',
+            $subjectPublic,
+        );
+
+        $this->assertSame('example.internal', $issued['assertion']['assertion']['domain_id']);
+        $this->assertSame(['bootstrap', 'peers'], $issued['assertion']['assertion']['scopes']);
+        $this->assertStringNotContainsString($issued['token'], json_encode($issued['assertion'], JSON_THROW_ON_ERROR));
+        $authorityPublic = rtrim(strtr(base64_encode(sodium_crypto_sign_publickey($authority)), '+/', '-_'), '=');
+        $this->assertTrue(app(RestrictedDomainMembershipAssertionService::class)->verify(
+            $issued['assertion'],
+            $authorityPublic,
+        ));
+    }
+
+    public function test_failed_assertion_issue_does_not_rotate_the_existing_membership(): void
+    {
+        $first = app(TrustDomainMembershipService::class)->issue('node', 'node-a', ['peers'], 3600);
+
+        try {
+            app(TrustDomainMembershipService::class)->issueWithAssertion(
+                'node',
+                'node-a',
+                ['peers'],
+                3600,
+                'node-a#key-1',
+                str_repeat('A', 43),
+            );
+            $this->fail('missing directory signing key must fail');
+        } catch (\LogicException) {
+            $row = TrustDomainMembership::firstOrFail();
+            $this->assertSame($first['membership']->generation, $row->generation);
+            $this->assertSame(hash('sha256', $first['token']), $row->getRawOriginal('token_hash'));
+        }
     }
 
     public function test_restricted_configuration_fails_closed_before_runtime_start(): void

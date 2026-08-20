@@ -31,6 +31,8 @@ client configuration:
 IICP_RESTRICTED_DOMAIN_ENABLED=true
 IICP_TRUST_DOMAIN_ID=example.internal
 IICP_DIRECTORY_AUTHORITY_ID=did:key:replace-with-reviewed-authority
+IICP_DIRECTORY_AUTHORITY_KEY_ID=did:key:replace-with-reviewed-authority#key-1
+IICP_GENESIS_ED25519_SECRET_KEY=REVIEWED_64_BYTE_SECRET_KEY_AS_HEX
 IICP_MEMBERSHIP_EPOCH=1
 IICP_MEMBERSHIP_MAX_TTL_SECONDS=86400
 ```
@@ -52,7 +54,8 @@ php artisan migrate --force
 ```bash
 php artisan iicp:membership-issue node node-a \
   --scope=registration --scope=heartbeat --scope=peers \
-  --scope=consumer_token --scope=dispatch --scope=relay --ttl=3600
+  --scope=consumer_token --scope=dispatch --scope=relay --ttl=3600 \
+  --key-id=did:key:node-a#key-1 --public-key=BASE64URL_ED25519_PUBLIC_KEY
 
 php artisan iicp:membership-issue client client-a \
   --scope=discovery --scope=bootstrap --ttl=3600
@@ -60,11 +63,15 @@ php artisan iicp:membership-issue client client-a \
 php artisan iicp:membership-revoke node node-a
 ```
 
-The credential is printed once. Store it in a protected secret provider. Do
-not put it in argv, portable configuration, logs or source control. Running the
-issue command again for the same domain, kind and subject rotates the
-credential and advances its generation. Revocation prevents new protected
-operations immediately.
+The bearer credential is printed once. Store it in a protected secret provider.
+Do not put it in argv, portable configuration, logs or source control. When a
+subject key is supplied, the command also prints a short-lived, directory-signed
+membership assertion. That assertion contains the public identity binding and
+peer-operation scopes, but not the bearer credential. Peers can verify it with
+the directory's public key. Running the issue command again for the same domain,
+kind and subject rotates the credential and advances its generation. Revocation
+prevents new directory operations immediately; peers must also enforce their
+configured revocation-freshness bound.
 
 Existing task execution and transport sessions need their own revalidation
 rules in the Rust runtime and are not claimed complete by this directory change.
@@ -85,8 +92,9 @@ decision, not an automatic failure fallback.
 ## Current limits
 
 - Federation and trusted cross-domain policy are not implemented or enabled.
-- The credential encoding is an HTTP binding implementation, not a new base
-  IICP wire field.
+- The bearer credential is an HTTP binding implementation. The signed
+  membership assertion is a pre-normative Profile artifact. Neither is a new
+  base-wire field.
 - Peer gossip admission, CIP worker inheritance and execution-time
   revalidation remain owned by the Rust runtime.
 - A future wizard must emit the canonical Rust configuration and secret

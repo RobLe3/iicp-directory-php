@@ -9,6 +9,7 @@ return [
         'enabled' => env('IICP_RESTRICTED_DOMAIN_ENABLED', false),
         'domain_id' => env('IICP_TRUST_DOMAIN_ID', ''),
         'authority_id' => env('IICP_DIRECTORY_AUTHORITY_ID', ''),
+        'authority_key_id' => env('IICP_DIRECTORY_AUTHORITY_KEY_ID', ''),
         'membership_epoch' => (int) env('IICP_MEMBERSHIP_EPOCH', 1),
         'max_credential_ttl_seconds' => (int) env('IICP_MEMBERSHIP_MAX_TTL_SECONDS', 86400),
     ],
