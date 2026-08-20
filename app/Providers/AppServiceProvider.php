@@ -5,6 +5,7 @@
 namespace App\Providers;
 
 use App\Support\AppKeyPolicy;
+use App\Support\RestrictedDomainConfig;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -20,6 +21,8 @@ class AppServiceProvider extends ServiceProvider
             (string) config('app.env'),
             (string) config('app.key'),
         );
+
+        RestrictedDomainConfig::assertValid();
 
         // POST /v1/register rate-limit (anti-spam-register abuse vector).
         // Maintainer directive 2026-05-27: defer in non-prod (dev convenience),

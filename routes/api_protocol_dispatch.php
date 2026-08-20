@@ -7,4 +7,4 @@ use Illuminate\Support\Facades\Route;
 // Keeps public presentation discovery endpoint-free while giving new clients a
 // short-lived, intent-scoped route ticket before task dispatch.
 Route::post('/dispatch/ticket', [DispatchRouteTicketController::class, 'issue'])
-    ->middleware('throttle:60,1');
+    ->middleware(['restricted-domain:dispatch', 'throttle:60,1']);

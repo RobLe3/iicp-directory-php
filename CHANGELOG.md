@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Add a disabled-by-default restricted trust-domain membership foundation with
+  domain-scoped node/client credentials, bounded scopes and expiry, atomic
+  rotation, immediate revocation and membership-epoch invalidation.
+- Protect registration, discovery, bootstrap, peer, consumer-token, dispatch
+  and relay authority routes when the mode is enabled, while preserving public
+  defaults.
+- Reject incomplete restricted configuration and unimplemented federation at
+  startup. This is an operator preview and does not authorize Genesis
+  deployment or claim complete cross-implementation conformance.
+- Update `paragonie/sodium_compat` from 2.5.0 to 2.5.2, resolving
+  PKSA-32g2-byr9-drtw (incorrect Ed25519 public-key validation).
+
 ## v1.10.92 — 2026-08-15
 
 - Advance additive SDK release-currency evidence to the coordinated 0.7.105 line.

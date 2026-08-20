@@ -1,0 +1,97 @@
+# Restricted trust-domain operator preview
+
+The directory contains a disabled-by-default implementation foundation for the
+pre-normative `urn:iicp:profile:restricted-trust-domain:v1` Profile. It turns
+registration, discovery, bootstrap and authority-issuing routes into an
+explicit membership boundary. It does not change the public-directory default,
+activate federation or authorize a Genesis deployment.
+
+## Trust boundary
+
+When `IICP_RESTRICTED_DOMAIN_ENABLED=true`, protected requests require both
+`X-IICP-Membership`, the bearer credential issued by this directory, and
+`X-IICP-Subject-Id`, the stable node or client identifier bound to it.
+
+The directory stores only a SHA-256 digest of the high-entropy credential.
+Credentials are scoped to one configured domain, subject, operation set,
+generation and expiry. Rotation replaces the prior digest. Revocation and a
+membership-epoch increase take effect on the next request; there is no positive
+authorization cache. Protected routes return one bounded refusal and do not
+reveal whether a subject was missing, expired, revoked or in another domain.
+
+Membership is a prerequisite, not a dispatch or relay ticket. Existing node
+authentication remains required where applicable.
+
+## Standalone configuration
+
+Set these values in the directory's protected environment, not in a portable
+client configuration:
+
+```dotenv
+IICP_RESTRICTED_DOMAIN_ENABLED=true
+IICP_TRUST_DOMAIN_ID=example.internal
+IICP_DIRECTORY_AUTHORITY_ID=did:key:replace-with-reviewed-authority
+IICP_MEMBERSHIP_EPOCH=1
+IICP_MEMBERSHIP_MAX_TTL_SECONDS=86400
+```
+
+Startup fails if the domain, authority, epoch or TTL is invalid. Restricted
+mode currently also rejects replica mode because cross-domain federation policy
+is not implemented. The directory has no dependency on `iicp.network` in this
+mode; configure local DNS, TLS, database, backups and process supervision as for
+any independent deployment.
+
+Apply the reversible database migration before issuing membership:
+
+```bash
+php artisan migrate --force
+```
+
+## Issue, rotate and revoke membership
+
+```bash
+php artisan iicp:membership-issue node node-a \
+  --scope=registration --scope=heartbeat --scope=peers \
+  --scope=consumer_token --scope=dispatch --scope=relay --ttl=3600
+
+php artisan iicp:membership-issue client client-a \
+  --scope=discovery --scope=bootstrap --ttl=3600
+
+php artisan iicp:membership-revoke node node-a
+```
+
+The credential is printed once. Store it in a protected secret provider. Do
+not put it in argv, portable configuration, logs or source control. Running the
+issue command again for the same domain, kind and subject rotates the
+credential and advances its generation. Revocation prevents new protected
+operations immediately.
+
+Existing task execution and transport sessions need their own revalidation
+rules in the Rust runtime and are not claimed complete by this directory change.
+
+## Backup, restore and authority loss
+
+Back up the database, application encryption key and separately managed
+authority material together. A database restore can reintroduce old membership
+state; after a restore, raise `IICP_MEMBERSHIP_EPOCH` and issue new credentials
+before reopening protected routes. If the authority is lost or suspected
+compromised, stop protected access, replace the authority under an explicit
+operator recovery procedure, raise the epoch and re-enrol every member.
+
+Rollback consists of disabling restricted mode and rolling back the migration.
+That restores public behavior and therefore is a security-sensitive operator
+decision, not an automatic failure fallback.
+
+## Current limits
+
+- Federation and trusted cross-domain policy are not implemented or enabled.
+- The credential encoding is an HTTP binding implementation, not a new base
+  IICP wire field.
+- Peer gossip admission, CIP worker inheritance and execution-time
+  revalidation remain owned by the Rust runtime.
+- A future wizard must emit the canonical Rust configuration and secret
+  references; it must not copy membership bearer values into exported files.
+
+Do not claim complete restricted-domain conformance until the shared semantic
+fixtures, both directory implementations, Rust runtime/CIP enforcement and
+black-box restart/revocation probes all pass.

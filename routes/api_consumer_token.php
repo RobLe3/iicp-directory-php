@@ -9,5 +9,5 @@ Route::prefix('v1')->group(function () {
         ->middleware('throttle:60,1');
 
     Route::post('/consumer-token', [ConsumerTokenController::class, 'issue'])
-        ->middleware([NodeTokenAuth::class, 'throttle:consumer-token']);
+        ->middleware([NodeTokenAuth::class, 'restricted-domain:consumer_token', 'throttle:consumer-token']);
 });

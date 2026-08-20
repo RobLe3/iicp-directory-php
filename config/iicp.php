@@ -3,6 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 return [
+    'restricted_domain' => [
+        // Additive, disabled-by-default implementation of the pre-normative
+        // urn:iicp:profile:restricted-trust-domain:v1 semantics.
+        'enabled' => env('IICP_RESTRICTED_DOMAIN_ENABLED', false),
+        'domain_id' => env('IICP_TRUST_DOMAIN_ID', ''),
+        'authority_id' => env('IICP_DIRECTORY_AUTHORITY_ID', ''),
+        'membership_epoch' => (int) env('IICP_MEMBERSHIP_EPOCH', 1),
+        'max_credential_ttl_seconds' => (int) env('IICP_MEMBERSHIP_MAX_TTL_SECONDS', 86400),
+    ],
     'registry' => [
         'skip_liveness_check' => env('IICP_SKIP_LIVENESS_CHECK', false),
         // Testbed-only escape hatch. Production code rejects this setting and

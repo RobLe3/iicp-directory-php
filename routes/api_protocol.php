@@ -19,27 +19,27 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
     Route::post('/register', RegisterController::class)
-        ->middleware('throttle:register');
+        ->middleware(['restricted-domain:registration', 'throttle:register']);
 
     Route::delete('/register', DeregisterController::class)
-        ->middleware(NodeTokenAuth::class);
+        ->middleware([NodeTokenAuth::class, 'restricted-domain:registration']);
 
     Route::post('/heartbeat', HeartbeatController::class)
-        ->middleware([NodeTokenAuth::class, 'throttle:heartbeat']);
+        ->middleware([NodeTokenAuth::class, 'restricted-domain:heartbeat', 'throttle:heartbeat']);
 
     Route::get('/discover', DiscoverController::class)
-        ->middleware([LoadRedirect::class, 'throttle:60,1']);
+        ->middleware(['restricted-domain:discovery', LoadRedirect::class, 'throttle:60,1']);
 
     require __DIR__.'/api_protocol_dispatch.php';
 
     Route::get('/node/{id}', [NodeController::class, 'show'])
-        ->middleware([LoadRedirect::class, 'throttle:60,1']);
+        ->middleware(['restricted-domain:discovery', LoadRedirect::class, 'throttle:60,1']);
 
     // Phase 2 — Mesh layer
     Route::get('/bootstrap', BootstrapController::class)
-        ->middleware([LoadRedirect::class, 'throttle:60,1']);
+        ->middleware(['restricted-domain:bootstrap', LoadRedirect::class, 'throttle:60,1']);
     Route::post('/peers', PeersController::class)
-        ->middleware(NodeTokenAuth::class);
+        ->middleware([NodeTokenAuth::class, 'restricted-domain:peers']);
 
     // Implicit Address Learning — DIR-ADDR-04
     Route::get('/me', MeController::class)
@@ -63,6 +63,6 @@ Route::prefix('v1')->group(function () {
     // Relay bind ticket issuance (#510 / DIR-RELAY-03). Authenticated by the
     // worker's node_token; relays verify the directory signature offline.
     Route::post('/relay/ticket', [RelayTicketController::class, 'issue'])
-        ->middleware([NodeTokenAuth::class, 'throttle:consumer-token']);
+        ->middleware([NodeTokenAuth::class, 'restricted-domain:relay', 'throttle:consumer-token']);
 
 });
