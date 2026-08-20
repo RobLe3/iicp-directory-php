@@ -149,6 +149,8 @@ final class NodeRegistrationPersistence
             'node_hmac_key' => $hmacKey,
             'max_concurrent' => $data['limits']['max_concurrent'],
             'tokens_per_min' => $data['limits']['tokens_per_min'],
+            'reputation_model' => 'outcome-v2',
+            'reputation_epoch' => (string) Str::uuid(),
             'available' => true,
             'status' => 'active',
             'dormant_since' => null,

@@ -37,7 +37,7 @@ class ReputationServiceTest extends TestCase
         ]);
     }
 
-    // REP-01: successful task within latency budget increases score
+    // REP-01: a successful outcome increases score; latency is separate evidence.
     public function test_rep01_success_within_budget_increases_score(): void
     {
         $node = $this->makeNode();
@@ -83,24 +83,51 @@ class ReputationServiceTest extends TestCase
         $this->assertLessThanOrEqual(1.0, $rep->score, 'REP-03: score must never exceed 1.0');
     }
 
-    // Latency breach (>2× budget): per-task −0.05 — spec §11.2 row 3
-    public function test_latency_breach_decreases_score(): void
+    public function test_slow_success_increases_outcome_reputation(): void
     {
         $node = $this->makeNode();
         $this->service->upsert($node->id, tasksSuccess: 1, tasksFailed: 0, avgLatencyMs: 5000.0);
 
         $rep = $node->reputation()->first();
-        $this->assertLessThan(0.5, $rep->score, 'Latency breach >2× budget must decrease score');
+        $this->assertEquals(0.51, round($rep->score, 4));
     }
 
-    // Latency within 1–2× budget: score unchanged — spec §11.2 row 2
-    public function test_latency_ok_range_is_neutral(): void
+    public function test_moderately_slow_success_increases_outcome_reputation(): void
     {
         $node = $this->makeNode();
         $this->service->upsert($node->id, tasksSuccess: 1, tasksFailed: 0, avgLatencyMs: 3000.0);
 
         $rep = $node->reputation()->first();
-        $this->assertEquals(0.5, $rep->score, 'Latency in 1–2× budget must not change score (Δ=0)');
+        $this->assertEquals(0.51, round($rep->score, 4));
+
+    }
+
+    public function test_metrics_batch_is_applied_at_most_once(): void
+    {
+        $node = $this->makeNode();
+        $this->assertTrue($this->service->upsert($node->id, 1, 0, 5000.0, 'batch-a'));
+        $this->assertFalse($this->service->upsert($node->id, 1, 0, 5000.0, 'batch-a'));
+
+        $rep = $node->reputation()->first();
+        $this->assertEquals(0.51, round($rep->score, 4));
+        $this->assertSame(1, $rep->tasks_total);
+    }
+
+    public function test_canonical_outcome_v2_fixture_is_pinned_to_php_cases(): void
+    {
+        $fixture = json_decode(
+            file_get_contents(base_path('parity/reputation-outcome-v2.json')),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $cases = array_column($fixture['cases'], null, 'name');
+
+        $this->assertSame('outcome-v2', $fixture['reputation_model']);
+        $this->assertSame(0.51, $cases['successful_slow_unknown_qos']['expected']['score']);
+        $this->assertSame(0.48, $cases['mixed_batch']['expected']['score']);
+        $this->assertSame(0.6, $cases['positive_cap']['expected']['score']);
+        $this->assertSame(1, $cases['duplicate_batch']['expected']['applied_batches']);
+        $this->assertFalse($cases['legacy_missing_model']['expected']['may_label_outcome_v2']);
     }
 
     // Multiple successes accumulate deltas correctly

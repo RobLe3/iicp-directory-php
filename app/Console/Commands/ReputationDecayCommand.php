@@ -11,7 +11,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Apply idle reputation decay — spec §11.3 λ=0.005/hr.
+ * Retain legacy idle reputation decay during the outcome-v2 transition.
  *
  * Runs hourly via the Laravel scheduler. Applies a fixed -0.005 decrement to
  * every registered node's reputation score. The idle decay floor is 0.30 (REP1
@@ -44,6 +44,7 @@ class ReputationDecayCommand extends Command
         // sole source-of-truth.
         $nodes = Node::query()
             ->whereNotIn('status', ['archived'])
+            ->where('reputation_model', '!=', 'outcome-v2')
             ->select('id', 'reputation_score')
             ->get();
 

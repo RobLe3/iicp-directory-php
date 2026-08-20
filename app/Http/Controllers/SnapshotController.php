@@ -56,6 +56,8 @@ class SnapshotController extends Controller
                 'available' => (bool) $n->available,
                 'last_seen' => optional($n->last_seen)->toIso8601String(),
                 'reputation_score' => $n->reputation_score !== null ? (float) $n->reputation_score : null,
+                'reputation_model' => $n->reputation_model ?? 'legacy',
+                'reputation_epoch' => $n->reputation_epoch,
                 'credit_balance' => $n->credit_balance !== null ? (float) $n->credit_balance : null,
                 'cip_policy' => [
                     'allow_remote_inference' => (bool) $n->allow_remote_inference,

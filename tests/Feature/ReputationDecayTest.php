@@ -33,7 +33,22 @@ class ReputationDecayTest extends TestCase
             'available' => true,
             'last_seen' => now(),
             'status' => $status,
+            'reputation_model' => 'legacy-v1',
         ]);
+    }
+
+    public function test_outcome_v2_score_does_not_decay_with_elapsed_time(): void
+    {
+        $node = $this->makeNode('active');
+        $node->update(['reputation_model' => 'outcome-v2']);
+        $this->setReputation($node, 0.8);
+
+        $this->artisan('iicp:reputation-decay')
+            ->assertSuccessful()
+            ->expectsOutputToContain('0 node(s)');
+
+        $node->refresh();
+        $this->assertEqualsWithDelta(0.8, (float) $node->reputation_score, 0.0001);
     }
 
     private function setReputation(Node $node, float $score): Reputation

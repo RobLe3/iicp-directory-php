@@ -57,7 +57,7 @@ class AuditReportTest extends TestCase
         ]);
     }
 
-    public function test_audit_report_accepted_and_applies_delta(): void
+    public function test_audit_report_is_accepted_without_changing_outcome_reputation(): void
     {
         Reputation::create([
             'node_id' => $this->target->id,
@@ -78,7 +78,7 @@ class AuditReportTest extends TestCase
             ->assertJson(['accepted' => true]);
 
         $rep = Reputation::where('node_id', $this->target->id)->first();
-        $this->assertEqualsWithDelta(0.75, $rep->score, 0.001);
+        $this->assertEqualsWithDelta(0.80, $rep->score, 0.001);
     }
 
     public function test_audit_report_emits_event(): void
@@ -99,10 +99,11 @@ class AuditReportTest extends TestCase
         $payload = $event->payload;
         $this->assertEquals($this->reporter->id, $payload['reporter_node_id']);
         $this->assertEquals('declaration_divergence', $payload['finding']);
-        $this->assertEqualsWithDelta(-0.05, $payload['reputation_delta'], 0.001);
+        $this->assertEqualsWithDelta(0.0, $payload['reputation_delta'], 0.001);
+        $this->assertTrue($payload['integrity_evidence_accepted']);
     }
 
-    public function test_audit_report_floors_reputation_at_zero(): void
+    public function test_audit_report_preserves_low_outcome_reputation(): void
     {
         Reputation::create([
             'node_id' => $this->target->id,
@@ -122,7 +123,7 @@ class AuditReportTest extends TestCase
             ->assertStatus(202);
 
         $rep = Reputation::where('node_id', $this->target->id)->first();
-        $this->assertEquals(0.0, $rep->score);
+        $this->assertEquals(0.02, $rep->score);
     }
 
     public function test_audit_report_rate_limited_on_second_report(): void
@@ -180,8 +181,8 @@ class AuditReportTest extends TestCase
             ->assertStatus(422);
     }
 
-    /** RT-05 (#379): third distinct reporter's delta is suppressed — target capped at 2 reports/day. */
-    public function test_audit_report_griefing_cap_suppresses_delta_beyond_limit(): void
+    /** RT-05: only two distinct reporters per day may contribute integrity evidence. */
+    public function test_audit_report_griefing_cap_suppresses_integrity_evidence_beyond_limit(): void
     {
         Reputation::create([
             'node_id' => $this->target->id,
@@ -190,7 +191,7 @@ class AuditReportTest extends TestCase
             'completed_tasks_count' => 0, 'avg_latency_ms' => 0.0,
         ]);
 
-        // Two distinct eligible reporters each file once — both accepted with delta applied.
+        // Two distinct eligible reporters each file once; outcome reputation is unchanged.
         foreach (['reporter-b-token-40-chars-exactly!!', 'reporter-c-token-40-chars-exactly!!'] as $token) {
             $node = Node::create([
                 'id' => (string) Str::uuid(),
@@ -215,7 +216,7 @@ class AuditReportTest extends TestCase
         }
 
         $scoreAfterTwo = (float) Reputation::where('node_id', $this->target->id)->value('score');
-        $this->assertEquals(round(0.80 + 2 * -0.05, 4), $scoreAfterTwo);
+        $this->assertEquals(0.80, $scoreAfterTwo);
 
         // Third eligible reporter — accepted (202) but delta suppressed (cap reached).
         $thirdToken = 'reporter-d-token-40-chars-exactly!!';
@@ -286,11 +287,7 @@ class AuditReportTest extends TestCase
             'RT-05b: fresh reporter must not apply delta (report accepted but weight=0)');
     }
 
-    /**
-     * RT-05b bypass 2 (#383): nodes.reputation_score must be dual-written by audit path.
-     * Without dual-write, Phase 2 canonical column diverges from reputations.score.
-     */
-    public function test_rt05b_audit_dual_writes_nodes_reputation_score(): void
+    public function test_integrity_audit_does_not_mutate_outcome_reputation(): void
     {
         $this->target->update(['reputation_score' => 0.80]);
         Reputation::create([
@@ -309,13 +306,11 @@ class AuditReportTest extends TestCase
             ->assertStatus(202)
             ->assertJsonPath('accepted', true);
 
-        // Both reputations.score AND nodes.reputation_score must be updated
+        // outcome-v2 records the integrity finding separately.
         $repScore = (float) Reputation::where('node_id', $this->target->id)->value('score');
         $nodeScore = (float) $this->target->fresh()->reputation_score;
-        $this->assertEqualsWithDelta(0.75, $repScore, 0.001,
-            'RT-05b: reputations.score must be updated by audit path');
-        $this->assertEqualsWithDelta(0.75, $nodeScore, 0.001,
-            'RT-05b: nodes.reputation_score must be dual-written by audit path');
+        $this->assertEqualsWithDelta(0.80, $repScore, 0.001);
+        $this->assertEqualsWithDelta(0.80, $nodeScore, 0.001);
         $this->assertEquals($repScore, $nodeScore,
             'RT-05b: reputations.score and nodes.reputation_score must stay in sync');
     }

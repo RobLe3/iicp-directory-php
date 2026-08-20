@@ -69,7 +69,8 @@ class DispatchRouteSelectionService
             'cx_public_key', 'region', 'score', 'health_label', 'health_confidence',
             'routing_hint', 'browser_usable', 'reachability_tier', 'route_evidence', 'models',
             'capability_summary', 'pricing', 'node_policy_manifest', 'available',
-            'reputation_score', 'reputation_tier', 'exposure_mode', 'transport',
+            'reputation_score', 'reputation_model', 'reputation_epoch', 'reputation_tier',
+            'exposure_mode', 'transport',
             'directory_observed_reachable',
         ];
 

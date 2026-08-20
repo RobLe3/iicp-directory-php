@@ -47,14 +47,7 @@ class ReputationService
     // Normative delta constants — spec §11.2 (iicp-semantics.md)
     private const DELTA_SUCCESS = 0.01;
 
-    private const DELTA_OK = 0.0;
-
-    private const DELTA_LATENCY_BREACH = -0.05;
-
     private const DELTA_FAILURE = -0.05;
-
-    // Default latency budget — interactive QoS class (spec §11.1)
-    private const LATENCY_BUDGET_MS = 2000.0;
 
     // RT-01 (#375): cap positive delta per heartbeat call to prevent instant score
     // inflation. One heartbeat can contribute at most +0.10 (10 tasks' worth),
@@ -66,10 +59,10 @@ class ReputationService
     // Prevents fleet-scale attack: 60 nodes × MAX_POSITIVE_DELTA_PER_HEARTBEAT × many calls.
     public const MAX_HOURLY_REPUTATION_GAIN = 0.20;
 
-    public function upsert(string $nodeId, int $tasksSuccess, int $tasksFailed, float $avgLatencyMs): void
+    public function upsert(string $nodeId, int $tasksSuccess, int $tasksFailed, float $avgLatencyMs, ?string $metricsBatchId = null): bool
     {
-        DB::transaction(function () use ($nodeId, $tasksSuccess, $tasksFailed, $avgLatencyMs): void {
-            $this->upsertLocked($nodeId, $tasksSuccess, $tasksFailed, $avgLatencyMs);
+        return DB::transaction(function () use ($nodeId, $tasksSuccess, $tasksFailed, $avgLatencyMs, $metricsBatchId): bool {
+            return $this->upsertLocked($nodeId, $tasksSuccess, $tasksFailed, $avgLatencyMs, $metricsBatchId);
         }, 3);
     }
 
@@ -77,11 +70,20 @@ class ReputationService
      * Update both canonical reputation rows while the node lock serializes one
      * node's hourly budget. Call only from upsert()'s transaction.
      */
-    private function upsertLocked(string $nodeId, int $tasksSuccess, int $tasksFailed, float $avgLatencyMs): void
+    private function upsertLocked(string $nodeId, int $tasksSuccess, int $tasksFailed, float $avgLatencyMs, ?string $metricsBatchId): bool
     {
-        // Lock the node first for every writer. This also serializes creation of
-        // its reputation row and keeps the lock order stable across heartbeats.
         $node = Node::query()->whereKey($nodeId)->lockForUpdate()->first();
+        if ($metricsBatchId !== null && $node?->last_metrics_batch_id === $metricsBatchId) {
+            return false;
+        }
+
+        $this->applyLocked($node, $nodeId, $tasksSuccess, $tasksFailed, $avgLatencyMs, $metricsBatchId);
+
+        return true;
+    }
+
+    private function applyLocked(?Node $node, string $nodeId, int $tasksSuccess, int $tasksFailed, float $avgLatencyMs, ?string $metricsBatchId): void
+    {
         $rep = Reputation::query()->whereKey($nodeId)->lockForUpdate()->first();
         if ($rep === null) {
             $rep = Reputation::create([
@@ -158,6 +160,9 @@ class ReputationService
                 'avg_latency_ms_recent' => $newLatency,  // EMA already smoothed
                 'recent_window_start' => $node->recent_window_start ?? now(),
             ];
+            if ($metricsBatchId !== null) {
+                $nodeUpdate['last_metrics_batch_id'] = $metricsBatchId;
+            }
 
             // RT-01b: persist velocity window state
             if ($delta > 0) {
@@ -180,14 +185,7 @@ class ReputationService
     {
         $delta = 0.0;
 
-        if ($tasksSuccess > 0) {
-            $perSuccess = match (true) {
-                $avgLatencyMs <= self::LATENCY_BUDGET_MS => self::DELTA_SUCCESS,
-                $avgLatencyMs <= self::LATENCY_BUDGET_MS * 2.0 => self::DELTA_OK,
-                default => self::DELTA_LATENCY_BREACH,
-            };
-            $delta += $tasksSuccess * $perSuccess;
-        }
+        $delta += $tasksSuccess * self::DELTA_SUCCESS;
 
         $delta += $tasksFailed * self::DELTA_FAILURE;
 

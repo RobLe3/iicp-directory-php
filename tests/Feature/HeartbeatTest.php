@@ -340,8 +340,10 @@ class HeartbeatTest extends TestCase
                     'tasks_failed' => 1,
                     'avg_latency_ms' => 120.0,
                 ],
+                'metrics_batch_id' => 'heartbeat-test-batch',
             ])
-            ->assertStatus(200);
+            ->assertStatus(200)
+            ->assertJsonPath('metrics_batch_accepted', 'heartbeat-test-batch');
 
         $event = NodeEvent::where('event_type', 'REPUTATION_UPDATE')
             ->where('node_id', $this->node->id)
@@ -353,6 +355,26 @@ class HeartbeatTest extends TestCase
         $this->assertSame(5, $event->payload['tasks_success']);
         $this->assertSame(1, $event->payload['tasks_failed']);
         $this->assertArrayHasKey('reputation_score', $event->payload);
+    }
+
+    public function test_heartbeat_duplicate_metrics_batch_is_acknowledged_without_reapplication(): void
+    {
+        $payload = [
+            'node_id' => $this->node->id,
+            'metrics_batch_id' => 'retry-safe-batch',
+            'metrics' => ['tasks_success' => 1, 'tasks_failed' => 0, 'avg_latency_ms' => 7000.0],
+        ];
+
+        $this->withToken($this->plainToken)->postJson('/api/v1/heartbeat', $payload)
+            ->assertOk()
+            ->assertJsonPath('metrics_batch_accepted', 'retry-safe-batch')
+            ->assertJsonPath('reputation_model', 'outcome-v2')
+            ->assertJsonStructure(['reputation_epoch']);
+        $this->withToken($this->plainToken)->postJson('/api/v1/heartbeat', $payload)
+            ->assertOk()->assertJsonPath('metrics_batch_accepted', 'retry-safe-batch');
+
+        $this->assertEquals(0.51, round((float) $this->node->fresh()->reputation_score, 4));
+        $this->assertSame(1, $this->node->fresh()->tasks_total);
     }
 
     // D8: no REPUTATION_UPDATE event when heartbeat has no task metrics.

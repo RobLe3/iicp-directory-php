@@ -96,6 +96,8 @@ class RegistryController extends Controller
                 'region' => $n->region,
                 'active' => NodeScorer::isHeartbeating($n),
                 'reputation_score' => round($n->reputation?->score ?? 0.5, 3),
+                'reputation_model' => $n->reputation_model ?? 'legacy',
+                'reputation_epoch' => $n->reputation_epoch,
                 // Authoritative tier from NodeScorer (same source the discover
                 // endpoint uses) so the list view renders the exact same tier as
                 // the detail view — no client-side recomputation drift.
@@ -180,6 +182,8 @@ class RegistryController extends Controller
             'active' => $node->last_seen?->gte($cutoff) ?? false,
             'last_seen' => $node->last_seen?->toIso8601String(),
             'reputation_score' => round($rep?->score ?? 0.5, 3),
+            'reputation_model' => $node->reputation_model ?? 'legacy',
+            'reputation_epoch' => $node->reputation_epoch,
             'reputation_tier' => NodeScorer::reputationTier($node),
             'trust_progress' => NodeScorer::trustProgress($node),
             // ADR-044 (#372) — composed per-node health vector + 8-category

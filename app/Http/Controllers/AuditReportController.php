@@ -31,8 +31,6 @@ class AuditReportController extends Controller
 
     private const VALID_FINDINGS = [self::FINDING_DECLARATION_DIVERGENCE];
 
-    private const REPUTATION_DELTA = -0.05;
-
     private const RATE_WINDOW_HOURS = 24;
 
     // RT-05 (#379): cap total distinct reporters whose reports are accepted per
@@ -117,23 +115,17 @@ class AuditReportController extends Controller
         );
 
         $oldScore = (float) $rep->score;
-        $newScore = $applyDelta
-            ? max(0.0, round($oldScore + self::REPUTATION_DELTA, 4))
-            : $oldScore;
-        if ($applyDelta) {
-            $rep->update(['score' => $newScore]);
-
-            // RT-05b bypass 2 (#383): dual-write to nodes.reputation_score (canonical column).
-            // AuditReportController previously only updated reputations.score — causing
-            // divergence as Phase 2 migration makes nodes.reputation_score the sole source.
-            Node::where('id', $targetNodeId)->update(['reputation_score' => $newScore]);
-        }
+        // outcome-v2 keeps integrity findings separate from execution-outcome
+        // reputation. The accepted, eligibility-bounded event remains available
+        // to integrity policy without making a low reputation look like fraud.
+        $newScore = $oldScore;
 
         $this->eventLogger->log('AUDIT_REPORT', $targetNodeId, [
             'reporter_node_id' => $reporterNodeId,
             'finding' => $validated['finding'],
-            'reputation_delta' => $applyDelta ? self::REPUTATION_DELTA : 0.0,
-            'delta_suppressed' => ! $applyDelta,
+            'reputation_delta' => 0.0,
+            'integrity_evidence_accepted' => $applyDelta,
+            'delta_suppressed' => true,
             'reporter_eligible' => $reporterEligible,
             'old_score' => $oldScore,
             'new_score' => $newScore,

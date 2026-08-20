@@ -66,6 +66,8 @@ class NodeController extends Controller
             'active_jobs' => $node->active_jobs,
             'last_seen' => $node->last_seen?->toISOString(),
             'reputation_score' => $rep?->score ?? 0.5,
+            'reputation_model' => $node->reputation_model ?? 'legacy',
+            'reputation_epoch' => $node->reputation_epoch,
             'probation' => $completedTasksCount < 100,
             'completed_tasks_count' => $completedTasksCount,
             'observed_latency_ms' => $rep?->observed_latency_ms,
