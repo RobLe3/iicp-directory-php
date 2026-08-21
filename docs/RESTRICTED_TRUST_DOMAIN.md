@@ -37,7 +37,10 @@ IICP_MEMBERSHIP_EPOCH=1
 IICP_MEMBERSHIP_MAX_TTL_SECONDS=86400
 ```
 
-Startup fails if the domain, authority, epoch or TTL is invalid. Restricted
+Startup fails if the domain, authority, authority key identifier, Ed25519
+signing secret, epoch or TTL is invalid. Requiring signing material at startup
+prevents a private directory from accepting members that it cannot later bind
+to peer-verifiable bootstrap evidence. Restricted
 mode currently also rejects replica mode because cross-domain federation policy
 is not implemented. The directory has no dependency on `iicp.network` in this
 mode; configure local DNS, TLS, database, backups and process supervision as for
@@ -61,7 +64,14 @@ php artisan iicp:membership-issue client client-a \
   --scope=discovery --scope=bootstrap --ttl=3600
 
 php artisan iicp:membership-revoke node node-a
+
+# Inspect one member without printing its identifier, credential digest or assertion.
+php artisan iicp:membership-status node node-a
 ```
+
+The status command returns a one-way subject reference, lifecycle state,
+generation, scopes, expiry and whether peer evidence exists. It does not list
+members or print the subject identifier, token digest or signed assertion.
 
 The bearer credential is printed once. Store it in a protected secret provider.
 Do not put it in argv, portable configuration, logs or source control. When a
