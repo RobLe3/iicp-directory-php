@@ -10,6 +10,7 @@ use App\Services\RestrictedDomainMembershipAssertionService;
 use App\Services\TrustDomainMembershipService;
 use App\Support\RestrictedDomainConfig;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -23,6 +24,10 @@ class RestrictedDomainMembershipTest extends TestCase
         config()->set('iicp.restricted_domain.enabled', true);
         config()->set('iicp.restricted_domain.domain_id', 'example.internal');
         config()->set('iicp.restricted_domain.authority_id', 'did:key:directory');
+        config()->set('iicp.restricted_domain.authority_key_id', 'did:key:directory#key-1');
+        config()->set('app.genesis_ed25519_secret_key', sodium_bin2hex(
+            sodium_crypto_sign_secretkey(sodium_crypto_sign_keypair())
+        ));
         config()->set('iicp.restricted_domain.membership_epoch', 1);
         config()->set('iicp.restricted_domain.max_credential_ttl_seconds', 86400);
     }
@@ -214,6 +219,7 @@ class RestrictedDomainMembershipTest extends TestCase
     public function test_failed_assertion_issue_does_not_rotate_the_existing_membership(): void
     {
         $first = app(TrustDomainMembershipService::class)->issue('node', 'node-a', ['peers'], 3600);
+        config()->set('app.genesis_ed25519_secret_key', '');
 
         try {
             app(TrustDomainMembershipService::class)->issueWithAssertion(
@@ -273,6 +279,50 @@ class RestrictedDomainMembershipTest extends TestCase
         $this->expectException(\LogicException::class);
 
         RestrictedDomainConfig::assertValid();
+    }
+
+    public function test_restricted_configuration_requires_signing_material(): void
+    {
+        config()->set('iicp.restricted_domain.authority_key_id', '');
+        $this->expectException(\LogicException::class);
+
+        RestrictedDomainConfig::assertValid();
+    }
+
+    public function test_restricted_configuration_rejects_invalid_signing_secret(): void
+    {
+        config()->set('app.genesis_ed25519_secret_key', 'not-a-secret-key');
+        $this->expectException(\LogicException::class);
+
+        RestrictedDomainConfig::assertValid();
+    }
+
+    public function test_membership_status_is_redacted_and_reports_lifecycle_state(): void
+    {
+        $issued = app(TrustDomainMembershipService::class)->issue(
+            'client',
+            'private-client-name',
+            ['discovery'],
+            3600,
+        );
+
+        $this->assertSame(0, Artisan::call('iicp:membership-status', [
+            'kind' => 'client',
+            'subject' => 'private-client-name',
+        ]));
+        $output = Artisan::output();
+        $this->assertStringContainsString('"status":"active"', $output);
+        $this->assertStringContainsString('"has_peer_assertion":false', $output);
+        $this->assertStringNotContainsString('private-client-name', $output);
+        $this->assertStringNotContainsString($issued['token'], $output);
+        $this->assertStringNotContainsString(hash('sha256', $issued['token']), $output);
+
+        $this->assertTrue(app(TrustDomainMembershipService::class)->revoke('client', 'private-client-name'));
+        $this->assertSame(0, Artisan::call('iicp:membership-status', [
+            'kind' => 'client',
+            'subject' => 'private-client-name',
+        ]));
+        $this->assertStringContainsString('"status":"revoked"', Artisan::output());
     }
 
     public function test_restricted_configuration_rejects_unimplemented_federation(): void

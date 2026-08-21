@@ -13,7 +13,19 @@ class RestrictedDomainConfig
         }
 
         self::assertRequiredValues();
+        self::assertSigningMaterial();
         self::assertFederationDisabled();
+    }
+
+    private static function assertSigningMaterial(): void
+    {
+        $keyId = trim((string) config('iicp.restricted_domain.authority_key_id'));
+        $secret = config('app.genesis_ed25519_secret_key');
+        if ($keyId === '' || ! is_string($secret) || ! preg_match('/^[0-9a-fA-F]{128}$/', $secret)) {
+            throw new \LogicException(
+                'Restricted trust-domain mode requires an authority key identifier and a 64-byte Ed25519 signing secret encoded as hex.'
+            );
+        }
     }
 
     private static function assertRequiredValues(): void
