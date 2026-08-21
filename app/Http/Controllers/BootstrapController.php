@@ -24,6 +24,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Node;
+use App\Models\TrustDomainMembership;
 use App\Services\OtelTracer;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -49,9 +50,9 @@ class BootstrapController extends Controller
     /**
      * Return up to {limit} recently-active peers, sorted by recency.
      *
-     * No auth required: the bootstrap list is public information (same as
-     * `/api/v1/nodes`). Sorting by `last_seen DESC` biases newcomers toward
-     * the healthiest part of the mesh.
+     * Public mode exposes the legacy bootstrap list. Restricted mode is
+     * authenticated by route middleware and projects peer-verifiable membership
+     * evidence for independently admitted peers.
      */
     public function __invoke(Request $request): JsonResponse
     {
@@ -64,18 +65,44 @@ class BootstrapController extends Controller
         $limit = $validated['limit'] ?? self::DEFAULT_LIMIT;
         $cutoff = Carbon::now()->subSeconds(self::EXPIRY_SECONDS);
 
+        $restricted = (bool) config('iicp.restricted_domain.enabled');
+        $memberships = $restricted ? TrustDomainMembership::query()
+            ->where('domain_id', (string) config('iicp.restricted_domain.domain_id'))
+            ->where('subject_kind', 'node')
+            ->whereNull('revoked_at')
+            ->where('expires_at', '>', now())
+            ->where('generation', '>=', (int) config('iicp.restricted_domain.membership_epoch', 1))
+            ->whereNotNull('membership_envelope')
+            ->get()
+            ->filter(fn (TrustDomainMembership $membership): bool => in_array('*', $membership->scopes ?? [], true)
+                || in_array('bootstrap', $membership->scopes ?? [], true)
+                || in_array('peers', $membership->scopes ?? [], true))
+            ->keyBy('subject_id') : collect();
+
         $nodes = Node::query()
             ->where('available', true)
             ->where('last_seen', '>=', $cutoff)
             ->orderByDesc('last_seen')
             ->limit($limit)
             ->get(['id', 'endpoint', 'region', 'last_seen'])
-            ->map(fn (Node $node) => [
-                'node_id' => $node->id,
-                'endpoint' => $node->endpoint,
-                'region' => $node->region,
-                'last_seen' => $node->last_seen?->toIso8601String(),
-            ])
+            ->map(function (Node $node) use ($restricted, $memberships): ?array {
+                $membership = $memberships->get($node->id);
+                if ($restricted && ! $membership) {
+                    return null;
+                }
+                $peer = [
+                    'node_id' => $node->id,
+                    'endpoint' => $node->endpoint,
+                    'region' => $node->region,
+                    'last_seen' => $node->last_seen?->toIso8601String(),
+                ];
+                if ($restricted) {
+                    $peer['membership'] = $membership->membership_envelope;
+                }
+
+                return $peer;
+            })
+            ->filter()
             ->values()
             ->all();
 
