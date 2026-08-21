@@ -21,6 +21,7 @@ class TrustDomainMembership extends Model
         'generation',
         'expires_at',
         'revoked_at',
+        'membership_envelope',
     ];
 
     protected $casts = [
@@ -28,6 +29,7 @@ class TrustDomainMembership extends Model
         'generation' => 'integer',
         'expires_at' => 'immutable_datetime',
         'revoked_at' => 'immutable_datetime',
+        'membership_envelope' => 'array',
     ];
 
     protected $hidden = ['token_hash'];

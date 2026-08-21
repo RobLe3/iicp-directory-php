@@ -4,11 +4,13 @@
 
 namespace Tests\Feature;
 
+use App\Models\Node;
 use App\Models\TrustDomainMembership;
 use App\Services\RestrictedDomainMembershipAssertionService;
 use App\Services\TrustDomainMembershipService;
 use App\Support\RestrictedDomainConfig;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class RestrictedDomainMembershipTest extends TestCase
@@ -163,6 +165,50 @@ class RestrictedDomainMembershipTest extends TestCase
             $issued['assertion'],
             $authorityPublic,
         ));
+        $this->assertSame($issued['assertion'], $issued['membership']->fresh()->membership_envelope);
+    }
+
+    public function test_restricted_bootstrap_projects_only_current_signed_node_memberships(): void
+    {
+        $authority = sodium_crypto_sign_keypair();
+        $subject = sodium_crypto_sign_keypair();
+        config()->set('app.genesis_ed25519_secret_key', sodium_bin2hex(sodium_crypto_sign_secretkey($authority)));
+        config()->set('iicp.restricted_domain.authority_key_id', 'did:key:directory#key-1');
+        $subjectPublic = rtrim(strtr(base64_encode(sodium_crypto_sign_publickey($subject)), '+/', '-_'), '=');
+        $nodeId = 'did:key:node-a';
+        Node::create([
+            'id' => $nodeId,
+            'endpoint' => 'https://node-a.example',
+            'region' => 'eu-central',
+            'node_token_hash' => password_hash('node-token', PASSWORD_BCRYPT),
+            'max_concurrent' => 4,
+            'tokens_per_min' => 10000,
+            'available' => true,
+            'last_seen' => now(),
+            'observed_source_ip' => '127.0.0.1',
+        ]);
+        Node::create([
+            'id' => (string) Str::uuid(),
+            'endpoint' => 'https://unsigned.example',
+            'region' => 'eu-central',
+            'node_token_hash' => password_hash('node-token', PASSWORD_BCRYPT),
+            'max_concurrent' => 4,
+            'tokens_per_min' => 10000,
+            'available' => true,
+            'last_seen' => now(),
+            'observed_source_ip' => '127.0.0.1',
+        ]);
+        $memberships = app(TrustDomainMembershipService::class);
+        $peer = $memberships->issueWithAssertion('node', $nodeId, ['bootstrap', 'peers'], 3600, "$nodeId#key-1", $subjectPublic);
+        $caller = $memberships->issue('client', 'client-a', ['bootstrap'], 3600);
+
+        $response = $this->withHeaders($this->headers($caller['token'], 'client-a'))
+            ->getJson('/api/v1/bootstrap')
+            ->assertOk()
+            ->assertJsonCount(1, 'peers');
+
+        $this->assertSame($nodeId, $response->json('peers.0.node_id'));
+        $this->assertSame($peer['assertion'], $response->json('peers.0.membership'));
     }
 
     public function test_failed_assertion_issue_does_not_rotate_the_existing_membership(): void

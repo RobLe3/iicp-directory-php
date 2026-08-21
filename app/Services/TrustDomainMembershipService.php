@@ -171,10 +171,13 @@ class TrustDomainMembershipService
             max(60, min($ttlSeconds, $maxTtl)),
         );
 
+        $assertion = $this->assertions->issue($membership, $subjectKeyId, $subjectPublicKey);
+        $membership->forceFill(['membership_envelope' => $assertion])->save();
+
         return [
             'membership' => $membership,
             'token' => $token,
-            'assertion' => $this->assertions->issue($membership, $subjectKeyId, $subjectPublicKey),
+            'assertion' => $assertion,
         ];
     }
 
