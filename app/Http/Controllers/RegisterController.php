@@ -69,32 +69,40 @@ class RegisterController extends Controller
     private function validateEffectiveCapabilityMaps(array $capability, int $index): void
     {
         foreach (($capability['limits'] ?? []) as $name => $limit) {
-            $valid = is_string($name)
-                && preg_match('/^[a-z][a-z0-9_]{0,63}$/', $name) === 1
-                && is_array($limit)
-                && count($limit) === 2
-                && array_key_exists('value', $limit)
-                && array_key_exists('unit', $limit)
-                && is_numeric($limit['value'])
-                && $limit['value'] >= 0
-                && in_array($limit['unit'], self::CAPABILITY_LIMIT_UNITS, true);
-            if (! $valid) {
+            if (! $this->isValidCapabilityLimit($name, $limit)) {
                 throw ValidationException::withMessages(["capabilities.$index.limits" => ['Invalid typed capability limit.']]);
             }
         }
         foreach (($capability['extensions'] ?? []) as $name => $extension) {
-            $valid = is_string($name)
-                && preg_match('/^[a-z0-9][a-z0-9._:-]{2,127}$/', $name) === 1
-                && str_contains($name, '.')
-                && is_array($extension)
-                && array_key_exists('required', $extension)
-                && is_bool($extension['required'])
-                && array_key_exists('value', $extension)
-                && count($extension) === 2;
-            if (! $valid) {
+            if (! $this->isValidCapabilityExtension($name, $extension)) {
                 throw ValidationException::withMessages(["capabilities.$index.extensions" => ['Invalid namespaced capability extension.']]);
             }
         }
+    }
+
+    private function isValidCapabilityLimit(mixed $name, mixed $limit): bool
+    {
+        return is_string($name)
+            && preg_match('/^[a-z][a-z0-9_]{0,63}$/', $name) === 1
+            && is_array($limit)
+            && count($limit) === 2
+            && array_key_exists('value', $limit)
+            && array_key_exists('unit', $limit)
+            && is_numeric($limit['value'])
+            && $limit['value'] >= 0
+            && in_array($limit['unit'], self::CAPABILITY_LIMIT_UNITS, true);
+    }
+
+    private function isValidCapabilityExtension(mixed $name, mixed $extension): bool
+    {
+        return is_string($name)
+            && preg_match('/^[a-z0-9][a-z0-9._:-]{2,127}$/', $name) === 1
+            && str_contains($name, '.')
+            && is_array($extension)
+            && array_key_exists('required', $extension)
+            && is_bool($extension['required'])
+            && array_key_exists('value', $extension)
+            && count($extension) === 2;
     }
 
     /**
@@ -144,15 +152,8 @@ class RegisterController extends Controller
      */
     public function __invoke(Request $request): JsonResponse
     {
-        // Rate-limit registrations per source IP to prevent rapid capability cycling (W-033).
-        $rateLimitKey = 'reg_rate:'.($request->ip() ?? 'unknown');
-        Cache::add($rateLimitKey, 0, self::REGISTER_RATE_TTL);
-        if (Cache::increment($rateLimitKey) > self::REGISTER_RATE_LIMIT) {
-            return response()->json([
-                'error' => 'IICP-E034',
-                'message' => 'TooManyRegistrationAttempts',
-                'retry_after' => self::REGISTER_RATE_TTL,
-            ], 429);
+        if ($rateLimited = $this->rateLimitResponse($request)) {
+            return $rateLimited;
         }
 
         $span = OtelTracer::startSpan($request, 'iicp.directory.register');
@@ -319,86 +320,14 @@ class RegisterController extends Controller
             'cx_public_key.features.*' => ['string', 'max:64'],
         ]);
 
-        $validated = $this->normalizeSdkVersions($validated);
-        // Laravel's nested-array validated projection can omit an optional
-        // additive list even when each item passed validation. Preserve the
-        // already-validated feature list explicitly for capability negotiation.
-        $cxKeyInput = $request->input('cx_public_key');
-        $cxFeatures = is_array($cxKeyInput) ? ($cxKeyInput['features'] ?? null) : null;
-        if (is_array($cxFeatures) && isset($validated['cx_public_key'])) {
-            $validated['cx_public_key']['features'] = array_values($cxFeatures);
-        }
-
-        foreach (($validated['capabilities'] ?? []) as $idx => $capability) {
-            $intent = (string) ($capability['intent'] ?? '');
-            if ($message = $this->intentPolicy->refusalMessage($intent)) {
-                throw ValidationException::withMessages(["capabilities.$idx.intent" => [$message]]);
-            }
-        }
-        $seenVariants = [];
-        $seenObjects = [];
-        foreach (($validated['capabilities'] ?? []) as $idx => $capability) {
-            $canonical = json_encode($this->sortCapability($capability), JSON_THROW_ON_ERROR);
-            if (isset($seenObjects[$canonical])) {
-                throw ValidationException::withMessages(["capabilities.$idx" => ['Exact duplicate capability variants are not allowed.']]);
-            }
-            $seenObjects[$canonical] = true;
-            if (isset($capability['variant_id'])) {
-                $identity = $capability['intent']."\0".$capability['variant_id'];
-                if (isset($seenVariants[$identity])) {
-                    throw ValidationException::withMessages(["capabilities.$idx.variant_id" => ['variant_id must be unique for this intent.']]);
-                }
-                $seenVariants[$identity] = true;
-            }
-            $this->validateEffectiveCapabilityMaps($capability, $idx);
-        }
-
-        if (isset($validated['policy_manifest']) && is_array($validated['policy_manifest'])) {
-            $verification = NodePolicyManifestVerifier::verify($validated['policy_manifest']);
-            if (in_array($verification['status'], [
-                NodePolicyManifestVerifier::STATUS_SIGNED_INVALID,
-                NodePolicyManifestVerifier::STATUS_SIGNED_EXPIRED,
-                NodePolicyManifestVerifier::STATUS_SIGNED_REVOKED,
-                NodePolicyManifestVerifier::STATUS_SIGNED_SUPERSEDED,
-            ], true)) {
-                throw ValidationException::withMessages([
-                    'policy_manifest.signature' => [
-                        'Invalid node policy manifest signature: '.$verification['status'],
-                    ],
-                ]);
-            }
-        }
-
-        // #331 Phase A.1: fold transport_candidates + relay_endpoint into the
-        // single transport_metadata column to keep the schema small.
-        if (isset($validated['transport_candidates']) || isset($validated['relay_endpoint'])) {
-            $validated['transport_metadata'] = array_merge(
-                $validated['transport_metadata'] ?? [],
-                array_filter([
-                    'candidates' => $validated['transport_candidates'] ?? null,
-                    'relay_endpoint' => $validated['relay_endpoint'] ?? null,
-                ], fn ($v) => $v !== null),
-            );
-            unset($validated['transport_candidates'], $validated['relay_endpoint']);
-        }
+        $validated = $this->prepareValidatedPayload($request, $validated);
 
         $observedIp = $this->addressObserver->getObservedIp($request);
-        try {
-            $result = $this->registry->register($validated, $observedIp);
-        } catch (\InvalidArgumentException $e) {
-            $msg = $e->getMessage();
-            if (str_starts_with($msg, 'IICP-E049:')) {
-                return response()->json([
-                    'error' => ['code' => 'IICP-E049', 'message' => 'cx_public_key update requires valid current_node_token'],
-                ], 403);
-            }
-            if (str_starts_with($msg, 'IICP-E050:')) {
-                return response()->json([
-                    'error' => ['code' => 'IICP-E050', 'message' => 'routing-field change requires current_node_token ownership or the previous endpoint to be unreachable'],
-                ], 403);
-            }
-            throw $e;
+        $registration = $this->registerNode($validated, $observedIp);
+        if ($registration instanceof JsonResponse) {
+            return $registration;
         }
+        $result = $registration;
 
         // Persist address history for this registration event (DIR-ADDR-06)
         $node = Node::findOrFail($result['node_id']);
@@ -407,6 +336,141 @@ class RegisterController extends Controller
         // Emit signed event log entry (Phase 6 prereq — spec §3.4).
         // Replicas MUST receive cip_policy, cip_conformance_level, and pricing to serve
         // CIP-Full consumer discovery (spec iicp-federated-directory.md §9).
+        $this->logRegistration($node, $result, $validated);
+
+        $this->allocateRegistrationCredits($result['node_id'], $request);
+
+        $span->setAttribute('iicp.node_id', (string) $result['node_id'])
+            ->setAttribute('iicp.region', (string) $validated['region'])
+            ->setAttribute('iicp.capabilities_count', count($validated['capabilities']));
+        $span->end();
+
+        return response()->json($result, 201);
+    }
+
+    private function rateLimitResponse(Request $request): ?JsonResponse
+    {
+        $rateLimitKey = 'reg_rate:'.($request->ip() ?? 'unknown');
+        Cache::add($rateLimitKey, 0, self::REGISTER_RATE_TTL);
+        if (Cache::increment($rateLimitKey) <= self::REGISTER_RATE_LIMIT) {
+            return null;
+        }
+
+        return response()->json([
+            'error' => 'IICP-E034',
+            'message' => 'TooManyRegistrationAttempts',
+            'retry_after' => self::REGISTER_RATE_TTL,
+        ], 429);
+    }
+
+    private function prepareValidatedPayload(Request $request, array $validated): array
+    {
+        $validated = $this->normalizeSdkVersions($validated);
+        $cxKeyInput = $request->input('cx_public_key');
+        $cxFeatures = is_array($cxKeyInput) ? ($cxKeyInput['features'] ?? null) : null;
+        if (is_array($cxFeatures) && isset($validated['cx_public_key'])) {
+            $validated['cx_public_key']['features'] = array_values($cxFeatures);
+        }
+
+        $this->validateCapabilities($validated['capabilities'] ?? []);
+        $this->validatePolicyManifest($validated['policy_manifest'] ?? null);
+
+        return $this->normalizeTransportMetadata($validated);
+    }
+
+    private function validateCapabilities(array $capabilities): void
+    {
+        $seenVariants = [];
+        $seenObjects = [];
+        foreach ($capabilities as $idx => $capability) {
+            $intent = (string) ($capability['intent'] ?? '');
+            if ($message = $this->intentPolicy->refusalMessage($intent)) {
+                throw ValidationException::withMessages(["capabilities.$idx.intent" => [$message]]);
+            }
+            $canonical = json_encode($this->sortCapability($capability), JSON_THROW_ON_ERROR);
+            if (isset($seenObjects[$canonical])) {
+                throw ValidationException::withMessages(["capabilities.$idx" => ['Exact duplicate capability variants are not allowed.']]);
+            }
+            $seenObjects[$canonical] = true;
+            $this->recordCapabilityVariant($capability, $idx, $seenVariants);
+            $this->validateEffectiveCapabilityMaps($capability, $idx);
+        }
+    }
+
+    private function recordCapabilityVariant(array $capability, int $idx, array &$seenVariants): void
+    {
+        if (! isset($capability['variant_id'])) {
+            return;
+        }
+        $identity = $capability['intent']."\0".$capability['variant_id'];
+        if (isset($seenVariants[$identity])) {
+            throw ValidationException::withMessages(["capabilities.$idx.variant_id" => ['variant_id must be unique for this intent.']]);
+        }
+        $seenVariants[$identity] = true;
+    }
+
+    private function validatePolicyManifest(mixed $manifest): void
+    {
+        if (! is_array($manifest)) {
+            return;
+        }
+        $verification = NodePolicyManifestVerifier::verify($manifest);
+        if (in_array($verification['status'], [
+            NodePolicyManifestVerifier::STATUS_SIGNED_INVALID,
+            NodePolicyManifestVerifier::STATUS_SIGNED_EXPIRED,
+            NodePolicyManifestVerifier::STATUS_SIGNED_REVOKED,
+            NodePolicyManifestVerifier::STATUS_SIGNED_SUPERSEDED,
+        ], true)) {
+            throw ValidationException::withMessages([
+                'policy_manifest.signature' => ['Invalid node policy manifest signature: '.$verification['status']],
+            ]);
+        }
+    }
+
+    private function normalizeTransportMetadata(array $validated): array
+    {
+        if (! isset($validated['transport_candidates']) && ! isset($validated['relay_endpoint'])) {
+            return $validated;
+        }
+        $validated['transport_metadata'] = array_merge(
+            $validated['transport_metadata'] ?? [],
+            array_filter([
+                'candidates' => $validated['transport_candidates'] ?? null,
+                'relay_endpoint' => $validated['relay_endpoint'] ?? null,
+            ], fn ($v) => $v !== null),
+        );
+        unset($validated['transport_candidates'], $validated['relay_endpoint']);
+
+        return $validated;
+    }
+
+    private function registerNode(array $validated, string $observedIp): array|JsonResponse
+    {
+        try {
+            return $this->registry->register($validated, $observedIp);
+        } catch (\InvalidArgumentException $e) {
+            return $this->registrationErrorResponse($e);
+        }
+    }
+
+    private function registrationErrorResponse(\InvalidArgumentException $exception): JsonResponse
+    {
+        $message = $exception->getMessage();
+        if (str_starts_with($message, 'IICP-E049:')) {
+            return response()->json([
+                'error' => ['code' => 'IICP-E049', 'message' => 'cx_public_key update requires valid current_node_token'],
+            ], 403);
+        }
+        if (str_starts_with($message, 'IICP-E050:')) {
+            return response()->json([
+                'error' => ['code' => 'IICP-E050', 'message' => 'routing-field change requires current_node_token ownership or the previous endpoint to be unreachable'],
+            ], 403);
+        }
+        throw $exception;
+    }
+
+    private function logRegistration(Node $node, array $result, array $validated): void
+    {
         $cipPolicy = [
             'allow_remote_inference' => (bool) ($node->allow_remote_inference ?? false),
             'allow_tool_execution' => (bool) ($node->allow_tool_execution ?? false),
@@ -451,24 +515,18 @@ class RegisterController extends Controller
                 'extensions' => $c['extensions'] ?? null,
             ], $validated['capabilities']),
         ]);
+    }
 
-        // Award free evaluation credits on registration (issue #306 — free tier).
-        // Pass source IP for RT-02b IP-level gate (#380).
-        $allocated = $this->credits->maybeAllocateFreeCredits($result['node_id'], $request->ip() ?? '0.0.0.0');
+    private function allocateRegistrationCredits(string $nodeId, Request $request): void
+    {
+        $allocated = $this->credits->maybeAllocateFreeCredits($nodeId, $request->ip() ?? '0.0.0.0');
         if ($allocated !== null) {
-            $this->eventLogger->log('CREDIT_ALLOCATION', $result['node_id'], [
+            $this->eventLogger->log('CREDIT_ALLOCATION', $nodeId, [
                 'amount' => $allocated,
                 'reason' => 'free_allocation_on_register',
                 'period_h' => CreditService::FREE_CREDITS_PERIOD_HOURS,
             ]);
         }
-
-        $span->setAttribute('iicp.node_id', (string) $result['node_id'])
-            ->setAttribute('iicp.region', (string) $validated['region'])
-            ->setAttribute('iicp.capabilities_count', count($validated['capabilities']));
-        $span->end();
-
-        return response()->json($result, 201);
     }
 
     /**
