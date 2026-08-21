@@ -10,7 +10,10 @@ use Illuminate\Support\Str;
 
 class TrustDomainMembershipService
 {
-    public function __construct(private RestrictedDomainMembershipAssertionService $assertions) {}
+    public function __construct(
+        private RestrictedDomainMembershipAssertionService $assertions,
+        private MembershipSubjectLock $subjectLock,
+    ) {}
 
     /** @return array{membership: TrustDomainMembership, token: string} */
     public function issue(
@@ -24,14 +27,20 @@ class TrustDomainMembershipService
         $token = 'iicp_mem_'.Str::random(64);
         $maxTtl = (int) config('iicp.restricted_domain.max_credential_ttl_seconds', 86400);
 
-        $membership = DB::transaction(fn (): TrustDomainMembership => $this->persistRotation(
-            (string) config('iicp.restricted_domain.domain_id'),
-            $subjectKind,
-            $subjectId,
-            $token,
-            $this->normalizeScopes($scopes),
-            max(60, min($ttlSeconds, $maxTtl)),
-        ));
+        $domainId = (string) config('iicp.restricted_domain.domain_id');
+        $lockName = $this->subjectLock->acquire($domainId, $subjectKind, $subjectId);
+        try {
+            $membership = DB::transaction(fn (): TrustDomainMembership => $this->persistRotation(
+                $domainId,
+                $subjectKind,
+                $subjectId,
+                $token,
+                $this->normalizeScopes($scopes),
+                max(60, min($ttlSeconds, $maxTtl)),
+            ));
+        } finally {
+            $this->subjectLock->release($lockName);
+        }
 
         return ['membership' => $membership, 'token' => $token];
     }
@@ -50,16 +59,23 @@ class TrustDomainMembershipService
         $token = 'iicp_mem_'.Str::random(64);
         $maxTtl = (int) config('iicp.restricted_domain.max_credential_ttl_seconds', 86400);
 
-        return DB::transaction(fn (): array => $this->persistIssuedMembership(
-            $subjectKind,
-            $subjectId,
-            $scopes,
-            $ttlSeconds,
-            $maxTtl,
-            $token,
-            $subjectKeyId,
-            $subjectPublicKey,
-        ));
+        $domainId = (string) config('iicp.restricted_domain.domain_id');
+        $lockName = $this->subjectLock->acquire($domainId, $subjectKind, $subjectId);
+
+        try {
+            return DB::transaction(fn (): array => $this->persistIssuedMembership(
+                $subjectKind,
+                $subjectId,
+                $scopes,
+                $ttlSeconds,
+                $maxTtl,
+                $token,
+                $subjectKeyId,
+                $subjectPublicKey,
+            ));
+        } finally {
+            $this->subjectLock->release($lockName);
+        }
     }
 
     public function verify(string $token, string $subjectId, string $operation): ?TrustDomainMembership

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Serialize restricted-domain membership creation and rotation per subject so
+  concurrent first issuance cannot race on the absent row. A dedicated MariaDB
+  process-concurrency test proves one surviving row and monotonic generation.
+- Preserve the public default and existing membership wire/API representation;
+  no migration or Genesis activation is included.
+
 ## v1.10.93 — 2026-08-20
 
 - Add a disabled-by-default restricted trust-domain membership foundation with
