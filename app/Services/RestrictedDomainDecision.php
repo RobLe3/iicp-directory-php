@@ -21,6 +21,21 @@ class RestrictedDomainDecision
 
     private static function reason(array $input, string $mode): string
     {
+        $preMembership = self::preMembershipReason($input, $mode);
+        if ($preMembership !== null) {
+            return $preMembership;
+        }
+
+        $membershipReason = self::membershipReason($input['membership'] ?? ($mode === 'public' ? 'valid' : 'missing'));
+        if ($membershipReason !== null) {
+            return $membershipReason;
+        }
+
+        return self::authorizationReason($input);
+    }
+
+    private static function preMembershipReason(array $input, string $mode): ?string
+    {
         if (! in_array($mode, ['public', 'private', 'federated_private', 'local_only', 'custom'], true)) {
             return 'invalid_input';
         }
@@ -40,10 +55,12 @@ class RestrictedDomainDecision
         if ($input['replayed'] ?? false) {
             return 'replay_detected';
         }
-        $membershipReason = self::membershipReason($input['membership'] ?? ($mode === 'public' ? 'valid' : 'missing'));
-        if ($membershipReason !== null) {
-            return $membershipReason;
-        }
+
+        return null;
+    }
+
+    private static function authorizationReason(array $input): string
+    {
         if (($input['operation'] ?? '') === 'federation') {
             if (! ($input['federation_trusted'] ?? false)) {
                 return 'federation_untrusted';

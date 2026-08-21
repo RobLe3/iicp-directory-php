@@ -19,10 +19,23 @@ RECOMMENDATIONS = {"retain_current_limits", "collect_representative_evidence"}
 
 
 def validate(record: dict) -> list[str]:
-    errors: list[str] = []
     present = record.get("result_present")
     if present not in {True, False}:
         return ["result_present must be boolean"]
+
+    errors = validate_boundaries(record)
+    errors.extend(validate_scenario_set(record))
+    if not present:
+        if record.get("status") != "blank-disposable-measurement-template":
+            errors.append("empty evidence must identify itself as a blank template")
+        return errors
+
+    errors.extend(validate_completed_record(record))
+    return errors
+
+
+def validate_boundaries(record: dict) -> list[str]:
+    errors: list[str] = []
     environment = record.get("environment", {})
     if environment.get("disposable_database") is not True or environment.get("loopback_only") is not True:
         errors.append("measurement must use a disposable loopback environment")
@@ -32,29 +45,39 @@ def validate(record: dict) -> list[str]:
         values = record.get(field, {})
         if not values or any(value is not False for value in values.values()):
             errors.append(f"{field} must retain every content-free boundary")
-    if set(record.get("scenarios", {})) != SCENARIOS:
-        errors.append("measurement must contain the complete scenario set")
-    if not present:
-        if record.get("status") != "blank-disposable-measurement-template":
-            errors.append("empty evidence must identify itself as a blank template")
-        return errors
+    return errors
 
+
+def validate_scenario_set(record: dict) -> list[str]:
+    if set(record.get("scenarios", {})) != SCENARIOS:
+        return ["measurement must contain the complete scenario set"]
+    return []
+
+
+def validate_completed_record(record: dict) -> list[str]:
+    errors: list[str] = []
     if not record.get("measured_at_utc") or not record.get("source_commit"):
         errors.append("completed measurement requires time and source commit")
     for name, scenario in record.get("scenarios", {}).items():
-        if not isinstance(scenario, dict):
-            errors.append(f"{name}: completed scenario object required")
-            continue
-        if not isinstance(scenario.get("attempts"), int) or scenario["attempts"] <= 0:
-            errors.append(f"{name}: positive attempt count required")
-        if not isinstance(scenario.get("duration_ms"), int) or scenario["duration_ms"] < 0:
-            errors.append(f"{name}: non-negative duration required")
-        if not scenario.get("status_counts") or not scenario.get("expected_boundary_observed"):
-            errors.append(f"{name}: status counts and boundary outcome required")
+        errors.extend(validate_completed_scenario(name, scenario))
     if not record.get("observations"):
         errors.append("completed measurement requires bounded observations")
     if record.get("recommendation") not in RECOMMENDATIONS:
         errors.append("completed measurement requires a bounded recommendation")
+    return errors
+
+
+def validate_completed_scenario(name: str, scenario: object) -> list[str]:
+    if not isinstance(scenario, dict):
+        return [f"{name}: completed scenario object required"]
+
+    errors: list[str] = []
+    if not isinstance(scenario.get("attempts"), int) or scenario["attempts"] <= 0:
+        errors.append(f"{name}: positive attempt count required")
+    if not isinstance(scenario.get("duration_ms"), int) or scenario["duration_ms"] < 0:
+        errors.append(f"{name}: non-negative duration required")
+    if not scenario.get("status_counts") or not scenario.get("expected_boundary_observed"):
+        errors.append(f"{name}: status counts and boundary outcome required")
     return errors
 
 
