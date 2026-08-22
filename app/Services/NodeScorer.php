@@ -86,6 +86,23 @@ class NodeScorer
             ->where('available', true)
             ->where('status', 'active')
             ->where('last_seen', '>=', $cutoff)
+            // Restricted domains must re-evaluate provider membership while
+            // building the candidate set. Request middleware authenticates the
+            // caller, but it does not prove that a previously registered node
+            // is still a current member after expiry, revocation or an epoch
+            // advance. Keep this inside the database query so filtering occurs
+            // before ranking/limit and cannot be bypassed by the short result
+            // cache in DiscoverController.
+            ->when((bool) config('iicp.restricted_domain.enabled'), fn ($q) => $q
+                ->whereExists(fn ($membership) => $membership
+                    ->selectRaw('1')
+                    ->from('trust_domain_memberships')
+                    ->whereColumn('trust_domain_memberships.subject_id', 'nodes.id')
+                    ->where('trust_domain_memberships.domain_id', (string) config('iicp.restricted_domain.domain_id'))
+                    ->where('trust_domain_memberships.subject_kind', 'node')
+                    ->whereNull('trust_domain_memberships.revoked_at')
+                    ->where('trust_domain_memberships.expires_at', '>', now())
+                    ->where('trust_domain_memberships.generation', '>=', (int) config('iicp.restricted_domain.membership_epoch', 1))))
             // #326 + ADR-047 (#411) — default discover returns reachable nodes:
             // dial-back-verified (`public_reachable=true` → direct tier) OR
             // heartbeating with a routable serving surface (`exposure_mode` in the

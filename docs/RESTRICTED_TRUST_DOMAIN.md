@@ -18,6 +18,10 @@ generation and expiry. Rotation replaces the prior digest. Revocation and a
 membership-epoch increase take effect on the next request; there is no positive
 authorization cache. Protected routes return one bounded refusal and do not
 reveal whether a subject was missing, expired, revoked or in another domain.
+Restricted discovery also rechecks every provider candidate against current
+node membership before ranking. Revoking a node therefore removes it from new
+discovery and CIP candidate sets even while its older registration record is
+still present.
 
 Membership is a prerequisite, not a dispatch or relay ticket. Existing node
 authentication remains required where applicable.

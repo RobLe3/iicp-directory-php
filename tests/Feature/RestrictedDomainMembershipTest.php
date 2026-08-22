@@ -60,6 +60,47 @@ class RestrictedDomainMembershipTest extends TestCase
             ->assertUnauthorized();
     }
 
+    public function test_discovery_excludes_nodes_after_membership_revocation_without_cache_window(): void
+    {
+        $memberships = app(TrustDomainMembershipService::class);
+        $caller = $memberships->issue('client', 'client-a', ['discovery'], 3600);
+
+        foreach (['node-current', 'node-revoked'] as $nodeId) {
+            $node = Node::create([
+                'id' => $nodeId,
+                'endpoint' => "https://{$nodeId}.example",
+                'region' => 'eu-central',
+                'node_token_hash' => password_hash('node-token', PASSWORD_BCRYPT),
+                'max_concurrent' => 4,
+                'tokens_per_min' => 10000,
+                'available' => true,
+                'load' => 0.1,
+                'last_seen' => now(),
+                'public_reachable' => true,
+            ]);
+            $node->capabilities()->create([
+                'intent' => 'urn:iicp:intent:llm:chat:v1',
+                'models' => ['test-model'],
+                'max_tokens' => 4096,
+            ]);
+            $memberships->issue('node', $nodeId, ['registration'], 3600);
+        }
+
+        $headers = $this->headers($caller['token'], 'client-a');
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')
+            ->assertOk()
+            ->assertJsonCount(2, 'nodes');
+
+        $this->assertTrue($memberships->revoke('node', 'node-revoked'));
+
+        $response = $this->withHeaders($headers)
+            ->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')
+            ->assertOk()
+            ->assertJsonCount(1, 'nodes');
+        $this->assertSame('node-current', $response->json('nodes.0.node_id'));
+    }
+
     public function test_registration_requires_node_membership_bound_to_requested_node_id(): void
     {
         $memberships = app(TrustDomainMembershipService::class);
