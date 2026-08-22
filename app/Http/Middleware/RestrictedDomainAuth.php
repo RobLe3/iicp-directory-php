@@ -6,14 +6,19 @@ namespace App\Http\Middleware;
 
 use App\Models\Node;
 use App\Models\TrustDomainMembership;
+use App\Services\RestrictedDomainDecisionProjection;
 use App\Services\TrustDomainMembershipService;
 use Closure;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 class RestrictedDomainAuth
 {
-    public function __construct(private TrustDomainMembershipService $memberships) {}
+    public function __construct(
+        private TrustDomainMembershipService $memberships,
+        private RestrictedDomainDecisionProjection $projection,
+    ) {}
 
     public function handle(Request $request, Closure $next, string $operation): Response
     {
@@ -28,7 +33,19 @@ class RestrictedDomainAuth
 
         $request->attributes->set('iicp_membership', $membership);
 
-        return $next($request);
+        $response = $next($request);
+        $decision = $this->projection->forOperation($operation, $membership);
+        if ($decision !== null && $response->isSuccessful() && $response instanceof JsonResponse) {
+            $data = $response->getData(true);
+            if (is_array($data)) {
+                $data['restricted_domain_decision'] = $decision;
+                $response->setData($data);
+                $response->headers->set('Cache-Control', 'private, no-store');
+                $response->headers->set('Vary', 'X-IICP-Membership, X-IICP-Subject-Id');
+            }
+        }
+
+        return $response;
     }
 
     private function membershipFor(Request $request, string $operation): ?TrustDomainMembership
