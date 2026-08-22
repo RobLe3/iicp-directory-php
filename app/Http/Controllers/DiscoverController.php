@@ -173,28 +173,41 @@ class DiscoverController extends Controller
         // response header with the body, so REACH treats it as current evidence
         // only when Cloudflare did not serve an edge HIT.
         $originCacheState = 'hit';
-        $nodes = $timing->measure('cache', function () use ($cacheKey, $validated, $includeInternal, &$originCacheState, $timing) {
-            return Cache::remember($cacheKey, self::ORIGIN_CACHE_SECONDS, function () use ($validated, $includeInternal, &$originCacheState, $timing) {
-                $originCacheState = 'miss';
-                $scored = $this->scorer->discover(
-                    intent: $validated['intent'],
-                    qos: $validated['qos'] ?? null,
-                    region: $validated['region'] ?? null,
-                    model: $validated['model'] ?? null,
-                    minReputation: isset($validated['min_reputation']) ? (float) $validated['min_reputation'] : 0.0,
-                    limit: $validated['limit'] ?? self::DEFAULT_LIMIT,
-                    maxMultiplier: isset($validated['max_multiplier']) ? (float) $validated['max_multiplier'] : null,
-                    minQualityScore: isset($validated['min_quality_score']) ? (float) $validated['min_quality_score'] : null,
-                    cipCapable: isset($validated['cip_capable']) ? (bool) $validated['cip_capable'] : null,
-                    includeInternal: $includeInternal,
-                    modality: $validated['modality'] ?? null,
-                    relayCapable: isset($validated['relay_capable']) ? (bool) $validated['relay_capable'] : null,
-                    scoreVersion: $validated['score_version'] ?? null,
-                    timing: $timing,
-                );
+        $discover = function () use ($validated, $includeInternal, &$originCacheState, $timing) {
+            $originCacheState = 'miss';
+            $scored = $this->scorer->discover(
+                intent: $validated['intent'],
+                qos: $validated['qos'] ?? null,
+                region: $validated['region'] ?? null,
+                model: $validated['model'] ?? null,
+                minReputation: isset($validated['min_reputation']) ? (float) $validated['min_reputation'] : 0.0,
+                limit: $validated['limit'] ?? self::DEFAULT_LIMIT,
+                maxMultiplier: isset($validated['max_multiplier']) ? (float) $validated['max_multiplier'] : null,
+                minQualityScore: isset($validated['min_quality_score']) ? (float) $validated['min_quality_score'] : null,
+                cipCapable: isset($validated['cip_capable']) ? (bool) $validated['cip_capable'] : null,
+                includeInternal: $includeInternal,
+                modality: $validated['modality'] ?? null,
+                relayCapable: isset($validated['relay_capable']) ? (bool) $validated['relay_capable'] : null,
+                scoreVersion: $validated['score_version'] ?? null,
+                timing: $timing,
+            );
 
-                return $timing->measure('operator_enrichment', fn () => $this->withOperatorNames($scored));
-            });
+            return $timing->measure('operator_enrichment', fn () => $this->withOperatorNames($scored));
+        };
+        $nodes = $timing->measure('cache', function () use ($cacheKey, $discover, &$originCacheState) {
+            // A five-second cache is acceptable for public route churn, but a
+            // restricted-domain revocation must affect new discovery decisions
+            // immediately. The scorer performs the current-membership query;
+            // bypassing this cache prevents a pre-revocation candidate list
+            // from retaining authority.
+            if ((bool) config('iicp.restricted_domain.enabled')) {
+                $nodes = $discover();
+                $originCacheState = 'bypass-restricted';
+
+                return $nodes;
+            }
+
+            return Cache::remember($cacheKey, self::ORIGIN_CACHE_SECONDS, $discover);
         });
 
         $queryMs = round((microtime(true) - $start) * 1000);
