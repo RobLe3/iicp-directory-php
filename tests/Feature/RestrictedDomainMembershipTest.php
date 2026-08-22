@@ -52,12 +52,33 @@ class RestrictedDomainMembershipTest extends TestCase
         );
         $headers = $this->headers($issued['token'], 'client-a');
 
-        $this->withHeaders($headers)
+        $response = $this->withHeaders($headers)
             ->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')
-            ->assertOk();
+            ->assertOk()
+            ->assertHeader('Cache-Control', 'no-store, private')
+            ->assertHeader('Vary', 'X-IICP-Membership, X-IICP-Subject-Id')
+            ->assertJsonPath('restricted_domain_decision.schema', 'iicp.restricted-trust-domain.directory-decision.v0')
+            ->assertJsonPath('restricted_domain_decision.profile', 'urn:iicp:profile:restricted-trust-domain:v1')
+            ->assertJsonPath('restricted_domain_decision.decision', 'eligible')
+            ->assertJsonPath('restricted_domain_decision.operation', 'discovery')
+            ->assertJsonPath('restricted_domain_decision.domain_id', 'example.internal')
+            ->assertJsonPath('restricted_domain_decision.authority_id', 'did:key:directory')
+            ->assertJsonPath('restricted_domain_decision.subject_kind', 'client')
+            ->assertJsonPath('restricted_domain_decision.membership_generation', 1);
+        $this->assertGreaterThan(time(), $response->json('restricted_domain_decision.membership_expires_at'));
+        $this->assertArrayNotHasKey('subject_id', $response->json('restricted_domain_decision'));
         $this->withHeaders($headers)
             ->getJson('/api/v1/bootstrap')
             ->assertUnauthorized();
+    }
+
+    public function test_public_mode_omits_restricted_decision_projection(): void
+    {
+        config()->set('iicp.restricted_domain.enabled', false);
+
+        $this->getJson('/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1')
+            ->assertOk()
+            ->assertJsonMissingPath('restricted_domain_decision');
     }
 
     public function test_discovery_excludes_nodes_after_membership_revocation_without_cache_window(): void
