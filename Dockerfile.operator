@@ -14,7 +14,8 @@ RUN composer install \
 
 FROM php:8.3-fpm-alpine@sha256:9fcec48321d890240d700ccdc2b475420c87d398826e68c3d8830b8fca663e5c AS runtime
 
-RUN apk add --no-cache fcgi c-ares=1.34.8-r0 \
+RUN apk upgrade --no-cache \
+    && apk add --no-cache fcgi c-ares=1.34.8-r0 \
     && docker-php-ext-install -j"$(getconf _NPROCESSORS_ONLN)" opcache pcntl pdo_mysql \
     && addgroup -g 10001 -S iicp \
     && adduser -u 10001 -S -D -H -G iicp iicp
