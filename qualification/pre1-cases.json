@@ -1,0 +1,133 @@
+{
+  "component": "directory-php",
+  "evidence_policy": "digest-only",
+  "network_policy": "isolated-fixtures-only",
+  "non_authorizing": true,
+  "scenario_commands": {
+    "backup-restore": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/SnapshotEndpointTest.php"
+    ],
+    "config-malformed": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/OpenApiContractTest.php"
+    ],
+    "config-missing": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/BootstrapTest.php"
+    ],
+    "credential-expired": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/DispatchRouteTicketTest.php"
+    ],
+    "credential-missing": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/ConsumerTokenTest.php"
+    ],
+    "credential-replayed": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/DispatchRouteTicketTest.php"
+    ],
+    "credential-rotated": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/RotateReplicaLifecycleTest.php"
+    ],
+    "cross-flavor-equivalence": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/SharedBehaviorContractTest.php"
+    ],
+    "disk-full": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/DeployMigrateTest.php"
+    ],
+    "duplicate-registration": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/RegisterTest.php"
+    ],
+    "interrupted-write": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/DeployMigrateTest.php"
+    ],
+    "migration-interrupted": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/DeployMigrateTest.php"
+    ],
+    "minimum-version": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Unit/ReleaseAuthorityTest.php"
+    ],
+    "no-dual-authority": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/ReplicaModeRedirectTest.php"
+    ],
+    "package-version-self-report": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Unit/ReleaseAuthorityTest.php"
+    ],
+    "process-crash-restart": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/NodeLifecycleReachabilityTest.php"
+    ],
+    "rate-limit": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/RegistrationLimitMeasurementTest.php"
+    ],
+    "rollback-last-supported": [
+      "@python",
+      "scripts/test_operator_upgrade_rehearsal.py"
+    ],
+    "signature-mismatch": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Feature/ReplicaEventApplierSigVerifyTest.php"
+    ],
+    "unsupported-version": [
+      "@php",
+      "artisan",
+      "test",
+      "tests/Unit/ReleaseAuthorityTest.php"
+    ]
+  },
+  "schema": "iicp.pre1-component-case-map.v1",
+  "support_command": [
+    "@php",
+    "artisan",
+    "test",
+    "tests/Feature/SharedBehaviorContractTest.php"
+  ]
+}
