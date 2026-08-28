@@ -493,6 +493,37 @@ class RegisterTest extends TestCase
         $this->assertTrue((bool) $node->public_reachable);
     }
 
+    public function test_external_tunnel_is_not_eligible_before_public_health_is_serving(): void
+    {
+        Http::fake(['https://starting.example.com/iicp/health' => Http::response('', 503)]);
+
+        $payload = array_merge($this->validPayload, [
+            'endpoint' => 'https://starting.example.com',
+            'nat_type' => 'symmetric',
+            'transport_method' => 'external_tunnel',
+        ]);
+
+        $this->postJson('/api/v1/register', $payload)->assertStatus(422);
+        $this->assertDatabaseMissing('nodes', ['endpoint' => 'https://starting.example.com']);
+    }
+
+    public function test_external_tunnel_registers_after_public_health_is_serving(): void
+    {
+        Http::fake(['https://ready.example.com/iicp/health' => Http::response('', 200)]);
+
+        $payload = array_merge($this->validPayload, [
+            'endpoint' => 'https://ready.example.com',
+            'nat_type' => 'symmetric',
+            'transport_method' => 'external_tunnel',
+        ]);
+
+        $this->postJson('/api/v1/register', $payload)->assertStatus(201);
+        $this->assertDatabaseHas('nodes', [
+            'endpoint' => 'https://ready.example.com',
+            'public_reachable' => true,
+        ]);
+    }
+
     public function test_token_is_not_stored_in_plaintext(): void
     {
         $this->postJson('/api/v1/register', $this->validPayload)->assertStatus(201);

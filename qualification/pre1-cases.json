@@ -103,6 +103,16 @@
         "/::test_re_register_active_node_updates_token_without_creating_duplicate$/"
       ]
     },
+    "dynamic-public-route-readiness": {
+      "assertion": "test_external_tunnel_is_not_eligible_before_public_health_is_serving",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Feature/RegisterTest.php",
+        "--filter",
+        "/::test_external_tunnel_is_not_eligible_before_public_health_is_serving$/"
+      ]
+    },
     "interrupted-write": {
       "assertion": "test_outer_transaction_rollback_restores_event_and_chain_head",
       "command": [
