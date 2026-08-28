@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v1.10.94 — 2026-08-28
+
+- Bound package metadata to the qualified PHP 8.3 runtime line instead of
+  claiming untested future PHP 8.x releases.
+- Add a Linux target candidate builder that verifies the deterministic source
+  archive through clean online and network-disabled Composer installations.
 - Serialize restricted-domain membership creation and rotation per subject so
   concurrent first issuance cannot race on the absent row. A dedicated MariaDB
   process-concurrency test proves one surviving row and monotonic generation.
