@@ -6,6 +6,31 @@ use Tests\TestCase;
 
 class ReleaseAuthorityTest extends TestCase
 {
+    public function test_minimum_php_runtime_is_declared_and_candidate_remains_pre1(): void
+    {
+        $composer = json_decode(
+            file_get_contents(base_path('composer.json')),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $version = trim(file_get_contents(base_path('VERSION')));
+
+        $this->assertSame('^8.3', $composer['require']['php']);
+        $this->assertSame('8.3.30', $composer['config']['platform']['php']);
+        $this->assertTrue(version_compare(PHP_VERSION, '8.3.0', '>='));
+        $this->assertTrue(version_compare($version, '2.0.0', '<'));
+    }
+
+    public function test_preview_contract_never_authorizes_dual_genesis(): void
+    {
+        $readme = file_get_contents(base_path('README.md'));
+        $policy = file_get_contents(base_path('RELEASE_POLICY.md'));
+
+        $this->assertStringContainsString('PHP is the supported implementation behind the current Genesis Seed', $readme);
+        $this->assertMatchesRegularExpression('/Rust directory.*pre-1\.0\s+operator preview/s', $readme);
+        $this->assertStringContainsString('does not authorize deployment to the Genesis Seed', $policy);
+    }
+
     public function test_version_truth_and_public_source_authority_are_explicit(): void
     {
         $version = trim(file_get_contents(base_path('VERSION')));

@@ -3,131 +3,214 @@
   "evidence_policy": "digest-only",
   "network_policy": "isolated-fixtures-only",
   "non_authorizing": true,
-  "scenario_commands": {
-    "backup-restore": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/SnapshotEndpointTest.php"
-    ],
-    "config-malformed": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/OpenApiContractTest.php"
-    ],
-    "config-missing": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/BootstrapTest.php"
-    ],
-    "credential-expired": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/DispatchRouteTicketTest.php"
-    ],
-    "credential-missing": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/ConsumerTokenTest.php"
-    ],
-    "credential-replayed": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/DispatchRouteTicketTest.php"
-    ],
-    "credential-rotated": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/RotateReplicaLifecycleTest.php"
-    ],
-    "cross-flavor-equivalence": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/SharedBehaviorContractTest.php"
-    ],
-    "disk-full": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/DeployMigrateTest.php"
-    ],
-    "duplicate-registration": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/RegisterTest.php"
-    ],
-    "interrupted-write": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/DeployMigrateTest.php"
-    ],
-    "migration-interrupted": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/DeployMigrateTest.php"
-    ],
-    "minimum-version": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Unit/ReleaseAuthorityTest.php"
-    ],
-    "no-dual-authority": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/ReplicaModeRedirectTest.php"
-    ],
-    "package-version-self-report": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Unit/ReleaseAuthorityTest.php"
-    ],
-    "process-crash-restart": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/NodeLifecycleReachabilityTest.php"
-    ],
-    "rate-limit": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/RegistrationLimitMeasurementTest.php"
-    ],
-    "rollback-last-supported": [
-      "@python",
-      "scripts/test_operator_upgrade_rehearsal.py"
-    ],
-    "signature-mismatch": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Feature/ReplicaEventApplierSigVerifyTest.php"
-    ],
-    "unsupported-version": [
-      "@php",
-      "artisan",
-      "test",
-      "tests/Unit/ReleaseAuthorityTest.php"
-    ]
+  "scenarios": {
+    "backup-restore": {
+      "assertion": "test_backup_precedes_upgrade_and_restore_precedes_previous_runtime",
+      "command": [
+        "@python",
+        "-m",
+        "unittest",
+        "scripts.test_operator_upgrade_rehearsal.OperatorUpgradeRehearsalTests.test_backup_precedes_upgrade_and_restore_precedes_previous_runtime"
+      ]
+    },
+    "config-malformed": {
+      "assertion": "test_registration_accepts_documented_custom_intent_and_rejects_invalid_version",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Feature/OpenApiContractTest.php",
+        "--filter",
+        "/::test_registration_accepts_documented_custom_intent_and_rejects_invalid_version$/"
+      ]
+    },
+    "config-missing": {
+      "assertion": "test_returns_503_when_secret_is_unset",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Feature/DeployMigrateTest.php",
+        "--filter",
+        "/::test_returns_503_when_secret_is_unset$/"
+      ]
+    },
+    "credential-expired": {
+      "assertion": "test_returns_token_expired_for_expired_jwt",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Feature/SnapshotEndpointTest.php",
+        "--filter",
+        "/::test_returns_token_expired_for_expired_jwt$/"
+      ]
+    },
+    "credential-missing": {
+      "assertion": "test_consumer_token_requires_auth",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Feature/ConsumerTokenTest.php",
+        "--filter",
+        "/::test_consumer_token_requires_auth$/"
+      ]
+    },
+    "credential-replayed": {
+      "assertion": "test_shared_gossip_vectors_bind_member_signature_payload_and_replay_id",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Unit/RestrictedDomainMembershipAssertionTest.php",
+        "--filter",
+        "/::test_shared_gossip_vectors_bind_member_signature_payload_and_replay_id$/"
+      ]
+    },
+    "credential-rotated": {
+      "assertion": "test_registration_token_authenticates_snapshot_and_rotation_revokes_it",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Feature/ReplicaTokenRoundTripTest.php",
+        "--filter",
+        "/::test_registration_token_authenticates_snapshot_and_rotation_revokes_it$/"
+      ]
+    },
+    "cross-flavor-equivalence": {
+      "assertion": "test_shared_registration_cases_preserve_recovery_and_rollback",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Feature/SharedBehaviorContractTest.php",
+        "--filter",
+        "/::test_shared_registration_cases_preserve_recovery_and_rollback$/"
+      ]
+    },
+    "disk-full": {
+      "assertion": "test_persistent_storage_failure_is_not_retried_and_rolls_back_partial_state",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Unit/CreditServiceRetryTest.php",
+        "--filter",
+        "/::test_persistent_storage_failure_is_not_retried_and_rolls_back_partial_state$/"
+      ]
+    },
+    "duplicate-registration": {
+      "assertion": "test_re_register_active_node_updates_token_without_creating_duplicate",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Feature/RegisterTest.php",
+        "--filter",
+        "/::test_re_register_active_node_updates_token_without_creating_duplicate$/"
+      ]
+    },
+    "interrupted-write": {
+      "assertion": "test_outer_transaction_rollback_restores_event_and_chain_head",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Unit/NodeEventLoggerTest.php",
+        "--filter",
+        "/::test_outer_transaction_rollback_restores_event_and_chain_head$/"
+      ]
+    },
+    "migration-interrupted": {
+      "assertion": "test_interrupted_upgrade_cleanup_removes_disposable_authority",
+      "command": [
+        "@python",
+        "-m",
+        "unittest",
+        "scripts.test_operator_upgrade_rehearsal.OperatorUpgradeRehearsalTests.test_interrupted_upgrade_cleanup_removes_disposable_authority"
+      ]
+    },
+    "minimum-version": {
+      "assertion": "test_minimum_php_runtime_is_declared_and_candidate_remains_pre1",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Unit/ReleaseAuthorityTest.php",
+        "--filter",
+        "/::test_minimum_php_runtime_is_declared_and_candidate_remains_pre1$/"
+      ]
+    },
+    "no-dual-authority": {
+      "assertion": "test_preview_contract_never_authorizes_dual_genesis",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Unit/ReleaseAuthorityTest.php",
+        "--filter",
+        "/::test_preview_contract_never_authorizes_dual_genesis$/"
+      ]
+    },
+    "package-version-self-report": {
+      "assertion": "test_version_truth_and_public_source_authority_are_explicit",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Unit/ReleaseAuthorityTest.php",
+        "--filter",
+        "/::test_version_truth_and_public_source_authority_are_explicit$/"
+      ]
+    },
+    "process-crash-restart": {
+      "assertion": "test_recovered_external_tunnel_endpoint_clears_dead_flag_and_returns_to_discover",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Feature/NodeLifecycleReachabilityTest.php",
+        "--filter",
+        "/::test_recovered_external_tunnel_endpoint_clears_dead_flag_and_returns_to_discover$/"
+      ]
+    },
+    "rate-limit": {
+      "assertion": "test_retry_after_clamped_to_minimum_one",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Feature/LoadRedirectTest.php",
+        "--filter",
+        "/::test_retry_after_clamped_to_minimum_one$/"
+      ]
+    },
+    "rollback-last-supported": {
+      "assertion": "test_upgrade_and_rollback_are_explicit",
+      "command": [
+        "@python",
+        "-m",
+        "unittest",
+        "scripts.test_operator_upgrade_rehearsal.OperatorUpgradeRehearsalTests.test_upgrade_and_rollback_are_explicit"
+      ]
+    },
+    "signature-mismatch": {
+      "assertion": "test_invalid_signature_rejects_event",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Feature/ReplicaEventApplierSigVerifyTest.php",
+        "--filter",
+        "/::test_invalid_signature_rejects_event$/"
+      ]
+    },
+    "unsupported-version": {
+      "assertion": "test_registration_rejects_conflicting_sdk_compatibility_versions",
+      "command": [
+        "@php",
+        "vendor/bin/phpunit",
+        "tests/Feature/RegisterTest.php",
+        "--filter",
+        "/::test_registration_rejects_conflicting_sdk_compatibility_versions$/"
+      ]
+    }
   },
-  "schema": "iicp.pre1-component-case-map.v1",
-  "support_command": [
-    "@php",
-    "artisan",
-    "test",
-    "tests/Feature/SharedBehaviorContractTest.php"
-  ]
+  "schema": "iicp.pre1-component-case-map.v2",
+  "support": {
+    "assertion": "test_v11093_manifest_pins_outcome_and_restricted_domain_contracts",
+    "command": [
+      "@php",
+      "vendor/bin/phpunit",
+      "tests/Feature/SharedBehaviorContractTest.php",
+      "--filter",
+      "/::test_v11093_manifest_pins_outcome_and_restricted_domain_contracts$/"
+    ]
+  }
 }
