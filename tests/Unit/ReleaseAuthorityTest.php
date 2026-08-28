@@ -15,9 +15,10 @@ class ReleaseAuthorityTest extends TestCase
         );
         $version = trim(file_get_contents(base_path('VERSION')));
 
-        $this->assertSame('^8.3', $composer['require']['php']);
+        $this->assertSame('~8.3.0', $composer['require']['php']);
         $this->assertSame('8.3.30', $composer['config']['platform']['php']);
         $this->assertTrue(version_compare(PHP_VERSION, '8.3.0', '>='));
+        $this->assertTrue(version_compare(PHP_VERSION, '8.4.0', '<'));
         $this->assertTrue(version_compare($version, '2.0.0', '<'));
     }
 
@@ -37,7 +38,7 @@ class ReleaseAuthorityTest extends TestCase
         $config = file_get_contents(base_path('config/app.php'));
         $policy = file_get_contents(base_path('RELEASE_POLICY.md'));
 
-        $this->assertSame('1.10.93', $version);
+        $this->assertSame('1.10.94', $version);
         $this->assertStringContainsString("'iicp_version' => 'v{$version}'", $config);
         $this->assertStringContainsString('authoritative PHP directory source', $policy);
         $this->assertMatchesRegularExpression('/do not define\\s+current\\s+source/', $policy);

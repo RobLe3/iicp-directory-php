@@ -11,7 +11,7 @@
         "security": "https://github.com/RobLe3/iicp-directory-php/security/policy"
     },
     "require": {
-        "php": "^8.3",
+        "php": "~8.3.0",
         "laravel/framework": "^13.8",
         "laravel/sanctum": "^4.0",
         "laravel/tinker": "^3.0",
