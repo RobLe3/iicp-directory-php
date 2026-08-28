@@ -256,13 +256,15 @@ class NodeRegistry
         // trustworthy one. A node that does not know its NAT type must NOT be
         // granted public_reachable on declaration alone — it falls through to
         // assertLive() (probe). Only a concrete topology the directory cannot
-        // probe from outside (UPnP/STUN/TURN/external_tunnel) or a direct
+        // probe from outside (UPnP/STUN/TURN) or a direct
         // declaration (RoutableEndpoint already enforces a public host) bypasses
-        // the probe. Without this, an attacker registers nat_type=unknown +
+        // the probe. An external_tunnel URL is only a candidate until the
+        // provider listener exists and the directory's /iicp/health dial-back
+        // succeeds. Without this, an attacker registers nat_type=unknown +
         // transport_method=direct and is marked publicly reachable with zero
         // verification (phantom-node flood).
         return is_string($natType) && $natType !== '' && $natType !== 'none' && $natType !== 'unknown'
-            && is_string($transportMethod) && $transportMethod !== '';
+            && is_string($transportMethod) && $transportMethod !== '' && $transportMethod !== 'external_tunnel';
     }
 
     /** Back-compat shim — older call sites use the old name. */
@@ -340,7 +342,8 @@ class NodeRegistry
      *
      *  - Declared-reachable: operator's nat_type + transport_method block →
      *    trust → public_reachable=true. Covers Tier 0 (direct v4/v6) AND
-     *    Tier 1+ (UPnP / STUN / TURN / external_tunnel). Layer 3 cron
+     *    Tier 1+ (UPnP / STUN / TURN). External tunnels must pass the
+     *    initial /iicp/health dial-back. Layer 3 cron
      *    re-verifies periodically.
      *  - Dev env (local/testing): operator is iterating against their own
      *    mesh. Default true so include_internal=true is not required.
