@@ -52,10 +52,49 @@ class CreditServiceRetryTest extends TestCase
                 && ! array_key_exists('sql', $context));
     }
 
+    public function test_persistent_storage_failure_is_not_retried_and_rolls_back_partial_state(): void
+    {
+        Log::spy();
+        $attempts = 0;
+        $nodeId = (string) Str::uuid();
+        $method = new ReflectionMethod(CreditService::class, 'transactionWithRetry');
+        $method->setAccessible(true);
+
+        try {
+            $method->invoke(app(CreditService::class), 'storage_failure_test', function () use (&$attempts, $nodeId): void {
+                $attempts++;
+                Node::create([
+                    'id' => $nodeId,
+                    'endpoint' => 'https://storage-failure.example.com',
+                    'region' => 'test',
+                    'node_token_hash' => password_hash('storage-failure-token', PASSWORD_BCRYPT),
+                    'max_concurrent' => 1,
+                    'tokens_per_min' => 1000,
+                ]);
+                throw $this->storageFull();
+            });
+            $this->fail('A persistent storage failure must escape the transaction.');
+        } catch (QueryException $exception) {
+            $this->assertSame(1021, (int) ($exception->errorInfo[1] ?? 0));
+        }
+
+        $this->assertSame(1, $attempts, 'Persistent storage failures must not enter the concurrency retry loop.');
+        $this->assertSame(0, Node::where('id', $nodeId)->count(), 'The failed transaction must not retain partial state.');
+        Log::shouldNotHaveReceived('warning');
+    }
+
     private function deadlock(): QueryException
     {
         $previous = new PDOException('synthetic deadlock', 1213);
         $previous->errorInfo = ['40001', 1213, 'synthetic deadlock'];
+
+        return new QueryException('sqlite', 'content must not be logged', [], $previous);
+    }
+
+    private function storageFull(): QueryException
+    {
+        $previous = new PDOException('synthetic storage full', 1021);
+        $previous->errorInfo = ['HY000', 1021, 'synthetic storage full'];
 
         return new QueryException('sqlite', 'content must not be logged', [], $previous);
     }

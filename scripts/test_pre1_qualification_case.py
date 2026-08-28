@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import copy
 import importlib.util
 import unittest
 from pathlib import Path
@@ -23,6 +24,18 @@ class DriverContractTests(unittest.TestCase):
         self.assertEqual(value["component"], module.COMPONENT)
         self.assertEqual(value["scenarios"], sorted(module.SCENARIO_COMMANDS))
         self.assertTrue(value["commands_sha256"].startswith("sha256:"))
+        self.assertTrue(value["semantic_binding"]["exact_assertion_per_scenario"])
+        self.assertEqual(
+            set(value["semantic_binding"]["cell_dimensions_consumed"]),
+            {
+                "runtime",
+                "target",
+                "directory_flavor",
+                "mode",
+                "cell_id",
+                "scenario_id",
+            },
+        )
         self.assertTrue(value["non_authorizing"])
 
     def test_cell_parser_rejects_wrong_component_and_boundary(self) -> None:
@@ -44,9 +57,120 @@ class DriverContractTests(unittest.TestCase):
     def test_referenced_test_files_exist(self) -> None:
         commands = [module.SUPPORT_COMMAND, *module.SCENARIO_COMMANDS.values()]
         for command in commands:
-            for token in command:
-                if token.startswith(("tests/", "scripts/")) and "." in Path(token).name:
-                    self.assertTrue((ROOT / token).is_file(), token)
+            if command[0] == "@php":
+                assertion = command[-1].removeprefix("/::").removesuffix("$/")
+                source = ROOT / command[2]
+                marker = f"function {assertion}("
+            else:
+                dotted = command[3]
+                assertion = dotted.rsplit(".", 1)[-1]
+                source = ROOT / ("/".join(dotted.split(".")[:-2]) + ".py")
+                marker = f"def {assertion}("
+            self.assertTrue(source.is_file(), source)
+            self.assertIn(marker, source.read_text())
+
+    def test_every_scenario_has_one_unique_exact_assertion(self) -> None:
+        self.assertEqual(set(module.SCENARIO_CASES), set(module.SCENARIO_COMMANDS))
+        assertions = [row["assertion"] for row in module.SCENARIO_CASES.values()]
+        self.assertEqual(len(assertions), len(set(assertions)))
+        self.assertNotIn(module.SUPPORT_CASE["assertion"], assertions)
+
+    def test_semantic_context_negative_controls_change_the_binding(self) -> None:
+        base = (
+            "directory-php|php-8.3|linux-aarch64|php|restricted",
+            "rate-limit",
+            "sha256:" + "a" * 64,
+            "sha256:" + "b" * 64,
+            "sha256:" + "c" * 64,
+            "sha256:" + "d" * 64,
+        )
+        expected = module.canonical_sha256(module.semantic_execution_context(*base))
+        mutations = [
+            (base[0].replace("php-8.3", "php-8.4"), *base[1:]),
+            (base[0].replace("linux-aarch64", "linux-x86_64"), *base[1:]),
+            (base[0].replace("|php|", "|rust|"), *base[1:]),
+            (base[0].replace("restricted", "public"), *base[1:]),
+            (base[0], "disk-full", *base[2:]),
+            (*base[:2], "sha256:" + "e" * 64, *base[3:]),
+            (*base[:3], "sha256:" + "e" * 64, *base[4:]),
+            (*base[:4], "sha256:" + "e" * 64, base[5]),
+            (*base[:5], "sha256:" + "e" * 64),
+        ]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation[:2]):
+                try:
+                    observed = module.canonical_sha256(
+                        module.semantic_execution_context(*mutation)
+                    )
+                except ValueError:
+                    continue
+                self.assertNotEqual(observed, expected)
+
+    def test_environment_manifest_requires_offline_package_smoke_and_digest(self) -> None:
+        candidate = "sha256:" + "a" * 64
+        artifacts = "sha256:" + "b" * 64
+        runtime_map = "sha256:" + "c" * 64
+        value = {
+            "schema": "iicp.pre1-qualification-environment.v1",
+            "status": "READY",
+            "target": "linux-aarch64",
+            "bindings": {
+                "candidate_manifest_sha256": candidate,
+                "artifact_materialization_sha256": artifacts,
+                "runtime_map_sha256": runtime_map,
+                "runner_inventory_sha256": "sha256:" + "d" * 64,
+            },
+            "network": {},
+            "source_state": {},
+            "runtimes": {
+                "php-8.3": {
+                    "lock_inputs_sha256": "sha256:" + "e" * 64,
+                    "dependency_cache_sha256": "sha256:" + "f" * 64,
+                    "online_prepare_status": "PASS",
+                    "offline_install_status": "PASS",
+                    "package_artifact_smoke_status": "PASS",
+                    "egress_disabled_during_offline": True,
+                    "empty_volatile_cache_at_start": True,
+                }
+            },
+            "content_free": True,
+            "secrets_present": False,
+            "non_authorizing": True,
+            "environment_sha256": None,
+        }
+        value["environment_sha256"] = module.canonical_sha256(value)
+        self.assertEqual(
+            module._validate_environment_manifest(
+                value,
+                target="linux-aarch64",
+                runtime="php-8.3",
+                candidate_digest=candidate,
+                materialization_digest=artifacts,
+                runtime_map_digest=runtime_map,
+            ),
+            value["environment_sha256"],
+        )
+        for mutation in (
+            ("offline_install_status", "FAIL"),
+            ("package_artifact_smoke_status", "FAIL"),
+            ("egress_disabled_during_offline", False),
+        ):
+            changed = copy.deepcopy(value)
+            changed["runtimes"]["php-8.3"][mutation[0]] = mutation[1]
+            changed["environment_sha256"] = None
+            changed["environment_sha256"] = module.canonical_sha256(changed)
+            with self.assertRaises(ValueError):
+                module._validate_environment_manifest(
+                    changed,
+                    target="linux-aarch64",
+                    runtime="php-8.3",
+                    candidate_digest=candidate,
+                    materialization_digest=artifacts,
+                    runtime_map_digest=runtime_map,
+                )
+
+    def test_php_runtime_is_exactly_bound_to_cell(self) -> None:
+        self.assertEqual(module.expected_runtime_version("php-8.3", {}), "8.3")
 
 
 if __name__ == "__main__":
