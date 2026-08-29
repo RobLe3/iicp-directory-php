@@ -19,6 +19,20 @@ import pre1_artifact_common as common
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENT = "directory-php"
 TARGETS = {"linux-x86_64", "linux-aarch64"}
+COMPOSER_VALIDATE_ARGUMENTS = [
+    "composer",
+    "validate",
+    "--no-interaction",
+    "--no-check-publish",
+]
+LARAVEL_RUNTIME_DIRECTORIES = (
+    Path("bootstrap/cache"),
+    Path("storage/framework/cache/data"),
+    Path("storage/framework/sessions"),
+    Path("storage/framework/testing"),
+    Path("storage/framework/views"),
+    Path("storage/logs"),
+)
 
 
 def describe() -> dict:
@@ -75,7 +89,33 @@ def composer_environment(cache: Path, *, offline: bool = False) -> dict[str, str
     return value
 
 
+def reject_runtime_symlink(path: Path, relative: Path) -> None:
+    if path.is_symlink():
+        raise ValueError(f"Laravel runtime path traverses a symlink: {relative}")
+
+
+def reject_runtime_nondirectory(path: Path, relative: Path) -> None:
+    if path.exists() and not path.is_dir():
+        raise ValueError(f"Laravel runtime path is not a directory: {relative}")
+
+
+def validate_laravel_runtime_path(source: Path, relative: Path) -> None:
+    cursor = source
+    for part in relative.parts:
+        cursor = cursor / part
+        reject_runtime_symlink(cursor, relative)
+        reject_runtime_nondirectory(cursor, relative)
+
+
+def materialize_laravel_runtime_directories(source: Path) -> None:
+    """Create ignored Laravel runtime paths without following unsafe links."""
+    for relative in LARAVEL_RUNTIME_DIRECTORIES:
+        validate_laravel_runtime_path(source, relative)
+        (source / relative).mkdir(parents=True, exist_ok=True)
+
+
 def install(source: Path, cache: Path, *, offline: bool) -> str:
+    materialize_laravel_runtime_directories(source)
     environment = composer_environment(cache, offline=offline)
     common.run(
         [
@@ -115,7 +155,10 @@ def build(destination: Path, requested_target: str | None) -> dict:
     staging.mkdir()
     try:
         root_env = composer_environment(run_root / "root-composer-cache")
-        common.run(["composer", "validate", "--strict", "--no-check-publish"], ROOT, root_env)
+        materialize_laravel_runtime_directories(ROOT)
+        # The exact truschery/kanon compatibility pin is intentional and emits
+        # a Composer publishing warning, so validation must not use --strict.
+        common.run(COMPOSER_VALIDATE_ARGUMENTS, ROOT, root_env)
         common.run(["composer", "install", "--no-interaction", "--no-progress"], ROOT, root_env)
         common.run(["composer", "test"], ROOT, root_env)
 
