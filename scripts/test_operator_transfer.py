@@ -104,11 +104,17 @@ class TransferTests(unittest.TestCase):
             inputs[role] = {"source_commit": transfer.SOURCES[role], "version": version,
                            "archive_sha256": archive_digest, "app_image": "sha256:" + "a" * 64,
                            "web_image": "sha256:" + "b" * 64}
+        for role in transfer.SOURCES:
+            metadata = self.root / (role + "-release") / "RELEASE-MANIFEST.json"
+            metadata.write_text(json.dumps({"commit": transfer.SOURCES[role], "version": inputs[role]["version"],
+                                           "source_archive_sha256": archive_digest}))
+            row = next(r for r in value["files"] if r["name"] == str(metadata.relative_to(self.root)))
+            row.update(size_bytes=metadata.stat().st_size, sha256=transfer.digest(metadata))
         path = self.root / "inputs.json"; path.write_text(json.dumps(inputs))
         row = next(r for r in value["files"] if r["name"] == "inputs.json")
         row.update(size_bytes=path.stat().st_size, sha256=transfer.digest(path))
         manifest = self.root / "transfer.json"; manifest.write_text(json.dumps(value))
-        with patch.object(transfer, "ARCHIVES", {r: archive_digest for r in transfer.SOURCES}), patch.object(transfer, "inspect") as inspect:
+        with patch.object(transfer, "inspect") as inspect:
             self.assertEqual(value, transfer.verify_transfer(self.root, transfer.digest(manifest)))
             inspect.assert_not_called()
 
@@ -120,7 +126,7 @@ class TransferTests(unittest.TestCase):
             if name == "previous-archive":
                 release = self.root / "previous-release"; release.mkdir()
                 (release / "iicp-directory-php-v1.10.93.tar.gz").write_bytes(b"wrong")
-        with patch.object(b, "phase", side_effect=phase) as run, self.assertRaises(ValueError):
+        with patch.object(b, "phase", side_effect=phase) as run, patch.object(transfer, "verify_archive_source", side_effect=transfer.TransferError("source differs")), self.assertRaises(ValueError):
             b.component("previous")
         self.assertEqual(3, run.call_count)
         self.assertEqual([], b.images)
@@ -145,11 +151,40 @@ class TransferTests(unittest.TestCase):
         image = self.root / "images.tar.gz"; image.unlink(); image.symlink_to(self.root / "inputs.json")
         with self.assertRaises(ValueError): transfer.verify_transfer(self.root, transfer.digest(path))
 
+    def test_archive_header_variation_preserves_content_but_content_change_fails(self):
+        import io, tarfile
+        def make(content, stamp):
+            output = io.BytesIO()
+            with tarfile.open(fileobj=output, mode="w:gz") as tar:
+                member = tarfile.TarInfo("root/file"); member.size = len(content); member.mtime = stamp
+                tar.addfile(member, io.BytesIO(content))
+            output.seek(0); return output
+        first, second, wrong = make(b"same", 1), make(b"same", 2), make(b"wrong", 1)
+        self.assertNotEqual(first.getvalue(), second.getvalue())
+        self.assertEqual(transfer.archive_files(first), transfer.archive_files(second))
+        wrong_rows = transfer.archive_files(wrong); first.seek(0)
+        self.assertNotEqual(transfer.archive_files(first), wrong_rows)
+
+    def test_source_comparison_detects_modified_content_without_git_history(self):
+        import io, tarfile
+        def tar_bytes(content):
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode="w") as tar:
+                member = tarfile.TarInfo("root/file"); member.size = len(content)
+                tar.addfile(member, io.BytesIO(content))
+            return stream.getvalue()
+        path = self.root / "source.tar"; path.write_bytes(tar_bytes(b"expected"))
+        def git_run(args, **kwargs): kwargs["stdout"].write(tar_bytes(b"expected"))
+        with patch.object(transfer.subprocess, "run", side_effect=git_run):
+            transfer.verify_archive_source(path, "a" * 40, "1.10.93")
+            path.write_bytes(tar_bytes(b"modified"))
+            with self.assertRaises(transfer.TransferError): transfer.verify_archive_source(path, "a" * 40, "1.10.93")
+
     def test_source_and_archive_pins_match_existing_native_evidence(self):
         report = json.loads((transfer.ROOT / "reports/operator-native-arm64-2026-09-09.json").read_text())
         for role in transfer.SOURCES:
             self.assertEqual(transfer.SOURCES[role], report["inputs"][role]["source_commit"])
-            self.assertEqual(transfer.ARCHIVES[role], report["inputs"][role]["archive_sha256"])
+
 
 
 if __name__ == "__main__":
