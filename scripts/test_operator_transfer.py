@@ -126,7 +126,7 @@ class TransferTests(unittest.TestCase):
             if name == "previous-archive":
                 release = self.root / "previous-release"; release.mkdir()
                 (release / "iicp-directory-php-v1.10.93.tar.gz").write_bytes(b"wrong")
-        with patch.object(b, "phase", side_effect=phase) as run, self.assertRaises(ValueError):
+        with patch.object(b, "phase", side_effect=phase) as run, patch.object(transfer, "verify_archive_source", side_effect=transfer.TransferError("source differs")), self.assertRaises(ValueError):
             b.component("previous")
         self.assertEqual(3, run.call_count)
         self.assertEqual([], b.images)
@@ -164,6 +164,21 @@ class TransferTests(unittest.TestCase):
         self.assertEqual(transfer.archive_files(first), transfer.archive_files(second))
         wrong_rows = transfer.archive_files(wrong); first.seek(0)
         self.assertNotEqual(transfer.archive_files(first), wrong_rows)
+
+    def test_source_comparison_detects_modified_content_without_git_history(self):
+        import io, tarfile
+        def tar_bytes(content):
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode="w") as tar:
+                member = tarfile.TarInfo("root/file"); member.size = len(content)
+                tar.addfile(member, io.BytesIO(content))
+            return stream.getvalue()
+        path = self.root / "source.tar"; path.write_bytes(tar_bytes(b"expected"))
+        def git_run(args, **kwargs): kwargs["stdout"].write(tar_bytes(b"expected"))
+        with patch.object(transfer.subprocess, "run", side_effect=git_run):
+            transfer.verify_archive_source(path, "a" * 40, "1.10.93")
+            path.write_bytes(tar_bytes(b"modified"))
+            with self.assertRaises(transfer.TransferError): transfer.verify_archive_source(path, "a" * 40, "1.10.93")
 
     def test_source_and_archive_pins_match_existing_native_evidence(self):
         report = json.loads((transfer.ROOT / "reports/operator-native-arm64-2026-09-09.json").read_text())
