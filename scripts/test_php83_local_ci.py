@@ -48,6 +48,16 @@ class LocalCiTests(unittest.TestCase):
         import sys
         self.assertEqual(124, ci.capture([sys.executable, "-c", "import time; time.sleep(10)"], self.base/"out", 0.1))
 
+    def test_source_output_refused_before_allocation(self):
+        with self.assertRaises(ValueError):
+            ci.run(["true"], ci.ROOT / "forbidden-ci-output", "a" * 64)
+
+    def test_fifo_refused_without_blocking(self):
+        import os
+        path = self.base / "fifo"
+        os.mkfifo(path)
+        with self.assertRaises(ValueError): ci.read_command(path, "a" * 64)
+
     def exercise(self, failed_phase=None):
         def output(args, **kwargs):
             if "status" in args: return ""

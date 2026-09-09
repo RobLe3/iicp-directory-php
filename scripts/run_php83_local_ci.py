@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import stat
 import subprocess
 import threading
@@ -57,6 +58,13 @@ def capture(args, log, timeout):
         process.kill()
         process.wait()
         code = 124
+    except BaseException:
+        process.kill()
+        process.wait()
+        reader.join(10)
+        if not reader.is_alive():
+            process.stdout.close()
+        raise
     reader.join(10)
     if not reader.is_alive():
         process.stdout.close()
@@ -64,6 +72,8 @@ def capture(args, log, timeout):
 
 
 def run(command, output, command_digest):
+    if output.is_relative_to(ROOT):
+        raise ValueError("output must be outside the source checkout")
     source = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
     if subprocess.check_output(["git", "-C", str(ROOT), "status", "--porcelain"], text=True).strip():
         raise ValueError("clean committed source required")
@@ -109,6 +119,11 @@ def run(command, output, command_digest):
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         receipt["failure_type"] = type(error).__name__
     finally:
+        # Finish bounded cleanup even if the operator repeats the interrupt.
+        if threading.current_thread() is threading.main_thread():
+            previous_handlers = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
+        else:
+            previous_handlers = {}
         cleanup = []
         for label, args in [("container", ["docker", "rm", "--force", name]),
                             ("builder", ["docker", "buildx", "rm", "--force", name]),
@@ -132,6 +147,8 @@ def run(command, output, command_digest):
             shutil.rmtree(context)
         receipt["workspace_returned"] = not clone.exists()
         write_json(output / "result.json", receipt)
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
     return 0 if receipt["status"] == "PASS" else 1
 
 
@@ -142,6 +159,9 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     os.umask(0o077)
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt("local CI interrupted")
+    signal.signal(signal.SIGTERM, interrupted)
     command = read_command(args.command_json, args.command_sha256)
     return run(command, Path(os.path.abspath(args.output)), args.command_sha256)
 
