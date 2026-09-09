@@ -33,35 +33,39 @@ SUPPORT_CASE = CASE_MAP["support"]
 SCENARIO_CASES = CASE_MAP["scenarios"]
 
 
-def _case_command(value: object, label: str) -> list[str]:
-    if not isinstance(value, dict) or set(value) != {"assertion", "command"}:
-        raise RuntimeError(f"invalid exact qualification case: {label}")
-    assertion = value.get("assertion")
-    command = value.get("command")
-    exact_php = (
-        isinstance(command, list)
-        and len(command) == 5
+def _exact_php_command(command: list[str], assertion: str) -> bool:
+    return (
+        len(command) == 5
         and command[:2] == ["@php", "vendor/bin/phpunit"]
         and command[3] == "--filter"
         and command[4] == f"/::{assertion}$/"
         and command[2].startswith("tests/")
         and command[2].endswith(".php")
     )
-    exact_python = (
-        isinstance(command, list)
-        and len(command) == 4
+
+
+def _exact_python_command(command: list[str], assertion: str) -> bool:
+    return (
+        len(command) == 4
         and command[:3] == ["@python", "-m", "unittest"]
-        and isinstance(command[3], str)
         and command[3].endswith(f".{assertion}")
     )
+
+
+def _case_command(value: object, label: str) -> list[str]:
+    if not isinstance(value, dict) or set(value) != {"assertion", "command"}:
+        raise RuntimeError(f"invalid exact qualification case: {label}")
+    assertion = value.get("assertion")
+    command = value.get("command")
     if (
         not isinstance(assertion, str)
         or not assertion
         or not isinstance(command, list)
         or not command
         or not all(isinstance(row, str) and row for row in command)
-        or not (exact_php or exact_python)
     ):
+        raise RuntimeError(f"qualification case is not an exact PHP/Python assertion: {label}")
+    if not (_exact_php_command(command, assertion) or _exact_python_command(command, assertion)):
         raise RuntimeError(f"qualification case is not an exact PHP/Python assertion: {label}")
     return command
 
@@ -297,8 +301,7 @@ def _validate_environment_manifest(
     return str(claimed)
 
 
-def validate_context(cell: str, scenario: str | None) -> tuple[str, dict, dict, dict]:
-    _component, runtime, target, directory, mode = parse_cell(cell)
+def _validate_host_context(cell: str, scenario: str | None, target: str) -> None:
     if detected_target() != target:
         raise ValueError("qualification target differs from the actual host")
     if os.environ.get("IICP_PRE1_CELL_ID") != cell:
@@ -318,6 +321,8 @@ def validate_context(cell: str, scenario: str | None) -> tuple[str, dict, dict, 
     ):
         raise ValueError("qualification HOME is not isolated")
 
+
+def _validate_candidate_context() -> tuple[dict, str]:
     _manifest_path, manifest = load_json_environment("IICP_PRE1_CANDIDATE_MANIFEST")
     candidate_digest = os.environ.get("IICP_PRE1_CANDIDATE_DIGEST")
     if manifest.get("status") != "FROZEN" or manifest.get("immutable") is not True or manifest.get("manifest_sha256") != candidate_digest:
@@ -328,7 +333,10 @@ def validate_context(cell: str, scenario: str | None) -> tuple[str, dict, dict, 
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     if head != component.get("source_commit"):
         raise ValueError("qualification source commit differs from the candidate")
+    return manifest, str(candidate_digest)
 
+
+def _validate_artifact_context(manifest: dict) -> str:
     artifact_root = Path(os.environ.get("IICP_PRE1_ARTIFACT_ROOT", ""))
     component_root = artifact_root / COMPONENT
     if not artifact_root.is_dir() or artifact_root.is_symlink() or not component_root.is_dir() or component_root.is_symlink():
@@ -336,7 +344,10 @@ def validate_context(cell: str, scenario: str | None) -> tuple[str, dict, dict, 
     materialization_digest = artifact_materialization_sha256(manifest, artifact_root)
     if os.environ.get("IICP_PRE1_ARTIFACT_MATERIALIZATION_SHA256") != materialization_digest:
         raise ValueError("qualification artifact materialization binding differs")
+    return materialization_digest
 
+
+def _validate_runtime_context(runtime: str, target: str) -> tuple[dict, str]:
     _runtime_path, runtime_map = load_json_environment("IICP_PRE1_RUNTIME_MAP")
     if runtime_map.get("schema") != "iicp.pre1-runtime-map.v1" or runtime_map.get("target") != target:
         raise ValueError("qualification runtime map target differs")
@@ -349,6 +360,15 @@ def validate_context(cell: str, scenario: str | None) -> tuple[str, dict, dict, 
         or os.environ.get("IICP_PRE1_RUNTIME_MAP_SHA256") != runtime_map_digest
     ):
         raise ValueError("qualification runtime map binding differs")
+    return runtime_row, str(runtime_map_digest)
+
+
+def validate_context(cell: str, scenario: str | None) -> tuple[str, dict, dict, dict]:
+    _component, runtime, target, directory, mode = parse_cell(cell)
+    _validate_host_context(cell, scenario, target)
+    manifest, candidate_digest = _validate_candidate_context()
+    materialization_digest = _validate_artifact_context(manifest)
+    runtime_row, runtime_map_digest = _validate_runtime_context(runtime, target)
     _environment_path, environment = load_json_environment(
         "IICP_PRE1_ENVIRONMENT_MANIFEST"
     )
