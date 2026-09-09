@@ -9,6 +9,8 @@ import re
 import shutil
 import signal
 import subprocess
+import tarfile
+import tempfile
 import time
 import uuid
 
@@ -20,8 +22,10 @@ from run_php83_local_ci import BUILDKIT, capture
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = {"previous": "bffb952919369758428895267efc5a79a2de657e",
            "next": "bf42a21ad49672f79728e89b9322698e631b1434"}
-ARCHIVES = {"previous": "d4003c83ca821923b98ef2f0edab1e4df5044713120695132162af2dab69cc9b",
-            "next": "36d7d60d8185d96181402f2b645a4a0ca26c92578f0646ce21baef9593e04d6c"}
+
+
+class TransferError(ValueError):
+    """Static content-free failure reason safe for a retained receipt."""
 
 
 def digest(path):
@@ -36,6 +40,36 @@ def inspect(*args):
     return subprocess.check_output(list(args), text=True, timeout=30).strip()
 
 
+def archive_files(stream):
+    rows, total = {}, 0
+    try:
+        with tarfile.open(fileobj=stream, mode="r:*") as archive:
+            for member in archive:
+                if member.isdir():
+                    continue
+                total += member.size
+                if not member.isfile() or member.name in rows or total > 64 * 1024**2 or len(rows) >= 5000:
+                    raise TransferError("archive member bounds differ")
+                rows[member.name] = hashlib.sha256(archive.extractfile(member).read()).hexdigest()
+    except tarfile.TarError as error:
+        raise TransferError("invalid source archive") from error
+    return rows
+
+
+def verify_archive_source(archive, source, version):
+    # Compression/header bytes can vary across platforms. Never reuse the old
+    # artifact digest: compare every file to a fresh archive of the pinned Git
+    # source, then bind the actual emitted archive bytes in the transfer.
+    with tempfile.TemporaryFile() as expected:
+        subprocess.run(["git", "-C", str(ROOT), "archive", "--format=tar",
+                        "--prefix=iicp-directory-php-v" + version + "/", source],
+                       stdout=expected, stderr=subprocess.DEVNULL, check=True, timeout=30)
+        expected.seek(0)
+        with archive.open("rb") as actual:
+            if archive_files(actual) != archive_files(expected):
+                raise TransferError("archive content differs from pinned source")
+
+
 def validate_transfer_identity(value):
     fields = {"schema", "platform", "driver_source", "dependencies", "files", "qualification_credit", "non_authorizing"}
     if (not isinstance(value, dict) or set(value) != fields
@@ -44,7 +78,7 @@ def validate_transfer_identity(value):
             or type(value["qualification_credit"]) is not int or value["qualification_credit"] != 0
             or value["non_authorizing"] is not True
             or not re.fullmatch(r"[0-9a-f]{40}", str(value["driver_source"]))):
-        raise ValueError("transfer identity differs")
+        raise TransferError("transfer identity differs")
 
 
 def verify_transfer_files(root, rows):
@@ -54,14 +88,14 @@ def verify_transfer_files(root, rows):
             "iicp-directory-php-v" + version + ".tar.gz", "RELEASE-MANIFEST.json", "SHA256SUMS"))
     if (not isinstance(rows, list) or any(not isinstance(r, dict) or set(r) != {"name", "sha256", "size_bytes"} for r in rows)
             or len(rows) != len(expected) or {r["name"] for r in rows} != expected):
-        raise ValueError("transfer inventory differs")
+        raise TransferError("transfer inventory differs")
     for row in rows:
         path = root / row["name"]
         safe_directory(path.parent)
         if (path.is_symlink() or not path.is_file() or type(row["size_bytes"]) is not int
                 or not 0 < row["size_bytes"] <= 1024**3
                 or path.stat().st_size != row["size_bytes"] or digest(path) != row["sha256"]):
-            raise ValueError("transfer file differs")
+            raise TransferError("transfer file differs")
 
 
 def verify_transfer(root, expected_digest):
@@ -72,13 +106,17 @@ def verify_transfer(root, expected_digest):
     verify_transfer_files(root, rows)
     inputs = admission.read_manifest(root / "inputs.json", next(r["sha256"] for r in rows if r["name"] == "inputs.json"))
     admission.validate(inputs, SOURCES["previous"], SOURCES["next"], ROOT / "compose.operator.yml")
-    for role, expected_archive in ARCHIVES.items():
+    for role, source in SOURCES.items():
         archive = root / (role + "-release") / ("iicp-directory-php-v" + inputs[role]["version"] + ".tar.gz")
-        if inputs[role]["archive_sha256"] != expected_archive or digest(archive) != expected_archive:
-            raise ValueError("source archive identity differs")
+        metadata = root / (role + "-release") / "RELEASE-MANIFEST.json"
+        release = admission.read_manifest(metadata, next(r["sha256"] for r in rows if r["name"] == str(metadata.relative_to(root))))
+        if (digest(archive) != inputs[role]["archive_sha256"]
+                or release.get("commit") != source or release.get("version") != inputs[role]["version"]
+                or release.get("source_archive_sha256") != inputs[role]["archive_sha256"]):
+            raise TransferError("source archive identity differs")
     dependencies = re.findall(r"^\s+image: ([^\s]+@sha256:[0-9a-f]{64})$", (ROOT / "compose.operator.yml").read_text(), re.M)
     if value["dependencies"] != dependencies or len(dependencies) != 2:
-        raise ValueError("dependency identity differs")
+        raise TransferError("dependency identity differs")
     return value
 
 
@@ -87,18 +125,18 @@ def preflight(output):
     parent = safe_directory(output.parent, allow_sticky=True)
     output = (parent / output.name).resolve()
     if parent.stat().st_mode & 0o022 and not parent.stat().st_mode & 0o1000:
-        raise ValueError("private output parent required")
+        raise TransferError("private output parent required")
     if output.exists() or output.is_symlink() or output.is_relative_to(ROOT):
-        raise ValueError("new output outside checkout required")
+        raise TransferError("new output outside checkout required")
     if shutil.disk_usage(parent).free < 8 * 1024**3:
-        raise ValueError("native build needs eight GiB free scratch space")
+        raise TransferError("native build needs eight GiB free scratch space")
     if inspect("docker", "info", "--format", "{{.OSType}}/{{.Architecture}}") not in ("linux/x86_64", "linux/amd64"):
-        raise ValueError("native Linux x86-64 required")
+        raise TransferError("native Linux x86-64 required")
     if inspect("git", "-C", str(ROOT), "status", "--porcelain"):
-        raise ValueError("clean committed driver required")
+        raise TransferError("clean committed driver required")
     for source in SOURCES.values():
         if inspect("git", "-C", str(ROOT), "rev-parse", source + "^{commit}") != source:
-            raise ValueError("source unavailable")
+            raise TransferError("source unavailable")
     return output
 
 
@@ -129,14 +167,13 @@ class Builder:
         self.phase(role + "-checkout", ["git", "-C", str(clone), "checkout", "--detach", source], 60)
         version = (clone / "VERSION").read_text().strip()
         if not re.fullmatch(r"\d+\.\d+\.\d+", version):
-            raise ValueError("invalid version")
+            raise TransferError("invalid version")
         release = self.output / (role + "-release")
         self.phase(role + "-archive", ["env", "IICP_RELEASE_ALLOW_UNTAGGED=1", "bash",
                    str(clone / "scripts/build_release_artifacts.sh"), version, str(release)], 120)
         archive = release / ("iicp-directory-php-v" + version + ".tar.gz")
         archive_digest = digest(archive)
-        if archive_digest != ARCHIVES[role]:
-            raise ValueError("archive differs from rehearsed source")
+        verify_archive_source(archive, source, version)
         extracted = safe_extract(archive, context)
         row = {"source_commit": source, "version": version, "archive_sha256": archive_digest}
         for flavor, dockerfile in (("app", "Dockerfile.operator"), ("web", "Dockerfile.operator-nginx")):
@@ -166,12 +203,12 @@ class Builder:
         dependencies = re.findall(r"^\s+image: ([^\s]+@sha256:[0-9a-f]{64})$",
                                   (ROOT / "compose.operator.yml").read_text(), re.M)
         if len(dependencies) != 2:
-            raise ValueError("dependency contract differs")
+            raise TransferError("dependency contract differs")
         self.phase("export", ["docker", "image", "save", "-o", str(self.output / "images.tar"),
                    *[manifest[r][k] for r in SOURCES for k in ("app_image", "web_image")]], 300)
         self.phase("compress", ["gzip", "-n", str(self.output / "images.tar")], 300)
         if (self.output / "images.tar.gz").stat().st_size > 1024**3:
-            raise ValueError("image transfer exceeds one GiB")
+            raise TransferError("image transfer exceeds one GiB")
         files = [self.output / "images.tar.gz", self.output / "inputs.json"]
         files += sorted(self.output.glob("*-release/*"))
         write_json(self.output / "transfer.json", {
@@ -230,6 +267,7 @@ def main():
         builder.build()
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         builder.receipt["failure_type"] = type(error).__name__
+        builder.receipt["reason"] = str(error) if isinstance(error, TransferError) else type(error).__name__
     finally:
         previous = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
         try:
