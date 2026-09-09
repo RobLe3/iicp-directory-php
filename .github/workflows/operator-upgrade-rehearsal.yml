@@ -5,33 +5,64 @@ on:
     inputs:
       previous_tag:
         description: Previous immutable hardened release tag
-        required: true
+        default: v1.10.93
         type: string
       next_tag:
         description: Next immutable hardened release tag
-        required: true
+        default: v1.10.94
         type: string
+      prepare_native:
+        description: Prepare pinned native x86-64 images for a later isolated rehearsal (no AWS)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   disposable-upgrade-rollback:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - run: python3 -m unittest scripts/test_operator_upgrade_rehearsal.py
+      - run: python3 scripts/test_operator_transfer.py
       - name: Rehearse immutable previous to next
+        if: '!inputs.prepare_native'
         env:
           IICP_OPERATOR_UPGRADE_OUTPUT: ${{ runner.temp }}/operator-upgrade-result.json
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          NEXT_TAG: ${{ inputs.next_tag }}
         run: |
           ./scripts/rehearse_operator_upgrade.sh \
-            --previous-tag '${{ inputs.previous_tag }}' \
-            --next-tag '${{ inputs.next_tag }}'
+            --previous-tag "$PREVIOUS_TAG" \
+            --next-tag "$NEXT_TAG"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: '!inputs.prepare_native'
         with:
           name: operator-upgrade-rehearsal
           path: ${{ runner.temp }}/operator-upgrade-result.json
           retention-days: 14
+      - name: Prepare native image transfer
+        id: transfer
+        if: inputs.prepare_native
+        run: |
+          test "$GITHUB_REF" = refs/heads/main || exit 2
+          output="$(cd "$GITHUB_WORKSPACE/.." && pwd -P)/iicp-php-transfer"
+          printf 'output=%s\n' "$output" >> "$GITHUB_OUTPUT"
+          python3 scripts/build_operator_transfer.py --output "$output"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && inputs.prepare_native && steps.transfer.outputs.output != ''
+        with:
+          name: php-operator-linux-x86_64-${{ github.sha }}
+          path: |
+            ${{ steps.transfer.outputs.output }}/inputs.json
+            ${{ steps.transfer.outputs.output }}/transfer.json
+            ${{ steps.transfer.outputs.output }}/result.json
+            ${{ steps.transfer.outputs.output }}/images.tar.gz
+            ${{ steps.transfer.outputs.output }}/*-release/
+            ${{ steps.transfer.outputs.output }}/*.log
+          retention-days: 3
+          if-no-files-found: error
