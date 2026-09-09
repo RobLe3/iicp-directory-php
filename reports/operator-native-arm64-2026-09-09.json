@@ -1,0 +1,369 @@
+{
+  "attempts": [
+    {
+      "checks": {
+        "backup_sha256": "d2410f807fc817952006659984374c7b20b777563e0bc40724fcfb1835c1ac55",
+        "checks": {
+          "database_restore": true,
+          "next_forward_recovery": true,
+          "next_one_shot_migration": true,
+          "next_readiness": true,
+          "pre_upgrade_backup": true,
+          "previous_clean_start": true,
+          "previous_image_rollback": true,
+          "previous_migration_status": true
+        },
+        "schema": "iicp.directory.operator-upgrade-rehearsal.v1"
+      },
+      "cleanup": "PASS",
+      "exit_code": 0,
+      "interruption": {
+        "checkpoint": "before-migration",
+        "host_failure_simulated": false,
+        "qualification_credit": 0,
+        "schema": "iicp.directory.application-interruption.v1",
+        "services_stopped": true
+      },
+      "persistence": {
+        "fixture-forward": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-previous": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-rollback": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-upgrade": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        }
+      },
+      "phase": "result",
+      "resources_absent": true,
+      "scenario": "before-migration",
+      "status": "PASS",
+      "workspace_returned": true
+    },
+    {
+      "checks": {
+        "backup_sha256": "6096916d3aa524cc6d1ce970bed563d60ea922089c2babce12ee44cb3a10355b",
+        "checks": {
+          "database_restore": true,
+          "next_forward_recovery": true,
+          "next_one_shot_migration": true,
+          "next_readiness": true,
+          "pre_upgrade_backup": true,
+          "previous_clean_start": true,
+          "previous_image_rollback": true,
+          "previous_migration_status": true
+        },
+        "schema": "iicp.directory.operator-upgrade-rehearsal.v1"
+      },
+      "cleanup": "PASS",
+      "exit_code": 0,
+      "persistence": {
+        "fixture-forward": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-previous": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-rollback": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-upgrade": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        }
+      },
+      "phase": "result",
+      "resources_absent": true,
+      "scenario": "normal",
+      "status": "PASS",
+      "workspace_returned": true
+    },
+    {
+      "checks": {
+        "backup_sha256": "2bccfe721583eacd834c608854cebf926ce25ff0109ae7e1d93510cfd8dcb530",
+        "checks": {
+          "database_restore": true,
+          "next_forward_recovery": true,
+          "next_one_shot_migration": true,
+          "next_readiness": true,
+          "pre_upgrade_backup": true,
+          "previous_clean_start": true,
+          "previous_image_rollback": true,
+          "previous_migration_status": true
+        },
+        "schema": "iicp.directory.operator-upgrade-rehearsal.v1"
+      },
+      "cleanup": "PASS",
+      "exit_code": 0,
+      "interruption": {
+        "checkpoint": "after-activation",
+        "host_failure_simulated": false,
+        "qualification_credit": 0,
+        "schema": "iicp.directory.application-interruption.v1",
+        "services_stopped": true
+      },
+      "persistence": {
+        "fixture-forward": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-previous": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-restarted": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-rollback": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-upgrade": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        }
+      },
+      "phase": "result",
+      "resources_absent": true,
+      "scenario": "after-activation",
+      "status": "PASS",
+      "workspace_returned": true
+    },
+    {
+      "cleanup": "PASS",
+      "exit_code": 143,
+      "persistence": {},
+      "phase": "previous_runtime",
+      "reason": "Controller aborted after confirming internal network had no effective host port; readiness was healthy inside web container.",
+      "resources_absent": true,
+      "scenario": "normal",
+      "status": "FAIL",
+      "workspace_returned": false
+    },
+    {
+      "checks": {
+        "backup_sha256": "09da03c0fe2949d995a3ea196e6f494656db2093c555c6d78c7044d89a4e1549",
+        "checks": {
+          "database_restore": true,
+          "next_forward_recovery": true,
+          "next_one_shot_migration": true,
+          "next_readiness": true,
+          "pre_upgrade_backup": true,
+          "previous_clean_start": true,
+          "previous_image_rollback": true,
+          "previous_migration_status": true
+        },
+        "schema": "iicp.directory.operator-upgrade-rehearsal.v1"
+      },
+      "cleanup": "PASS",
+      "exit_code": 0,
+      "interruption": {
+        "checkpoint": "after-migration",
+        "host_failure_simulated": false,
+        "qualification_credit": 0,
+        "schema": "iicp.directory.application-interruption.v1",
+        "services_stopped": true
+      },
+      "persistence": {
+        "fixture-forward": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-previous": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-rollback": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        },
+        "fixture-upgrade": {
+          "qualification_credit": 0,
+          "row_count": 2,
+          "schema": "iicp.directory.synthetic-persistence.v1",
+          "sha256": "4a1747c663e0db2247a4849bce6e98d7a4d3bc1eb698f9ab9264485820aa7c0f",
+          "verified": true
+        }
+      },
+      "phase": "result",
+      "resources_absent": true,
+      "scenario": "after-migration",
+      "status": "PASS",
+      "workspace_returned": true
+    }
+  ],
+  "build": {
+    "builder_removed": true,
+    "buildkit": "moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8",
+    "phases": [
+      {
+        "duration_seconds": 0.94,
+        "exit_code": 0,
+        "phase": "builder-create"
+      },
+      {
+        "duration_seconds": 1.08,
+        "exit_code": 0,
+        "phase": "builder-bootstrap"
+      },
+      {
+        "duration_seconds": 0.39,
+        "exit_code": 0,
+        "phase": "previous-checkout"
+      },
+      {
+        "duration_seconds": 1.43,
+        "exit_code": 0,
+        "phase": "previous-archive"
+      },
+      {
+        "duration_seconds": 110.9,
+        "exit_code": 0,
+        "phase": "previous-app"
+      },
+      {
+        "duration_seconds": 25.38,
+        "exit_code": 0,
+        "phase": "previous-web"
+      },
+      {
+        "duration_seconds": 1.29,
+        "exit_code": 0,
+        "phase": "next-checkout"
+      },
+      {
+        "duration_seconds": 1.23,
+        "exit_code": 0,
+        "phase": "next-archive"
+      },
+      {
+        "duration_seconds": 65.7,
+        "exit_code": 0,
+        "phase": "next-app"
+      },
+      {
+        "duration_seconds": 1.05,
+        "exit_code": 0,
+        "phase": "next-web"
+      }
+    ],
+    "worktree_cleanup": [
+      {
+        "removed": true
+      },
+      {
+        "removed": true
+      }
+    ]
+  },
+  "date": "2026-09-09",
+  "deployment_authorized": false,
+  "driver_sha256": {
+    "scripts/operator_prebuilt_inputs.py": "6070bb7daf74350cd4c8f37830566e14d2b8edc4e1632569aca97de0ded703ba",
+    "scripts/operator_rehearsal_evidence.py": "3a73a956620e29d0f8401cba3b7ec39e3194ca99d5a9a095259ba049726ed3d2",
+    "scripts/rehearse_operator_upgrade.sh": "1738a8d3038ba5957ce813ea7aee801a8c684f6e1a7314c9a00bbce8309ad0ac"
+  },
+  "durations_seconds": {
+    "after-activation": 79.37,
+    "after-migration": 76.0,
+    "before-migration": 82.49,
+    "repaired": 79.18
+  },
+  "evidence_class": "project_rehearsal",
+  "inputs": {
+    "compose_sha256": "af87d29fecb63bfd8f43a665208f5b65639307bb60599698b833ca28f59f956d",
+    "next": {
+      "app_image": "sha256:451d801b78d6b60652dd0310f69c7d7c1c1f0117ac628d99b285b102cb6ed357",
+      "archive_sha256": "36d7d60d8185d96181402f2b645a4a0ca26c92578f0646ce21baef9593e04d6c",
+      "source_commit": "bf42a21ad49672f79728e89b9322698e631b1434",
+      "version": "1.10.94",
+      "web_image": "sha256:faae1846d1b00b3d6378f3b5c2bd83127e6ddce31fd73677b0ee281c22447d5d"
+    },
+    "platform": "linux/arm64",
+    "previous": {
+      "app_image": "sha256:f1f29640e6af84c4ffa6b9fc2b2ea6d3f307fe1af96a62790e98c9f1dc17401a",
+      "archive_sha256": "d4003c83ca821923b98ef2f0edab1e4df5044713120695132162af2dab69cc9b",
+      "source_commit": "bffb952919369758428895267efc5a79a2de657e",
+      "version": "1.10.93",
+      "web_image": "sha256:7be4da88125083adca268813c9e57d5ceb4c2369d8cf62b3a8d63b8722524fbc"
+    },
+    "schema": "iicp.directory.operator-prebuilt-upgrade.v1"
+  },
+  "limitations": [
+    "Synthetic database rows, not registration/discovery API conformance.",
+    "Application-service interruption, not host power loss or controller crash recovery.",
+    "Native arm64 only; no x86-64 or AWS evidence.",
+    "Source/archive/image binding is project-owned, not an independent or bit-reproducible build claim.",
+    "Full local CI refused unsupported host PHP; supported PHP 8.3 CI still required."
+  ],
+  "platform": "linux/arm64",
+  "qualification_credit": 0,
+  "representative": false,
+  "resource_return": {
+    "builder_removed": true,
+    "product_images_absent": true,
+    "session_added_references_and_contexts_removed": true,
+    "worktrees_removed": true
+  },
+  "schema": "iicp.directory.project-runtime-evidence.v1"
+}
