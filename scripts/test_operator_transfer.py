@@ -92,6 +92,39 @@ class TransferTests(unittest.TestCase):
             value["files"].append({"name": name, "size_bytes": 7, "sha256": hashlib.sha256(b"fixture").hexdigest()})
         return value
 
+    def test_valid_transfer_verified_without_docker_or_execution(self):
+        import re
+        value = self.transfer_fixture()
+        compose = transfer.ROOT / "compose.operator.yml"
+        value["dependencies"] = re.findall(r"^\s+image: ([^\s]+@sha256:[0-9a-f]{64})$", compose.read_text(), re.M)
+        inputs = {"schema": transfer.admission.SCHEMA, "platform": "linux/amd64",
+                  "compose_sha256": transfer.digest(compose)}
+        archive_digest = hashlib.sha256(b"fixture").hexdigest()
+        for role, version in (("previous", "1.10.93"), ("next", "1.10.94")):
+            inputs[role] = {"source_commit": transfer.SOURCES[role], "version": version,
+                           "archive_sha256": archive_digest, "app_image": "sha256:" + "a" * 64,
+                           "web_image": "sha256:" + "b" * 64}
+        path = self.root / "inputs.json"; path.write_text(json.dumps(inputs))
+        row = next(r for r in value["files"] if r["name"] == "inputs.json")
+        row.update(size_bytes=path.stat().st_size, sha256=transfer.digest(path))
+        manifest = self.root / "transfer.json"; manifest.write_text(json.dumps(value))
+        with patch.object(transfer, "ARCHIVES", {r: archive_digest for r in transfer.SOURCES}), patch.object(transfer, "inspect") as inspect:
+            self.assertEqual(value, transfer.verify_transfer(self.root, transfer.digest(manifest)))
+            inspect.assert_not_called()
+
+    def test_component_archive_mismatch_stops_before_image_build(self):
+        b = self.builder()
+        def phase(name, command, timeout):
+            if name == "previous-clone":
+                clone = self.root / "previous"; clone.mkdir(); (clone / "VERSION").write_text("1.10.93")
+            if name == "previous-archive":
+                release = self.root / "previous-release"; release.mkdir()
+                (release / "iicp-directory-php-v1.10.93.tar.gz").write_bytes(b"wrong")
+        with patch.object(b, "phase", side_effect=phase) as run, self.assertRaises(ValueError):
+            b.component("previous")
+        self.assertEqual(3, run.call_count)
+        self.assertEqual([], b.images)
+
     def test_transfer_refuses_inventory_traversal_duplicates_and_bad_hash(self):
         value = self.transfer_fixture()
         for failure in ("traversal", "duplicate", "hash", "credit"):
