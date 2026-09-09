@@ -36,9 +36,7 @@ def inspect(*args):
     return subprocess.check_output(list(args), text=True, timeout=30).strip()
 
 
-def verify_transfer(root, expected_digest):
-    root = safe_directory(root)
-    value = admission.read_manifest(root / "transfer.json", expected_digest)
+def validate_transfer_identity(value):
     fields = {"schema", "platform", "driver_source", "dependencies", "files", "qualification_credit", "non_authorizing"}
     if (not isinstance(value, dict) or set(value) != fields
             or value["schema"] != "iicp.directory.operator-transfer.v1"
@@ -47,11 +45,13 @@ def verify_transfer(root, expected_digest):
             or value["non_authorizing"] is not True
             or not re.fullmatch(r"[0-9a-f]{40}", str(value["driver_source"]))):
         raise ValueError("transfer identity differs")
+
+
+def verify_transfer_files(root, rows):
     expected = {"inputs.json", "images.tar.gz"}
     for role, version in (("previous", "1.10.93"), ("next", "1.10.94")):
         expected.update(role + "-release/" + name for name in (
             "iicp-directory-php-v" + version + ".tar.gz", "RELEASE-MANIFEST.json", "SHA256SUMS"))
-    rows = value["files"]
     if (not isinstance(rows, list) or any(not isinstance(r, dict) or set(r) != {"name", "sha256", "size_bytes"} for r in rows)
             or len(rows) != len(expected) or {r["name"] for r in rows} != expected):
         raise ValueError("transfer inventory differs")
@@ -62,6 +62,14 @@ def verify_transfer(root, expected_digest):
                 or not 0 < row["size_bytes"] <= 1024**3
                 or path.stat().st_size != row["size_bytes"] or digest(path) != row["sha256"]):
             raise ValueError("transfer file differs")
+
+
+def verify_transfer(root, expected_digest):
+    root = safe_directory(root)
+    value = admission.read_manifest(root / "transfer.json", expected_digest)
+    validate_transfer_identity(value)
+    rows = value["files"]
+    verify_transfer_files(root, rows)
     inputs = admission.read_manifest(root / "inputs.json", next(r["sha256"] for r in rows if r["name"] == "inputs.json"))
     admission.validate(inputs, SOURCES["previous"], SOURCES["next"], ROOT / "compose.operator.yml")
     for role, expected_archive in ARCHIVES.items():
