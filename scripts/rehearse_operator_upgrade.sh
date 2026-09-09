@@ -15,9 +15,10 @@ MANIFEST_SHA256=""
 PREVIOUS_SOURCE=""
 NEXT_SOURCE=""
 PREBUILT_JSON=""
+INTERRUPT_AT=""
 
 usage() {
-  echo "usage: $0 (--previous-tag TAG --next-tag TAG | --prebuilt-manifest FILE --manifest-sha256 HEX --previous-source SHA --next-source SHA) [--keep]" >&2
+  echo "usage: $0 (--previous-tag TAG --next-tag TAG | --prebuilt-manifest FILE --manifest-sha256 HEX --previous-source SHA --next-source SHA) [--keep] [--interrupt-at before-migration|after-migration|after-activation]" >&2
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -28,6 +29,7 @@ while [[ "$#" -gt 0 ]]; do
     --manifest-sha256) MANIFEST_SHA256="${2:-}"; shift 2 ;;
     --previous-source) PREVIOUS_SOURCE="${2:-}"; shift 2 ;;
     --next-source) NEXT_SOURCE="${2:-}"; shift 2 ;;
+    --interrupt-at) INTERRUPT_AT="${2:-}"; shift 2 ;;
     --keep) KEEP=1; shift ;;
     *) usage; exit 2 ;;
   esac
@@ -47,6 +49,14 @@ else
   git -C "$ROOT" cat-file -e "$PREVIOUS_TAG^{commit}"
   git -C "$ROOT" cat-file -e "$NEXT_TAG^{commit}"
 
+fi
+
+if [[ -n "$INTERRUPT_AT" ]]; then
+  [[ -n "$PREBUILT_MANIFEST" ]] || { usage; exit 2; }
+  case "$INTERRUPT_AT" in
+    before-migration|after-migration|after-activation) ;;
+    *) usage; exit 2 ;;
+  esac
 fi
 
 umask 077
@@ -125,10 +135,17 @@ compose() {
   fi
 }
 
+ready_json() {
+  if [[ -n "$PREBUILT_JSON" ]]; then
+    compose "$1" exec -T web wget -q -T 5 -O - http://127.0.0.1:8080/iicp/ready
+  else
+    curl --fail --silent --max-time 5 "http://127.0.0.1:$IICP_OPERATOR_PORT/iicp/ready"
+  fi
+}
+
 wait_ready() {
   for ((attempt = 0; attempt < 90; attempt++)); do
-    if curl --fail --silent --max-time 5 \
-      "http://127.0.0.1:$IICP_OPERATOR_PORT/iicp/ready" |
+    if ready_json "$1" |
       python3 -c 'import json,sys; assert json.load(sys.stdin) == {"ok": True, "role": "directory", "ready": True}' \
       2>/dev/null; then
       return 0
@@ -142,6 +159,47 @@ container_version() {
   compose "$1" exec -T app cat /app/VERSION | tr -d '\r\n'
 }
 
+# Synthetic state is intentionally separate from Directory API conformance.
+# It proves that upgrade/restore preserves persistent rows, not registration semantics.
+fixture_sql() {
+  compose "$1" exec -T db sh -eu -c \
+    'exec mariadb --batch --skip-column-names -uroot -p"$(cat /run/secrets/db_root_password)" "$MARIADB_DATABASE"'
+}
+verify_fixture() {
+  local digest
+  digest="$(printf '%s\n' "SELECT SHA2(GROUP_CONCAT(CONCAT(id, ':', marker) ORDER BY id SEPARATOR '|'), 256) FROM iicp_rehearsal_fixture;" | fixture_sql "$1" | tr -d '\r\n')"
+  [[ "$digest" == "$FIXTURE_SHA256" ]] || return 1
+  # One exclusive content-free checkpoint survives normal workspace cleanup.
+  python3 - "$TMP.evidence/fixture-$2.json" "$digest" <<'PYFIXTURE'
+import json, os, sys
+path, digest = sys.argv[1:]
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+with os.fdopen(fd, "w") as output:
+    json.dump({"schema": "iicp.directory.synthetic-persistence.v1", "sha256": digest,
+               "row_count": 2, "verified": True, "qualification_credit": 0}, output)
+    output.write("\n")
+PYFIXTURE
+}
+FIXTURE_SHA256="$(python3 -c 'import hashlib; print(hashlib.sha256(b"1:alpha|2:beta").hexdigest())')"
+
+# Declared application-service interruption, not a simulated host power loss.
+interrupt_services() {
+  [[ "$INTERRUPT_AT" == "$1" ]] || return 0
+  compose "$2" stop --timeout 0 web scheduler app >/dev/null
+  local running
+  running="$(compose "$2" ps --status running --quiet app scheduler web)"
+  [[ -z "$running" ]] || return 1
+  python3 - "$TMP.evidence/interruption.json" "$1" <<'PYINTERRUPT'
+import json, os, sys
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+with os.fdopen(fd, "w") as output:
+    json.dump({"schema": "iicp.directory.application-interruption.v1",
+               "checkpoint": sys.argv[2], "services_stopped": True,
+               "host_failure_simulated": False, "qualification_credit": 0}, output)
+    output.write("\n")
+PYINTERRUPT
+}
+
 # Resolve both complete models before any service starts. In prebuilt mode the
 # override removes build instructions and forbids pulling all six services.
 compose "$PREVIOUS_TAG" config --quiet
@@ -151,20 +209,35 @@ phase previous_runtime
 compose "$PREVIOUS_TAG" up -d db
 compose "$PREVIOUS_TAG" --profile tools run --rm migrate
 compose "$PREVIOUS_TAG" up -d app scheduler web
-wait_ready
-[[ "$(container_version "$PREVIOUS_TAG")" == "${PREVIOUS_TAG#v}" ]]
+wait_ready "$PREVIOUS_TAG"
+[[ "$(container_version "$PREVIOUS_TAG")" == "${PREVIOUS_TAG#v}" ]] || exit 1
+fixture_sql "$PREVIOUS_TAG" <<'SQL'
+CREATE TABLE iicp_rehearsal_fixture (id INT PRIMARY KEY, marker VARCHAR(16) NOT NULL);
+INSERT INTO iicp_rehearsal_fixture VALUES (1, 'alpha'), (2, 'beta');
+SQL
+verify_fixture "$PREVIOUS_TAG" previous
+
 
 compose "$PREVIOUS_TAG" exec -T db sh -eu -c \
   'exec mariadb-dump -uroot -p"$(cat /run/secrets/db_root_password)" "$MARIADB_DATABASE"' \
   >"$TMP/pre-upgrade.sql"
-[[ -s "$TMP/pre-upgrade.sql" ]]
+[[ -s "$TMP/pre-upgrade.sql" ]] || exit 1
 backup_sha256="$(sha256sum "$TMP/pre-upgrade.sql" | cut -d' ' -f1)"
 
 phase upgrade
+interrupt_services before-migration "$PREVIOUS_TAG"
 compose "$NEXT_TAG" --profile tools run --rm migrate
+interrupt_services after-migration "$PREVIOUS_TAG"
 compose "$NEXT_TAG" up -d --no-deps --force-recreate app scheduler web
-wait_ready
-[[ "$(container_version "$NEXT_TAG")" == "${NEXT_TAG#v}" ]]
+wait_ready "$NEXT_TAG"
+[[ "$(container_version "$NEXT_TAG")" == "${NEXT_TAG#v}" ]] || exit 1
+verify_fixture "$NEXT_TAG" upgrade
+interrupt_services after-activation "$NEXT_TAG"
+if [[ "$INTERRUPT_AT" == "after-activation" ]]; then
+  compose "$NEXT_TAG" up -d --no-deps app scheduler web
+  wait_ready "$NEXT_TAG"
+  verify_fixture "$NEXT_TAG" restarted
+fi
 
 phase rollback
 compose "$NEXT_TAG" stop web scheduler app >/dev/null
@@ -179,16 +252,18 @@ compose "$NEXT_TAG" exec -T db sh -eu -c \
   <"$TMP/pre-upgrade.sql"
 
 compose "$PREVIOUS_TAG" up -d --no-deps --force-recreate app scheduler web
-wait_ready
-[[ "$(container_version "$PREVIOUS_TAG")" == "${PREVIOUS_TAG#v}" ]]
+wait_ready "$PREVIOUS_TAG"
+[[ "$(container_version "$PREVIOUS_TAG")" == "${PREVIOUS_TAG#v}" ]] || exit 1
+verify_fixture "$PREVIOUS_TAG" rollback
 compose "$PREVIOUS_TAG" --profile tools run --rm \
   migrate php artisan migrate:status --no-interaction >/dev/null
 
 phase forward_recovery
 compose "$NEXT_TAG" --profile tools run --rm migrate
 compose "$NEXT_TAG" up -d --no-deps --force-recreate app scheduler web
-wait_ready
-[[ "$(container_version "$NEXT_TAG")" == "${NEXT_TAG#v}" ]]
+wait_ready "$NEXT_TAG"
+[[ "$(container_version "$NEXT_TAG")" == "${NEXT_TAG#v}" ]] || exit 1
+verify_fixture "$NEXT_TAG" forward
 
 phase result
 python3 - "$TMP/result.json" "$STARTED_AT" "$PREVIOUS_TAG" "$NEXT_TAG" "$backup_sha256" <<'PY'

@@ -89,6 +89,7 @@ class PrebuiltTests(unittest.TestCase):
         text = path.read_text()
         self.assertEqual(4, text.count("build: !reset null"))
         self.assertEqual(6, text.count("pull_policy: never"))
+        self.assertIn("networks:\n  default:\n    internal: true", text)
         self.assertEqual(0o600, path.stat().st_mode & 0o777)
         with self.assertRaises(FileExistsError): inputs.write_overrides(self.base, self.value)
 
@@ -112,7 +113,7 @@ class PrebuiltTests(unittest.TestCase):
         self.assertEqual(before, set(self.base.iterdir()))
         self.assertNotIn(str(self.path), result.stderr)
 
-    def fake_shell(self, fail=""):
+    def fake_shell(self, fail="", interrupt=""):
         binary = self.base / "bin"; binary.mkdir()
         docker = binary / "docker"
         docker.write_text('''#!/usr/bin/env python3
@@ -134,8 +135,16 @@ elif args[0] in ("container","volume","network"): pass
 elif args[0]=="compose":
     tag=os.environ.get("IICP_IMAGE_TAG","")
     if "down" in args: sys.exit(55 if os.environ.get("FAKE_FAIL")=="cleanup" else 0)
-    if "cat" in args and "/app/VERSION" in args: print(tag[1:])
+    if "--status" in args and os.environ.get("FAKE_FAIL")=="still-running": print("synthetic-container")
+    if "wget" in args: print(json.dumps({"ok":True,"role":"directory","ready":True}))
+    if "cat" in args and "/app/VERSION" in args: print("0.0.0" if os.environ.get("FAKE_FAIL")=="version" else tag[1:])
     if "mariadb-dump" in " ".join(args): print("synthetic-backup")
+    if "--batch --skip-column-names" in " ".join(args):
+        sql=sys.stdin.read()
+        if sql.startswith("SELECT SHA2"):
+            import hashlib
+            text="1:alpha|2:beta" if os.environ.get("FAKE_FAIL")!="persistence" else "corrupt"
+            print(hashlib.sha256(text.encode()).hexdigest())
     if "run" in args and tag=="v1.10.94" and os.environ.get("FAKE_FAIL")=="migration": sys.exit(42)
 else: sys.exit(99)
 ''')
@@ -146,7 +155,8 @@ else: sys.exit(99)
                "IICP_OPERATOR_UPGRADE_DIR": str(self.base), "IICP_OPERATOR_UPGRADE_PROJECT": "iicp-operator-upgrade-test"}
         args = ["bash", str(inputs.ROOT/"scripts/rehearse_operator_upgrade.sh"), "--prebuilt-manifest", str(self.path),
                 "--manifest-sha256", self.digest, "--previous-source", "a"*40, "--next-source", "b"*40]
-        result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=30)
+        if interrupt: args.extend(["--interrupt-at", interrupt])
+        result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
         evidence = next(self.base.glob("*.evidence"))
         calls = [json.loads(line) for line in (self.base/"commands.jsonl").read_text().splitlines()]
         self.assertFalse(any(call[0] in ("build", "pull", "run") for call in calls))
@@ -161,6 +171,48 @@ else: sys.exit(99)
         active = [c for c in calls if c[0]=="compose" and "down" not in c]
         self.assertTrue(all(c.count("-f")==2 for c in active))
         self.assertEqual(0, closure["qualification_credit"])
+        evidence = next(self.base.glob("*.evidence"))
+        for stage in ("previous", "upgrade", "rollback", "forward"):
+            value = json.loads((evidence / ("fixture-"+stage+".json")).read_text())
+            self.assertTrue(value["verified"])
+            self.assertEqual(hashlib.sha256(b"1:alpha|2:beta").hexdigest(), value["sha256"])
+
+    def test_declared_application_interruption_checkpoints(self):
+        for checkpoint in ("before-migration", "after-migration", "after-activation"):
+            with self.subTest(checkpoint=checkpoint):
+                # Each attempt owns a separate temporary environment.
+                case = PrebuiltTests(); case.setUp()
+                try:
+                    result, closure, calls = case.fake_shell(interrupt=checkpoint)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual("PASS", closure["status"])
+                    evidence = next(case.base.glob("*.evidence"))
+                    value = json.loads((evidence/"interruption.json").read_text())
+                    self.assertEqual(checkpoint, value["checkpoint"])
+                    self.assertTrue(value["services_stopped"])
+                    self.assertTrue(any("--status" in c and "running" in c for c in calls))
+                finally: case.doCleanups()
+
+    def test_failed_interruption_observation_cannot_pass(self):
+        result, closure, _ = self.fake_shell("still-running", "before-migration")
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("upgrade", closure["phase"])
+        self.assertEqual("FAIL", closure["status"])
+        evidence = next(self.base.glob("*.evidence"))
+        self.assertFalse((evidence/"interruption.json").exists())
+
+    def test_wrong_runtime_version_cannot_pass(self):
+        result, closure, _ = self.fake_shell("version")
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("previous_runtime", closure["phase"])
+        self.assertEqual("FAIL", closure["status"])
+
+    def test_persistent_state_mismatch_fails_before_upgrade(self):
+        result, closure, _ = self.fake_shell("persistence")
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("previous_runtime", closure["phase"])
+        self.assertEqual("PASS", closure["cleanup"])
+        self.assertEqual("FAIL", closure["status"])
 
     def test_migration_failure_preserved_before_checked_cleanup(self):
         result, closure, _ = self.fake_shell("migration")

@@ -117,6 +117,7 @@ def write_overrides(work, value):
             lines.extend([f"  {service}:", f'    image: "{image}"', "    build: !reset null", "    pull_policy: never"])
         for service in ("db", "secret-init"):
             lines.extend([f"  {service}:", "    pull_policy: never"])
+        lines.extend(["networks:", "  default:", "    internal: true"])
         path = work / ("v" + component["version"] + ".yml")
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as output:
