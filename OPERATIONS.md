@@ -237,3 +237,26 @@ The runner uses a dedicated builder/cache and two sequential bounded containers.
 It removes only its named resources and checks container/image/cache absence.
 Success returns the private clone; failure retains it and bounded logs for diagnosis.
 Do not publish those private logs or the clone without reviewing their contents.
+
+## Native operator-image transfer preparation
+
+For the bounded Linux AWS rehearsal, the existing manual
+`operator-upgrade-rehearsal.yml` workflow accepts `prepare_native=true` on reviewed
+main. It builds the same previous/candidate source pair already rehearsed on
+arm64, but on native x86-64. It emits `inputs.json`, `transfer.json`, release
+archives and `images.tar.gz`, with source/archive/image bindings. This is build
+preparation, not a runtime pass, publication or AWS allocation. No private
+repository is required.
+
+The transfer archive is retained for three days; download and re-hash every
+manifest entry before expiry. Admission still requires the caller-pinned input
+manifest, native host, image IDs and provenance labels. Runtime dependency
+images remain digest-pinned and are fetched during guest bootstrap before
+execution isolation; Docker image export/import does not preserve repository
+digests. Never replace these checks with mutable image tags.
+
+The builder requires eight GiB of available scratch space, caps each command
+and log, records phases, and removes only its randomly named builder/cache,
+image tags and successful build contexts. It retains source archives and the
+bounded image transfer for the next run. A failed build or cleanup remains FAIL
+and keeps diagnostics. It does not perform broad Docker cleanup.
