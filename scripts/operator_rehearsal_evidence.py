@@ -38,10 +38,10 @@ def write_json(path, value):
         os.fsync(output.fileno())
 
 
-def command(args):
+def command(args, *, env=None):
     # No raw command output, process environment or database contents enter evidence.
     try:
-        result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60, env=env)
         return result.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -153,10 +153,22 @@ def remove_worktrees(work, root):
     return success
 
 
-def cleanup_resources(work, project, mode, root):
+def cleanup_environment(work):
+    # Compose down interpolates the full model even when exec did not need it.
+    # Reconstruct only this helper's fixed disposable settings, never host secrets.
+    return {**os.environ, "IICP_APP_URL": "http://127.0.0.1", "IICP_DB_DATABASE": "iicp_directory",
+            "IICP_DB_USERNAME": "iicp_operator", "IICP_APP_KEY_FILE": str(work / "app_key"),
+            "IICP_DB_PASSWORD_FILE": str(work / "db_password"),
+            "IICP_DB_ROOT_PASSWORD_FILE": str(work / "db_root_password")}
+
+
+def cleanup_resources(work, project, mode, root, details=None):
     cleanup = command(["docker", "compose", "-p", project, "-f", str(root / "compose.operator.yml"),
-                       "down", "--volumes", "--remove-orphans"])
-    cleanup = resources_absent(project) and cleanup
+                       "down", "--volumes", "--remove-orphans"], env=cleanup_environment(work))
+    absent = resources_absent(project)
+    if details is not None:
+        details.update(compose_down=cleanup, resources_absent=absent)
+    cleanup = absent and cleanup
     if mode == "upgrade":
         cleanup = remove_worktrees(work, root) and cleanup
     return cleanup
@@ -196,9 +208,10 @@ def finish(work, project, mode, root, exit_code, keep=False, continuation=False)
     record, summary = workload_record(work, mode, exit_code)
     captured = capture_workload(evidence, record, summary)
     # Capture precedes teardown; export failure must not strand compute.
-    cleanup = False if keep else cleanup_resources(work, project, mode, root)
+    details = {}
+    cleanup = False if keep else cleanup_resources(work, project, mode, root, details)
     cleanup_state = cleanup_status(keep, cleanup)
-    record.update(evidence_captured=captured, cleanup=cleanup_state)
+    record.update(evidence_captured=captured, cleanup=cleanup_state, cleanup_checks=details)
     clean = record["workload_exit_code"] == 0 and cleanup and captured
     clean = save_closure(evidence, work, record, clean)
     print(json.dumps(record, sort_keys=True))

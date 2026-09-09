@@ -32,7 +32,7 @@ class EvidenceTests(unittest.TestCase):
         self.temp.cleanup()
 
     def finish(self, code, cleanup=True, absent=True, keep=False):
-        def run(_):
+        def run(_, **kwargs):
             self.assertTrue((self.output / "workload.json").exists())
             return cleanup
         with patch.object(evidence, "command", side_effect=run), \
@@ -80,6 +80,17 @@ class EvidenceTests(unittest.TestCase):
         link.symlink_to(target)
         with self.assertRaises(FileExistsError): evidence.write_json(link, {})
         self.assertEqual("keep", target.read_text())
+
+    def test_cleanup_reconstructs_disposable_compose_environment(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch.object(evidence, "command", return_value=True) as run, \
+             patch.object(evidence, "resources_absent", return_value=True):
+            self.assertTrue(evidence.cleanup_resources(self.work, self.project, "stack", self.base))
+        env = run.call_args.kwargs["env"]
+        self.assertEqual("http://127.0.0.1", env["IICP_APP_URL"])
+        self.assertEqual("iicp_directory", env["IICP_DB_DATABASE"])
+        self.assertEqual("iicp_operator", env["IICP_DB_USERNAME"])
+        self.assertEqual(str(self.work / "db_root_password"), env["IICP_DB_ROOT_PASSWORD_FILE"])
 
     def test_command_timeout_fails_closed(self):
         with patch.object(evidence.subprocess, "run", side_effect=subprocess.TimeoutExpired("docker", 60)):

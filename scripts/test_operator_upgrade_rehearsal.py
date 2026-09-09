@@ -42,7 +42,8 @@ class OperatorUpgradeRehearsalTests(unittest.TestCase):
         helper = Path(__file__).with_name("operator_rehearsal_evidence.py").read_text()
         self.assertIn('"down", "--volumes", "--remove-orphans"', helper)
         self.assertIn('"worktree", "remove", "--force"', helper)
-        self.assertIn('resources_absent(project) and cleanup', helper)
+        self.assertIn('absent = resources_absent(project)', helper)
+        self.assertIn('cleanup = absent and cleanup', helper)
         self.assertIn('trap cleanup EXIT', self.script)
         self.assertIn('set -euo pipefail', self.script)
 

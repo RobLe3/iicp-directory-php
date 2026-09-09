@@ -38,6 +38,9 @@ if [[ "$rehearsal_code" -ne 3 ]]; then
 fi
 WORK="$(python3 "$ROOT/scripts/operator_rehearsal_evidence.py" retained --base "$TMP")"
 PROJECT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' "$WORK/owner.json")"
+export IICP_APP_URL="http://127.0.0.1"
+export IICP_DB_DATABASE="iicp_directory"
+export IICP_DB_USERNAME="iicp_operator"
 export IICP_APP_KEY_FILE="$WORK/app_key"
 export IICP_DB_PASSWORD_FILE="$WORK/db_password"
 export IICP_DB_ROOT_PASSWORD_FILE="$WORK/db_root_password"
