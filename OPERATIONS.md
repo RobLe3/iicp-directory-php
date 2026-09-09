@@ -211,3 +211,29 @@ Use a fresh attempt for each checkpoint; do not modify a running attempt.
 Version and persistence assertions explicitly return failure instead of depending
 on `set -e` handling of `[[ ... ]]` in macOS Bash 3.2. A mismatched runtime or checksum
 must never produce a passing receipt.
+
+### Disposable PHP 8.3 local CI
+
+When host PHP is unsupported, `scripts/run_php83_local_ci.py` runs a reviewed
+command argv in a private clone using the pinned `Dockerfile.ci` environment.
+Pass a JSON array of command arguments, its SHA-256, and a new output directory:
+
+```sh
+python3 scripts/run_php83_local_ci.py \
+  --command-json /absolute/private/command.json \
+  --command-sha256 <sha256-of-command-file> \
+  --output /absolute/private/new-attempt
+```
+
+Use the canonical local CI command from the ecosystem CI policy; do not substitute
+a smaller command and claim the full gate. The source must be committed and clean.
+The command digest and exact source/image identity are recorded in `result.json`.
+Dependencies are installed from the Composer lock without ignoring platform
+requirements. The workload has network access for the canonical advisory audit;
+this lane does not claim an offline install, independent evidence or qualification.
+No host credentials, Docker socket or host source tree are mounted into the workload.
+
+The runner uses a dedicated builder/cache and two sequential bounded containers.
+It removes only its named resources and checks container/image/cache absence.
+Success returns the private clone; failure retains it and bounded logs for diagnosis.
+Do not publish those private logs or the clone without reviewing their contents.
