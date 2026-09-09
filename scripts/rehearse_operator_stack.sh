@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT/compose.operator.yml"
-TMP="${IICP_OPERATOR_REHEARSAL_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/iicp-operator-rehearsal.XXXXXX")}"
+BASE="${IICP_OPERATOR_REHEARSAL_DIR:-$(python3 -c 'import tempfile,pathlib; print(pathlib.Path(tempfile.gettempdir()).resolve())')}"
 PROJECT="${IICP_OPERATOR_PROJECT:-iicp-operator-rehearsal-$$}"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 KEEP=0
@@ -17,15 +17,25 @@ for arg in "$@"; do
   esac
 done
 
+umask 077
+PROJECT="${PROJECT}-$(python3 -c 'import secrets; print(secrets.token_hex(6))')"
+TMP="$(python3 "$ROOT/scripts/operator_rehearsal_evidence.py" prepare --base "$BASE" --project "$PROJECT" --mode stack)"
 cleanup() {
-  if [[ "$KEEP" -eq 0 ]]; then
-    docker compose -p "$PROJECT" -f "$COMPOSE_FILE" down --volumes --remove-orphans >/dev/null 2>&1 || true
-    rm -rf -- "$TMP"
-  else
-    echo "kept rehearsal project $PROJECT and evidence $TMP" >&2
-  fi
+  local code=$?
+  trap - EXIT INT TERM
+  local keep_arg=""
+  [[ "$KEEP" -eq 0 ]] || keep_arg="--keep"
+  set +e
+  python3 "$ROOT/scripts/operator_rehearsal_evidence.py" finish \
+    --work "$TMP" --project "$PROJECT" --mode stack --root "$ROOT" \
+    --exit-code "$code" ${keep_arg:+"$keep_arg"}
+  exit $?
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+phase() { printf '%s\n' "$1" >"$TMP/phase"; }
+phase prepare
 
 openssl rand -base64 32 | sed 's/^/base64:/' >"$TMP/app_key"
 openssl rand -hex 32 >"$TMP/db_password"
@@ -51,10 +61,12 @@ PY
 
 compose=(docker compose -p "$PROJECT" -f "$COMPOSE_FILE")
 
+phase build
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   "${compose[@]}" build
 fi
 
+phase bootstrap
 "${compose[@]}" up -d db
 "${compose[@]}" --profile tools run --rm migrate
 "${compose[@]}" up -d app scheduler web
@@ -72,6 +84,7 @@ wait_ready() {
   done
   return 1
 }
+phase readiness
 wait_ready
 
 curl --fail --silent --max-time 5 \
@@ -79,6 +92,7 @@ curl --fail --silent --max-time 5 \
   python3 -c 'import json,sys; assert json.load(sys.stdin) == {"ok": True, "role": "directory"}'
 
 # A failed candidate configuration must not replace the running application.
+phase invalid_candidate
 set +e
 "${compose[@]}" run --rm -e APP_DEBUG=true app php -r 'exit(0);' >/dev/null 2>&1
 bad_candidate_status=$?
@@ -89,6 +103,7 @@ wait_ready 5
 # Rehearse database-unavailable behavior and recovery. Readiness is fixed and
 # content-free; it may return 503 or the proxy may return 504 while the socket
 # timeout elapses, but it must never return a false 200.
+phase database_recovery
 "${compose[@]}" stop db >/dev/null
 status="$(curl --silent --output "$TMP/unready.json" --write-out '%{http_code}' \
   --max-time 35 "http://127.0.0.1:$IICP_OPERATOR_PORT/iicp/ready" || true)"
@@ -98,6 +113,7 @@ wait_ready
 
 # Create a content-free backup, restore it into a new disposable database, and
 # prove the restored schema is current using the same one-shot operator image.
+phase backup_restore
 "${compose[@]}" exec -T db sh -eu -c \
   'exec mariadb-dump -uroot -p"$(cat /run/secrets/db_root_password)" "$MARIADB_DATABASE"' \
   >"$TMP/backup.sql"
@@ -116,6 +132,7 @@ backup_sha256="$(sha256sum "$TMP/backup.sql" | cut -d' ' -f1)"
   -e DB_DATABASE=iicp_restore migrate \
   php artisan migrate:status --no-interaction >/dev/null
 
+phase result
 python3 - "$TMP/result.json" "$STARTED_AT" "$backup_sha256" <<'PY'
 import json, sys
 from datetime import datetime, timezone
@@ -147,6 +164,6 @@ print(json.dumps(result, indent=2, sort_keys=True))
 PY
 
 if [[ -n "${IICP_OPERATOR_REHEARSAL_OUTPUT:-}" ]]; then
-  cp "$TMP/result.json" "$IICP_OPERATOR_REHEARSAL_OUTPUT"
-  chmod 0600 "$IICP_OPERATOR_REHEARSAL_OUTPUT"
+  python3 "$ROOT/scripts/operator_rehearsal_evidence.py" export --work "$TMP" \
+    --project "$PROJECT" --mode stack --output "$IICP_OPERATOR_REHEARSAL_OUTPUT"
 fi
