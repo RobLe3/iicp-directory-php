@@ -38,8 +38,12 @@ class OperatorUpgradeRehearsalTests(unittest.TestCase):
 
     def test_interrupted_upgrade_cleanup_removes_disposable_authority(self) -> None:
         cleanup = self.script.split("cleanup() {", 1)[1].split("}", 1)[0]
-        self.assertIn("down --volumes --remove-orphans", cleanup)
-        self.assertIn('git -C "$ROOT" worktree remove --force "$checkout"', cleanup)
+        self.assertIn('operator_rehearsal_evidence.py" finish', cleanup)
+        helper = Path(__file__).with_name("operator_rehearsal_evidence.py").read_text()
+        self.assertIn('"down", "--volumes", "--remove-orphans"', helper)
+        self.assertIn('"worktree", "remove", "--force"', helper)
+        self.assertIn('absent = resources_absent(project)', helper)
+        self.assertIn('cleanup = absent and cleanup', helper)
         self.assertIn('trap cleanup EXIT', self.script)
         self.assertIn('set -euo pipefail', self.script)
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT/compose.operator.yml"
-TMP="${IICP_OPERATOR_UPGRADE_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/iicp-operator-upgrade.XXXXXX")}"
+BASE="${IICP_OPERATOR_UPGRADE_DIR:-$(python3 -c 'import tempfile,pathlib; print(pathlib.Path(tempfile.gettempdir()).resolve())')}"
 PROJECT="${IICP_OPERATOR_UPGRADE_PROJECT:-iicp-operator-upgrade-$$}"
 OUTPUT="${IICP_OPERATOR_UPGRADE_OUTPUT:-}"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -30,22 +30,27 @@ done
 git -C "$ROOT" cat-file -e "$PREVIOUS_TAG^{commit}"
 git -C "$ROOT" cat-file -e "$NEXT_TAG^{commit}"
 
+umask 077
+PROJECT="${PROJECT}-$(python3 -c 'import secrets; print(secrets.token_hex(6))')"
+TMP="$(python3 "$ROOT/scripts/operator_rehearsal_evidence.py" prepare --base "$BASE" --project "$PROJECT" --mode upgrade)"
 cleanup() {
-  IICP_IMAGE_TAG="$NEXT_TAG" docker compose -p "$PROJECT" -f "$COMPOSE_FILE" \
-    down --volumes --remove-orphans >/dev/null 2>&1 || true
-  for checkout in "$TMP/previous" "$TMP/next"; do
-    if [[ -e "$checkout/.git" ]]; then
-      git -C "$ROOT" worktree remove --force "$checkout" >/dev/null 2>&1 || true
-    fi
-  done
-  if [[ "$KEEP" -eq 0 ]]; then
-    rm -rf -- "$TMP"
-  else
-    echo "kept disposable upgrade evidence at $TMP" >&2
-  fi
+  local code=$?
+  trap - EXIT INT TERM
+  local keep_arg=""
+  [[ "$KEEP" -eq 0 ]] || keep_arg="--keep"
+  set +e
+  IICP_IMAGE_TAG="$NEXT_TAG" python3 "$ROOT/scripts/operator_rehearsal_evidence.py" finish \
+    --work "$TMP" --project "$PROJECT" --mode upgrade --root "$ROOT" \
+    --exit-code "$code" ${keep_arg:+"$keep_arg"}
+  exit $?
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+phase() { printf '%s\n' "$1" >"$TMP/phase"; }
+phase prepare
 
+phase build
 git -C "$ROOT" worktree add --detach "$TMP/previous" "$PREVIOUS_TAG" >/dev/null
 git -C "$ROOT" worktree add --detach "$TMP/next" "$NEXT_TAG" >/dev/null
 
@@ -101,6 +106,7 @@ container_version() {
   compose "$1" exec -T app cat /app/VERSION | tr -d '\r\n'
 }
 
+phase previous_runtime
 compose "$PREVIOUS_TAG" up -d db
 compose "$PREVIOUS_TAG" --profile tools run --rm migrate
 compose "$PREVIOUS_TAG" up -d app scheduler web
@@ -113,11 +119,13 @@ compose "$PREVIOUS_TAG" exec -T db sh -eu -c \
 [[ -s "$TMP/pre-upgrade.sql" ]]
 backup_sha256="$(sha256sum "$TMP/pre-upgrade.sql" | cut -d' ' -f1)"
 
+phase upgrade
 compose "$NEXT_TAG" --profile tools run --rm migrate
 compose "$NEXT_TAG" up -d --no-deps --force-recreate app scheduler web
 wait_ready
 [[ "$(container_version "$NEXT_TAG")" == "${NEXT_TAG#v}" ]]
 
+phase rollback
 compose "$NEXT_TAG" stop web scheduler app >/dev/null
 compose "$NEXT_TAG" exec -T db sh -eu -c \
   'mariadb -uroot -p"$(cat /run/secrets/db_root_password)" -e "
@@ -140,6 +148,7 @@ compose "$NEXT_TAG" up -d --no-deps --force-recreate app scheduler web
 wait_ready
 [[ "$(container_version "$NEXT_TAG")" == "${NEXT_TAG#v}" ]]
 
+phase result
 python3 - "$TMP/result.json" "$STARTED_AT" "$PREVIOUS_TAG" "$NEXT_TAG" "$backup_sha256" <<'PY'
 import json
 import sys
@@ -174,6 +183,6 @@ print(json.dumps(result, indent=2, sort_keys=True))
 PY
 
 if [[ -n "$OUTPUT" ]]; then
-  cp "$TMP/result.json" "$OUTPUT"
-  chmod 0600 "$OUTPUT"
+  python3 "$ROOT/scripts/operator_rehearsal_evidence.py" export --work "$TMP" \
+    --project "$PROJECT" --mode upgrade --output "$OUTPUT"
 fi

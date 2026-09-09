@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(
@@ -171,6 +175,138 @@ class DriverContractTests(unittest.TestCase):
 
     def test_php_runtime_is_exactly_bound_to_cell(self) -> None:
         self.assertEqual(module.expected_runtime_version("php-8.3", {}), "8.3")
+
+    def test_case_command_rejects_malformed_and_broad_commands(self) -> None:
+        for command in (
+            None, [], ["@php"], ["@python", "-m", "unittest", "suite"],
+            ["@php", "vendor/bin/phpunit", None, "--filter", "/::test_one$/"],
+            ["@php", "vendor/bin/phpunit", "tests/One.php", "--filter", "test_one"],
+            ["@php", "vendor/bin/phpunit", "outside.php", "--filter", "/::test_one$/"],
+            ["@php", "vendor/bin/phpunit", "tests/One.php", "--filter", "/::test_other$/"],
+        ):
+            with self.subTest(command=command), self.assertRaises(RuntimeError):
+                module._case_command({"assertion": "test_one", "command": command}, "negative")
+
+
+class ContextBoundaryTests(unittest.TestCase):
+    """Exercise the complete context chain, not only individual predicates."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="iicp-php-context-")
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name).resolve()
+        self.cell = "directory-php|php-8.3|linux-x86_64|php|restricted"
+        artifacts = root / "artifacts"
+        component = artifacts / module.COMPONENT
+        component.mkdir(parents=True)
+        for name in ("package-manifest.json", "build-receipt.json"):
+            (component / name).write_text("{}")
+        self.manifest = {
+            "status": "FROZEN", "immutable": True,
+            "manifest_sha256": "sha256:" + "a" * 64,
+            "components": [{
+                "id": module.COMPONENT, "state": "BUILT", "source_commit": "b" * 40,
+                "artifacts": [],
+                "package_manifest_sha256": module.file_sha256(component / "package-manifest.json"),
+                "build_receipt_sha256": module.file_sha256(component / "build-receipt.json"),
+            }],
+        }
+        self.runtime = {
+            "schema": "iicp.pre1-runtime-map.v1", "target": "linux-x86_64",
+            "runtimes": {"php-8.3": {}}, "map_sha256": "sha256:" + "c" * 64,
+        }
+        digest = module.artifact_materialization_sha256(self.manifest, artifacts)
+        bindings = {
+            "candidate_manifest_sha256": self.manifest["manifest_sha256"],
+            "artifact_materialization_sha256": digest,
+            "runtime_map_sha256": self.runtime["map_sha256"],
+        }
+        self.environment = {
+            "schema": "iicp.pre1-qualification-environment.v1", "status": "READY",
+            "target": "linux-x86_64", "content_free": True,
+            "secrets_present": False, "non_authorizing": True, "bindings": bindings,
+            "runtimes": {"php-8.3": {
+                "online_prepare_status": "PASS", "offline_install_status": "PASS",
+                "package_artifact_smoke_status": "PASS",
+                "egress_disabled_during_offline": True, "empty_volatile_cache_at_start": True,
+            }},
+            "environment_sha256": None,
+        }
+        self.environment["environment_sha256"] = module.canonical_sha256(self.environment)
+        self.context = module.semantic_execution_context(
+            self.cell, None, bindings["candidate_manifest_sha256"], digest,
+            bindings["runtime_map_sha256"], self.environment["environment_sha256"],
+        )
+        env = {
+            "HOME": str(root), "IICP_HOME": str(root / "iicp"),
+            "IICP_PRE1_CELL_ID": self.cell, "IICP_PRE1_SCENARIO_ID": "support",
+            "IICP_PRE1_NETWORK_POLICY": "isolated-fixtures-only",
+            "IICP_PRE1_EVIDENCE_POLICY": "digest-only",
+            "IICP_PRE1_CANDIDATE_DIGEST": bindings["candidate_manifest_sha256"],
+            "IICP_PRE1_ARTIFACT_ROOT": str(artifacts),
+            "IICP_PRE1_ARTIFACT_MATERIALIZATION_SHA256": digest,
+            "IICP_PRE1_RUNTIME_MAP_SHA256": bindings["runtime_map_sha256"],
+            "IICP_PRE1_QUALIFICATION_ENVIRONMENT_SHA256": self.environment["environment_sha256"],
+            "IICP_PRE1_RUNTIME": "php-8.3", "IICP_PRE1_TARGET": "linux-x86_64",
+            "IICP_PRE1_DIRECTORY_FLAVOR": "php", "IICP_PRE1_MODE": "restricted",
+            "IICP_PRE1_CONTEXT_SHA256": module.canonical_sha256(self.context),
+        }
+        self.documents = {}
+        for name, value in (
+            ("IICP_PRE1_CANDIDATE_MANIFEST", self.manifest),
+            ("IICP_PRE1_RUNTIME_MAP", self.runtime),
+            ("IICP_PRE1_ENVIRONMENT_MANIFEST", self.environment),
+        ):
+            path = root / (name + ".json")
+            path.write_text(json.dumps(value))
+            env[name] = str(path)
+            self.documents[name] = path
+        for mock in (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(module, "detected_target", return_value="linux-x86_64"),
+            patch.object(module.subprocess, "check_output", return_value="b" * 40 + "\n"),
+        ):
+            mock.start()
+            self.addCleanup(mock.stop)
+
+    def test_complete_context_preserves_return_and_digest(self) -> None:
+        self.assertEqual(module.validate_context(self.cell, None),
+                         ("php-8.3", {}, self.manifest, self.context))
+
+    def test_every_environment_binding_is_enforced(self) -> None:
+        names = [name for name in os.environ if name.startswith("IICP_PRE1_")]
+        names += ["HOME", "IICP_HOME"]
+        for name in names:
+            with self.subTest(name=name), patch.dict(os.environ, {name: "/not-present"}):
+                with self.assertRaises((ValueError, OSError)):
+                    module.validate_context(self.cell, None)
+
+    def test_actual_host_and_source_are_enforced(self) -> None:
+        with patch.object(module, "detected_target", return_value="linux-aarch64"):
+            with self.assertRaisesRegex(ValueError, "actual host"):
+                module.validate_context(self.cell, None)
+        with patch.object(module.subprocess, "check_output", return_value="d" * 40):
+            with self.assertRaisesRegex(ValueError, "source commit"):
+                module.validate_context(self.cell, None)
+
+    def test_unfrozen_unbuilt_and_missing_runtime_are_rejected(self) -> None:
+        mutations = [
+            ("IICP_PRE1_CANDIDATE_MANIFEST", {**self.manifest, "immutable": False}),
+            ("IICP_PRE1_CANDIDATE_MANIFEST", {**self.manifest, "status": "DRAFT"}),
+            ("IICP_PRE1_CANDIDATE_MANIFEST", {**self.manifest, "components": []}),
+            ("IICP_PRE1_RUNTIME_MAP", {**self.runtime, "runtimes": {}}),
+            ("IICP_PRE1_RUNTIME_MAP", {**self.runtime, "target": "linux-aarch64"}),
+            ("IICP_PRE1_ENVIRONMENT_MANIFEST", {**self.environment, "status": "FAILED"}),
+        ]
+        for name, value in mutations:
+            path = self.documents[name]
+            previous = path.read_text()
+            try:
+                path.write_text(json.dumps(value))
+                with self.subTest(name=name, value=value), self.assertRaises(ValueError):
+                    module.validate_context(self.cell, None)
+            finally:
+                path.write_text(previous)
 
 
 if __name__ == "__main__":

@@ -37,7 +37,8 @@ Run `scripts/rehearse_operator_stack.sh` to create and destroy a fully
 disposable stack. It verifies clean migration, fixed liveness/readiness,
 fail-closed candidate configuration, database failure/recovery, backup,
 restore, and restored migration status. The generated report and SQL backup
-remain in a private temporary directory only with `--keep`; never commit them.
+remain in a private temporary directory with `--keep` or after a failed rehearsal;
+never commit them. Read the printed content-free closure receipt before cleanup.
 Set `IICP_OPERATOR_REHEARSAL_OUTPUT` to copy only the content-free JSON result
 to a chosen private path before cleanup.
 

@@ -137,3 +137,37 @@ credentials, or the deployment of `iicp.network`.
 
 See `SECURITY.md`, `CONTRIBUTING.md`, and `PUBLICATION_READINESS.md` before
 operating or contributing.
+
+### Rehearsal evidence and cleanup
+
+The operator stack and upgrade rehearsal scripts preserve a content-free attempt
+record even when a command fails. They print the private evidence directory;
+`workload.json` records the phase and original exit code before teardown,
+`checks.json` retains validated successful checks, and `closure.json` records the
+separate cleanup outcome. Raw logs, environment values and database contents are
+not copied into these reports. A passing process alone is not qualification.
+
+`IICP_OPERATOR_REHEARSAL_DIR` and `IICP_OPERATOR_UPGRADE_DIR` now select an existing,
+owned **parent directory** (or a root-owned sticky temporary directory); the scripts create their own private child workspace.
+They never remove that parent. Symlink parents and occupied Compose project names
+are refused. Default project names use the `iicp-operator-rehearsal-` or
+`iicp-operator-upgrade-` prefix; explicit project names must retain an allowed
+operator prefix (including the existing capacity harness). Each invocation appends a random suffix so concurrent invocations
+do not share a project. Legacy result-output variables create a new owner-only file and
+refuse an existing destination rather than overwriting it.
+
+Cleanup is limited to the exact rehearsal project, followed by checks for remaining
+containers (including stopped containers), volumes and networks. Failure evidence
+and failed workspaces are retained for diagnosis; these workspaces can contain
+private generated secrets and must not be committed or uploaded wholesale. Successful
+workspaces are removed after evidence is saved. Retained evidence is intentionally
+not pruned automatically.
+
+A workload failure preserves its exit code. Failed evidence export, incomplete
+cleanup, or `--keep` after an otherwise successful workload returns exit code 3;
+retained resources cannot count as a clean run. `--keep` retains both workspace and
+resources for inspection. No broad Docker cleanup is performed.
+
+The capacity harness explicitly verifies and consumes a successful retained
+rehearsal, then writes a separate `capacity/closure.json` and performs the same
+scoped cleanup. The original retained receipt is not rewritten as a clean pass.
