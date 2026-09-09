@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 
@@ -14,12 +15,16 @@ PHASES = {"prepare", "build", "bootstrap", "readiness", "invalid_candidate", "da
           "backup_restore", "previous_runtime", "upgrade", "rollback", "forward_recovery", "result"}
 
 
-def safe_directory(path):
+def safe_directory(path, allow_sticky=False):
     path = Path(os.path.abspath(path))
     for part in (path, *path.parents):
         if part.is_symlink():
             raise ValueError("symlink directory refused")
-    if not path.is_dir() or path.stat().st_uid != os.getuid():
+    if not path.is_dir():
+        raise ValueError("not a directory")
+    info = path.stat()
+    shared_tmp = allow_sticky and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
+    if info.st_uid != os.getuid() and not shared_tmp:
         raise ValueError("directory ownership differs")
     return path
 
@@ -65,7 +70,7 @@ def prepare(base, project, mode):
         raise ValueError("unsafe rehearsal project")
     if not resources_absent(project):
         raise ValueError("project is occupied or Docker inventory unavailable")
-    parent = safe_directory(base)
+    parent = safe_directory(base, allow_sticky=True)
     work = Path(tempfile.mkdtemp(prefix="iicp-owned-", dir=parent))
     evidence = Path(str(work) + ".evidence")
     evidence.mkdir(mode=0o700)
@@ -214,7 +219,7 @@ def main():
         return 0
     if args.action == "export":
         result_summary(args.work, args.mode)
-        parent = safe_directory(args.output.parent)
+        parent = safe_directory(args.output.parent, allow_sticky=True)
         write_json(parent / args.output.name, json.loads(read_small(args.work / "result.json")))
         return 0
     return finish(args.work, args.project, args.mode, args.root, args.exit_code, args.keep)

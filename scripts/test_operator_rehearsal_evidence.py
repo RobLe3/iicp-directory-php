@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import tempfile
 import subprocess
+import stat
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import operator_rehearsal_evidence as evidence
@@ -99,6 +101,17 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(0, self.finish(0))
         for path in self.output.iterdir():
             self.assertNotIn("secret-", path.read_text())
+
+    def test_root_owned_sticky_parent_is_safe_for_unprivileged_operator(self):
+        info = SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | stat.S_ISVTX | 0o777)
+        with patch.object(Path, "stat", return_value=info), patch.object(Path, "is_symlink", return_value=False), \
+             patch.object(os, "getuid", return_value=1000):
+            self.assertEqual(self.base, evidence.safe_directory(self.base, allow_sticky=True))
+            with self.assertRaises(ValueError): evidence.safe_directory(self.base)
+        info.st_mode = stat.S_IFDIR | 0o777
+        with patch.object(Path, "stat", return_value=info), patch.object(Path, "is_symlink", return_value=False), \
+             patch.object(os, "getuid", return_value=1000):
+            with self.assertRaises(ValueError): evidence.safe_directory(self.base, allow_sticky=True)
 
     def test_symlinks_and_foreign_owner_refused(self):
         link = self.base / "link"

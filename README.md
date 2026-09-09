@@ -148,7 +148,7 @@ separate cleanup outcome. Raw logs, environment values and database contents are
 not copied into these reports. A passing process alone is not qualification.
 
 `IICP_OPERATOR_REHEARSAL_DIR` and `IICP_OPERATOR_UPGRADE_DIR` now select an existing,
-owned **parent directory**; the scripts create their own private child workspace.
+owned **parent directory** (or a root-owned sticky temporary directory); the scripts create their own private child workspace.
 They never remove that parent. Symlink parents and occupied Compose project names
 are refused. Default project names use the `iicp-operator-rehearsal-` or
 `iicp-operator-upgrade-` prefix; explicit project names must retain an allowed
