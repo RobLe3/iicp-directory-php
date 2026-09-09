@@ -10,25 +10,44 @@ STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 PREVIOUS_TAG=""
 NEXT_TAG=""
 KEEP=0
+PREBUILT_MANIFEST=""
+MANIFEST_SHA256=""
+PREVIOUS_SOURCE=""
+NEXT_SOURCE=""
+PREBUILT_JSON=""
 
 usage() {
-  echo "usage: $0 --previous-tag TAG --next-tag TAG [--keep]" >&2
+  echo "usage: $0 (--previous-tag TAG --next-tag TAG | --prebuilt-manifest FILE --manifest-sha256 HEX --previous-source SHA --next-source SHA) [--keep]" >&2
 }
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --previous-tag) PREVIOUS_TAG="${2:-}"; shift 2 ;;
     --next-tag) NEXT_TAG="${2:-}"; shift 2 ;;
+    --prebuilt-manifest) PREBUILT_MANIFEST="${2:-}"; shift 2 ;;
+    --manifest-sha256) MANIFEST_SHA256="${2:-}"; shift 2 ;;
+    --previous-source) PREVIOUS_SOURCE="${2:-}"; shift 2 ;;
+    --next-source) NEXT_SOURCE="${2:-}"; shift 2 ;;
     --keep) KEEP=1; shift ;;
     *) usage; exit 2 ;;
   esac
 done
 
-[[ "$PREVIOUS_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { usage; exit 2; }
-[[ "$NEXT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { usage; exit 2; }
-[[ "$PREVIOUS_TAG" != "$NEXT_TAG" ]] || { echo "release tags must differ" >&2; exit 2; }
-git -C "$ROOT" cat-file -e "$PREVIOUS_TAG^{commit}"
-git -C "$ROOT" cat-file -e "$NEXT_TAG^{commit}"
+if [[ -n "$PREBUILT_MANIFEST" ]]; then
+  [[ -z "$PREVIOUS_TAG$NEXT_TAG" ]] || { usage; exit 2; }
+  PREBUILT_JSON="$(python3 "$ROOT/scripts/operator_prebuilt_inputs.py" \
+    --manifest "$PREBUILT_MANIFEST" --manifest-sha256 "$MANIFEST_SHA256" \
+    --previous-source "$PREVIOUS_SOURCE" --next-source "$NEXT_SOURCE")"
+  read -r PREVIOUS_TAG NEXT_TAG <<<"$(printf '%s' "$PREBUILT_JSON" | python3 -c 'import json,sys; m=json.load(sys.stdin)["manifest"]; print("v"+m["previous"]["version"], "v"+m["next"]["version"])')"
+else
+  [[ -z "$MANIFEST_SHA256$PREVIOUS_SOURCE$NEXT_SOURCE" ]] || { usage; exit 2; }
+  [[ "$PREVIOUS_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { usage; exit 2; }
+  [[ "$NEXT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { usage; exit 2; }
+  [[ "$PREVIOUS_TAG" != "$NEXT_TAG" ]] || { echo "release tags must differ" >&2; exit 2; }
+  git -C "$ROOT" cat-file -e "$PREVIOUS_TAG^{commit}"
+  git -C "$ROOT" cat-file -e "$NEXT_TAG^{commit}"
+
+fi
 
 umask 077
 PROJECT="${PROJECT}-$(python3 -c 'import secrets; print(secrets.token_hex(6))')"
@@ -50,18 +69,31 @@ trap 'exit 143' TERM
 phase() { printf '%s\n' "$1" >"$TMP/phase"; }
 phase prepare
 
-phase build
-git -C "$ROOT" worktree add --detach "$TMP/previous" "$PREVIOUS_TAG" >/dev/null
-git -C "$ROOT" worktree add --detach "$TMP/next" "$NEXT_TAG" >/dev/null
+if [[ -n "$PREBUILT_JSON" ]]; then
+  printf '%s' "$PREBUILT_JSON" | PYTHONPATH="$ROOT/scripts" python3 -c '
+import json,sys
+from pathlib import Path
+from operator_prebuilt_inputs import write_overrides
+from operator_rehearsal_evidence import write_json
+value=json.load(sys.stdin); work=Path(sys.argv[1])
+write_json(Path(str(work)+".evidence")/"prebuilt-inputs.json", value)
+write_overrides(work, value["manifest"])
+' "$TMP"
+else
+  phase build
+  git -C "$ROOT" worktree add --detach "$TMP/previous" "$PREVIOUS_TAG" >/dev/null
+  git -C "$ROOT" worktree add --detach "$TMP/next" "$NEXT_TAG" >/dev/null
 
-docker build -f "$TMP/previous/Dockerfile.operator" \
-  -t "iicp-directory-operator:$PREVIOUS_TAG" "$TMP/previous"
-docker build -f "$TMP/previous/Dockerfile.operator-nginx" \
-  -t "iicp-directory-operator-nginx:$PREVIOUS_TAG" "$TMP/previous"
-docker build -f "$TMP/next/Dockerfile.operator" \
-  -t "iicp-directory-operator:$NEXT_TAG" "$TMP/next"
-docker build -f "$TMP/next/Dockerfile.operator-nginx" \
-  -t "iicp-directory-operator-nginx:$NEXT_TAG" "$TMP/next"
+  docker build -f "$TMP/previous/Dockerfile.operator" \
+    -t "iicp-directory-operator:$PREVIOUS_TAG" "$TMP/previous"
+  docker build -f "$TMP/previous/Dockerfile.operator-nginx" \
+    -t "iicp-directory-operator-nginx:$PREVIOUS_TAG" "$TMP/previous"
+  docker build -f "$TMP/next/Dockerfile.operator" \
+    -t "iicp-directory-operator:$NEXT_TAG" "$TMP/next"
+  docker build -f "$TMP/next/Dockerfile.operator-nginx" \
+    -t "iicp-directory-operator-nginx:$NEXT_TAG" "$TMP/next"
+
+fi
 
 openssl rand -base64 32 | sed 's/^/base64:/' >"$TMP/app_key"
 openssl rand -hex 32 >"$TMP/db_password"
@@ -86,7 +118,11 @@ PY
 compose() {
   local tag="$1"
   shift
-  IICP_IMAGE_TAG="$tag" docker compose -p "$PROJECT" -f "$COMPOSE_FILE" "$@"
+  if [[ -n "$PREBUILT_JSON" ]]; then
+    IICP_IMAGE_TAG="$tag" docker compose -p "$PROJECT" -f "$COMPOSE_FILE" -f "$TMP/$tag.yml" "$@"
+  else
+    IICP_IMAGE_TAG="$tag" docker compose -p "$PROJECT" -f "$COMPOSE_FILE" "$@"
+  fi
 }
 
 wait_ready() {
@@ -105,6 +141,11 @@ wait_ready() {
 container_version() {
   compose "$1" exec -T app cat /app/VERSION | tr -d '\r\n'
 }
+
+# Resolve both complete models before any service starts. In prebuilt mode the
+# override removes build instructions and forbids pulling all six services.
+compose "$PREVIOUS_TAG" config --quiet
+compose "$NEXT_TAG" config --quiet
 
 phase previous_runtime
 compose "$PREVIOUS_TAG" up -d db
@@ -143,6 +184,7 @@ wait_ready
 compose "$PREVIOUS_TAG" --profile tools run --rm \
   migrate php artisan migrate:status --no-interaction >/dev/null
 
+phase forward_recovery
 compose "$NEXT_TAG" --profile tools run --rm migrate
 compose "$NEXT_TAG" up -d --no-deps --force-recreate app scheduler web
 wait_ready

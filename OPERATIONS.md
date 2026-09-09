@@ -56,6 +56,73 @@ one-shot migration, restores the pre-upgrade database while rolling the
 application images back, verifies the previous migration status, then moves
 forward again. It is disposable and does not authorize production adoption.
 
+### Prebuilt upgrade inputs
+
+For a packaged rehearsal, use the additive prebuilt mode instead of the tag/build
+mode. Prepare both app and nginx images before the run. The rehearsal performs
+no builds or pulls; the two Compose dependency images must also be loaded.
+A Docker Compose version supporting the [build-reset override](https://docs.docker.com/reference/compose-file/merge/#reset-value) is required. Both models are parsed before startup. The daemon
+must be native Linux amd64 or arm64 matching all images; emulated images are not
+admitted by this mode.
+
+Supply a reviewed JSON manifest with exactly these fields (replace the symbolic
+values with actual lowercase hashes and versions):
+
+```json
+{
+  "schema": "iicp.directory.operator-prebuilt-upgrade.v1",
+  "platform": "linux/amd64",
+  "compose_sha256": "SHA256_OF_COMPOSE_OPERATOR_YML",
+  "previous": {
+    "source_commit": "PREVIOUS_40_HEX_COMMIT",
+    "version": "1.10.93",
+    "archive_sha256": "PREVIOUS_RELEASE_ARCHIVE_SHA256",
+    "app_image": "sha256:PREVIOUS_APP_IMAGE_ID",
+    "web_image": "sha256:PREVIOUS_NGINX_IMAGE_ID"
+  },
+  "next": {
+    "source_commit": "CANDIDATE_40_HEX_COMMIT",
+    "version": "1.10.94",
+    "archive_sha256": "CANDIDATE_RELEASE_ARCHIVE_SHA256",
+    "app_image": "sha256:CANDIDATE_APP_IMAGE_ID",
+    "web_image": "sha256:CANDIDATE_NGINX_IMAGE_ID"
+  }
+}
+```
+
+Both images for each version must carry matching build-time labels:
+`org.opencontainers.image.revision`, `org.opencontainers.image.version`, and
+`network.iicp.release-archive-sha256`. Use the exact source archive as build input
+and record the image IDs from that build. These labels are provenance assertions,
+not independent proof of a build: approve the manifest from reviewed build
+receipts, never infer source provenance from an arbitrary image's labels.
+The manifest and its externally pinned SHA-256 are inputs, not generated trust.
+This command does not build images or create a candidate artifact fragment.
+
+```sh
+scripts/rehearse_operator_upgrade.sh \
+  --prebuilt-manifest /private/rehearsal/inputs.json \
+  --manifest-sha256 "$REVIEWED_MANIFEST_SHA256" \
+  --previous-source "$REVIEWED_PREVIOUS_COMMIT" \
+  --next-source "$REVIEWED_CANDIDATE_COMMIT"
+```
+
+The source pins are mandatory and independent of the manifest. Tag arguments
+cannot be mixed with prebuilt arguments. Validation checks the manifest size,
+file type, digest, exact schema, Compose digest, native platform, loaded image
+IDs and provenance labels before creating the rehearsal workspace. Symlink
+inputs are refused. Both complete Compose models must parse before startup.
+Missing images cannot trigger a source build or a network pull.
+
+The existing eight upgrade/rollback assertions and runtime VERSION checks still
+run. A content-free `prebuilt-inputs.json` sidecar is retained with the attempt
+and closure evidence, including on failure. Images are caller-owned inputs and
+are not deleted. The normal cleanup still removes only this run's containers,
+volumes, network and successful workspace. This is a project rehearsal with zero
+qualification credit, not authorization to deploy or proof of representative
+onboarding. Interrupted-upgrade injection and the cross-client matrix remain
+separate qualification work.
+
 ## Verify a public source release
 
 Before preparing an operator artifact, verify both checksum and provenance:
