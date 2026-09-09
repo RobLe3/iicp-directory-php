@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 
 PHASES = {"prepare", "build", "bootstrap", "readiness", "invalid_candidate", "database_recovery",
-          "backup_restore", "previous_runtime", "upgrade", "rollback", "forward_recovery", "result"}
+          "backup_restore", "previous_runtime", "upgrade", "rollback", "forward_recovery", "result", "capacity"}
 
 
 def safe_directory(path, allow_sticky=False):
@@ -66,7 +66,7 @@ def resources_absent(project):
 
 
 def prepare(base, project, mode):
-    if not re.fullmatch(r"iicp-operator-(?:rehearsal|upgrade)-[a-z0-9-]{1,64}", project):
+    if not re.fullmatch(r"iicp-operator-(?:rehearsal|upgrade|capacity)-[a-z0-9-]{1,64}", project):
         raise ValueError("unsafe rehearsal project")
     if not resources_absent(project):
         raise ValueError("project is occupied or Docker inventory unavailable")
@@ -184,11 +184,15 @@ def cleanup_status(keep, cleanup):
     return "PASS" if cleanup else "FAIL"
 
 
-def finish(work, project, mode, root, exit_code, keep=False):
+def finish(work, project, mode, root, exit_code, keep=False, continuation=False):
     work = safe_directory(work)
     if json.loads(read_small(work / "owner.json")) != {"project": project, "mode": mode}:
         raise ValueError("rehearsal ownership differs")
     evidence = safe_directory(Path(str(work) + ".evidence"))
+    if continuation:
+        verify_retained(work)
+        evidence = evidence / "capacity"
+        evidence.mkdir(mode=0o700)
     record, summary = workload_record(work, mode, exit_code)
     captured = capture_workload(evidence, record, summary)
     # Capture precedes teardown; export failure must not strand compute.
@@ -202,18 +206,40 @@ def finish(work, project, mode, root, exit_code, keep=False):
     return record["workload_exit_code"] or (0 if clean else 3)
 
 
+def verify_retained(work):
+    work = safe_directory(work)
+    record = json.loads(read_small(Path(str(work) + ".evidence") / "closure.json"))
+    if record.get("cleanup") != "RETAINED" or record.get("workload_exit_code") != 0:
+        raise ValueError("retained workload did not pass")
+    if record.get("evidence_captured") is not True:
+        raise ValueError("retained evidence incomplete")
+    return work
+
+
+def retained_work(base):
+    base = safe_directory(base)
+    children = list(base.glob("iicp-owned-*/owner.json"))
+    if len(children) != 1:
+        raise ValueError("retained workspace ambiguous")
+    return verify_retained(children[0].parent)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["prepare", "finish", "export"])
+    parser.add_argument("action", choices=["prepare", "finish", "export", "retained"])
     parser.add_argument("--work", type=Path)
     parser.add_argument("--base", type=Path, default=Path(tempfile.gettempdir()).resolve())
-    parser.add_argument("--project", required=True)
-    parser.add_argument("--mode", choices=["stack", "upgrade"], required=True)
+    parser.add_argument("--project", default="")
+    parser.add_argument("--mode", choices=["stack", "upgrade"], default="stack")
     parser.add_argument("--root", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--exit-code", type=int, default=0)
     parser.add_argument("--keep", action="store_true")
+    parser.add_argument("--continuation", action="store_true")
     args = parser.parse_args()
+    if args.action == "retained":
+        print(retained_work(args.base))
+        return 0
     if args.action == "prepare":
         print(prepare(args.base, args.project, args.mode))
         return 0
@@ -222,7 +248,7 @@ def main():
         parent = safe_directory(args.output.parent, allow_sticky=True)
         write_json(parent / args.output.name, json.loads(read_small(args.work / "result.json")))
         return 0
-    return finish(args.work, args.project, args.mode, args.root, args.exit_code, args.keep)
+    return finish(args.work, args.project, args.mode, args.root, args.exit_code, args.keep, args.continuation)
 
 
 if __name__ == "__main__":

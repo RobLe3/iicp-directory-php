@@ -152,7 +152,7 @@ owned **parent directory** (or a root-owned sticky temporary directory); the scr
 They never remove that parent. Symlink parents and occupied Compose project names
 are refused. Default project names use the `iicp-operator-rehearsal-` or
 `iicp-operator-upgrade-` prefix; explicit project names must retain an allowed
-operator prefix. Each invocation appends a random suffix so concurrent invocations
+operator prefix (including the existing capacity harness). Each invocation appends a random suffix so concurrent invocations
 do not share a project. Legacy result-output variables create a new owner-only file and
 refuse an existing destination rather than overwriting it.
 
@@ -167,3 +167,7 @@ A workload failure preserves its exit code. Failed evidence export, incomplete
 cleanup, or `--keep` after an otherwise successful workload returns exit code 3;
 retained resources cannot count as a clean run. `--keep` retains both workspace and
 resources for inspection. No broad Docker cleanup is performed.
+
+The capacity harness explicitly verifies and consumes a successful retained
+rehearsal, then writes a separate `capacity/closure.json` and performs the same
+scoped cleanup. The original retained receipt is not rewritten as a clean pass.

@@ -120,6 +120,32 @@ class EvidenceTests(unittest.TestCase):
         (self.work / "owner.json").write_text('{}')
         with self.assertRaises(ValueError): self.finish(1)
 
+    def test_retained_capacity_continuation_is_verified_and_closed(self):
+        self.assertEqual(3, self.finish(0, keep=True))
+        self.assertEqual(self.work, evidence.retained_work(self.base))
+        (self.work / "phase").write_text("capacity")
+        with patch.object(evidence, "command", return_value=True), \
+             patch.object(evidence, "resources_absent", return_value=True), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(0, evidence.finish(self.work, self.project, "stack", self.base, 0, continuation=True))
+        self.assertEqual("RETAINED", json.loads((self.output / "closure.json").read_text())["cleanup"])
+        final = json.loads((self.output / "capacity/closure.json").read_text())
+        self.assertEqual("capacity", final["phase"])
+        self.assertEqual("PASS", final["status"])
+        self.assertFalse(self.work.exists())
+
+    def test_failed_workload_cannot_transfer_to_capacity(self):
+        self.assertEqual(42, self.finish(42, keep=True))
+        with self.assertRaises(ValueError): evidence.retained_work(self.base)
+
+    def test_capacity_caller_consumes_new_retained_contract(self):
+        source = Path(__file__).with_name("run_operator_capacity_reference.sh").read_text()
+        self.assertIn('retained --base "$TMP"', source)
+        self.assertIn('finish --continuation', source)
+        self.assertIn('export IICP_APP_KEY_FILE="$WORK/app_key"', source)
+        self.assertIn('export IICP_DB_PASSWORD_FILE="$WORK/db_password"', source)
+        self.assertNotIn('rm -rf', source)
+
     def test_existing_project_refused_without_creating_workspace(self):
         before = set(self.base.iterdir())
         with patch.object(evidence, "resources_absent", return_value=False):
