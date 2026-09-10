@@ -3,6 +3,10 @@
 
 from pathlib import Path
 import unittest
+if __package__:
+    from .test_operator_sdk_probe import ProbeTests
+else:
+    from test_operator_sdk_probe import ProbeTests
 
 
 class OperatorUpgradeRehearsalTests(unittest.TestCase):

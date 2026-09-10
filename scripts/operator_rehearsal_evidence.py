@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 
 PHASES = {"prepare", "build", "bootstrap", "readiness", "invalid_candidate", "database_recovery",
-          "backup_restore", "previous_runtime", "upgrade", "rollback", "forward_recovery", "result", "capacity"}
+          "backup_restore", "previous_runtime", "upgrade", "rollback", "forward_recovery", "result", "capacity", "sdk_compatibility"}
 
 
 def safe_directory(path, allow_sticky=False):

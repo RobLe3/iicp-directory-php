@@ -113,7 +113,11 @@ class PrebuiltTests(unittest.TestCase):
         self.assertEqual(before, set(self.base.iterdir()))
         self.assertNotIn(str(self.path), result.stderr)
 
-    def fake_shell(self, fail="", interrupt=""):
+    def fake_shell(self, fail="", interrupt="", probe=False):
+        if probe:
+            self.value["platform"] = "linux/amd64"
+            self.path.write_text(json.dumps(self.value))
+            self.digest = hashlib.sha256(self.path.read_bytes()).hexdigest()
         binary = self.base / "bin"; binary.mkdir()
         docker = binary / "docker"
         docker.write_text('''#!/usr/bin/env python3
@@ -122,10 +126,14 @@ from pathlib import Path
 args=sys.argv[1:]
 with open(os.environ["FAKE_LOG"], "a") as out: out.write(json.dumps(args)+"\\n")
 value=json.loads(Path(os.environ["FAKE_MANIFEST"]).read_text())
-if args[0]=="info": print("linux/aarch64")
+if args[0]=="info": print(value["platform"])
+elif args[0]=="inspect": print("sha256:"+"c"*64)
+elif args[0]=="wait": print("1" if os.environ.get("FAKE_FAIL")=="probe" else "0")
+elif args[0]=="logs": print(json.dumps({"schema":"iicp.directory-sdk-probe.v1", "status":"PASS", "non_authorizing":True, "qualification_credit":0, "matrix":{"rows":[{}]*18}}))
 elif args[:2]==["image","inspect"]:
     fmt,image=args[-2:]
-    if fmt=="{{.Os}}/{{.Architecture}}": print("linux/arm64")
+    if fmt=="{{.Id}} {{.Os}} {{.Architecture}}": print(image+" linux amd64")
+    elif fmt=="{{.Os}}/{{.Architecture}}": print(value["platform"])
     elif fmt=="{{.Id}}": print(image)
     else:
         c=next(c for c in (value["previous"],value["next"]) if image in (c["app_image"],c["web_image"]))
@@ -134,6 +142,7 @@ elif args[:2]==["image","inspect"]:
 elif args[0] in ("container","volume","network"): pass
 elif args[0]=="compose":
     tag=os.environ.get("IICP_IMAGE_TAG","")
+    if "ps" in args and "sdk-probe" in args: print("d"*64)
     if "down" in args: sys.exit(55 if os.environ.get("FAKE_FAIL")=="cleanup" else 0)
     if "--status" in args and os.environ.get("FAKE_FAIL")=="still-running": print("synthetic-container")
     if "wget" in args: print(json.dumps({"ok":True,"role":"directory","ready":True}))
@@ -155,6 +164,7 @@ else: sys.exit(99)
                "IICP_OPERATOR_UPGRADE_DIR": str(self.base), "IICP_OPERATOR_UPGRADE_PROJECT": "iicp-operator-upgrade-test"}
         args = ["bash", str(inputs.ROOT/"scripts/rehearse_operator_upgrade.sh"), "--prebuilt-manifest", str(self.path),
                 "--manifest-sha256", self.digest, "--previous-source", "a"*40, "--next-source", "b"*40]
+        if probe: args.extend(["--sdk-probe-image", "sha256:"+"c"*64])
         if interrupt: args.extend(["--interrupt-at", interrupt])
         result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
         evidence = next(self.base.glob("*.evidence"))
@@ -162,6 +172,25 @@ else: sys.exit(99)
         self.assertFalse(any(call[0] in ("build", "pull", "run") for call in calls))
         self.assertEqual(self.digest, json.loads((evidence/"prebuilt-inputs.json").read_text())["manifest_sha256"])
         return result, json.loads((evidence/"closure.json").read_text()), calls
+
+    def test_full_shell_sdk_hook_before_verified_cleanup(self):
+        result, closure, calls = self.fake_shell(probe=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("PASS", closure["cleanup"])
+        wait = next(i for i,c in enumerate(calls) if c[0] == "wait")
+        down = next(i for i,c in enumerate(calls) if "down" in c)
+        self.assertLess(wait, down)
+        self.assertEqual(3, sum("rm" in c and "scheduler" in c for c in calls))
+        self.assertTrue(any("compose.operator-sdk-test.yml" in " ".join(c) for c in calls))
+
+    def test_full_shell_sdk_failure_preserved_and_cleaned(self):
+        result, closure, calls = self.fake_shell(fail="probe", probe=True)
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("sdk_compatibility", closure["phase"])
+        self.assertEqual("PASS", closure["cleanup"])
+        self.assertTrue(any("down" in c for c in calls))
+        evidence = next(self.base.glob("*.evidence"))
+        self.assertEqual("FAIL", json.loads((evidence/"sdk-capture.json").read_text())["status"])
 
     def test_full_shell_prebuilt_upgrade_and_rollback_without_building(self):
         result, closure, calls = self.fake_shell()
