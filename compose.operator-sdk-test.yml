@@ -1,0 +1,41 @@
+# Explicit rehearsal-only overlay. Never use for a deployed Directory.
+# Loopback providers must be reachable from nginx, PHP-FPM and the scheduler.
+services:
+  app:
+    environment:
+      APP_ENV: testing
+  migrate:
+    environment:
+      APP_ENV: testing
+  scheduler:
+    environment:
+      APP_ENV: testing
+    network_mode: service:app
+    depends_on:
+      app:
+        condition: service_healthy
+  web:
+    ports: !reset []
+    network_mode: service:app
+  sdk-probe:
+    profiles: [sdk-test]
+    image: ${IICP_SDK_PROBE_IMAGE:?set exact SDK probe image ID}
+    pull_policy: never
+    network_mode: service:app
+    entrypoint: [python3, /probe/scripts/pre1_directory_probe.py]
+    command: [--directory, http://127.0.0.1:8080/api]
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,size=64m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 1.0
+    restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: "2"

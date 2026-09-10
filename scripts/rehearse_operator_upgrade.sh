@@ -16,9 +16,10 @@ PREVIOUS_SOURCE=""
 NEXT_SOURCE=""
 PREBUILT_JSON=""
 INTERRUPT_AT=""
+SDK_PROBE_IMAGE=""
 
 usage() {
-  echo "usage: $0 (--previous-tag TAG --next-tag TAG | --prebuilt-manifest FILE --manifest-sha256 HEX --previous-source SHA --next-source SHA) [--keep] [--interrupt-at before-migration|after-migration|after-activation]" >&2
+  echo "usage: $0 (--previous-tag TAG --next-tag TAG | --prebuilt-manifest FILE --manifest-sha256 HEX --previous-source SHA --next-source SHA) [--sdk-probe-image sha256:IMAGE_ID] [--keep] [--interrupt-at before-migration|after-migration|after-activation]" >&2
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -30,10 +31,19 @@ while [[ "$#" -gt 0 ]]; do
     --previous-source) PREVIOUS_SOURCE="${2:-}"; shift 2 ;;
     --next-source) NEXT_SOURCE="${2:-}"; shift 2 ;;
     --interrupt-at) INTERRUPT_AT="${2:-}"; shift 2 ;;
+    --sdk-probe-image) SDK_PROBE_IMAGE="${2:-}"; shift 2 ;;
     --keep) KEEP=1; shift ;;
     *) usage; exit 2 ;;
   esac
 done
+
+if [[ -n "$SDK_PROBE_IMAGE" ]]; then
+  [[ -n "$PREBUILT_MANIFEST" && "$KEEP" -eq 0 ]] || { usage; exit 2; }
+  [[ "$SDK_PROBE_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] || { usage; exit 2; }
+  # Only a preloaded content-addressed Linux amd64 image; no pull or build.
+  [[ "$(docker image inspect --format '{{.Id}} {{.Os}} {{.Architecture}}' "$SDK_PROBE_IMAGE")" == "$SDK_PROBE_IMAGE linux amd64" ]] || exit 2
+  export IICP_SDK_PROBE_IMAGE="$SDK_PROBE_IMAGE"
+fi
 
 if [[ -n "$PREBUILT_MANIFEST" ]]; then
   [[ -z "$PREVIOUS_TAG$NEXT_TAG" ]] || { usage; exit 2; }
@@ -128,11 +138,10 @@ PY
 compose() {
   local tag="$1"
   shift
-  if [[ -n "$PREBUILT_JSON" ]]; then
-    IICP_IMAGE_TAG="$tag" docker compose -p "$PROJECT" -f "$COMPOSE_FILE" -f "$TMP/$tag.yml" "$@"
-  else
-    IICP_IMAGE_TAG="$tag" docker compose -p "$PROJECT" -f "$COMPOSE_FILE" "$@"
-  fi
+  local files=(-f "$COMPOSE_FILE")
+  if [[ -n "$PREBUILT_JSON" ]]; then files+=(-f "$TMP/$tag.yml"); fi
+  if [[ -n "$SDK_PROBE_IMAGE" ]]; then files+=(-f "$ROOT/compose.operator-sdk-test.yml"); fi
+  IICP_IMAGE_TAG="$tag" docker compose -p "$PROJECT" "${files[@]}" "$@"
 }
 
 ready_json() {
@@ -228,6 +237,7 @@ phase upgrade
 interrupt_services before-migration "$PREVIOUS_TAG"
 compose "$NEXT_TAG" --profile tools run --rm migrate
 interrupt_services after-migration "$PREVIOUS_TAG"
+if [[ -n "$SDK_PROBE_IMAGE" ]]; then compose "$NEXT_TAG" rm -sf web scheduler; fi
 compose "$NEXT_TAG" up -d --no-deps --force-recreate app scheduler web
 wait_ready "$NEXT_TAG"
 [[ "$(container_version "$NEXT_TAG")" == "${NEXT_TAG#v}" ]] || exit 1
@@ -251,6 +261,7 @@ compose "$NEXT_TAG" exec -T db sh -eu -c \
   'exec mariadb -uroot -p"$(cat /run/secrets/db_root_password)" "$MARIADB_DATABASE"' \
   <"$TMP/pre-upgrade.sql"
 
+if [[ -n "$SDK_PROBE_IMAGE" ]]; then compose "$NEXT_TAG" rm -sf web scheduler; fi
 compose "$PREVIOUS_TAG" up -d --no-deps --force-recreate app scheduler web
 wait_ready "$PREVIOUS_TAG"
 [[ "$(container_version "$PREVIOUS_TAG")" == "${PREVIOUS_TAG#v}" ]] || exit 1
@@ -260,10 +271,21 @@ compose "$PREVIOUS_TAG" --profile tools run --rm \
 
 phase forward_recovery
 compose "$NEXT_TAG" --profile tools run --rm migrate
+if [[ -n "$SDK_PROBE_IMAGE" ]]; then compose "$NEXT_TAG" rm -sf web scheduler; fi
 compose "$NEXT_TAG" up -d --no-deps --force-recreate app scheduler web
 wait_ready "$NEXT_TAG"
 [[ "$(container_version "$NEXT_TAG")" == "${NEXT_TAG#v}" ]] || exit 1
 verify_fixture "$NEXT_TAG" forward
+
+if [[ -n "$SDK_PROBE_IMAGE" ]]; then
+  phase sdk_compatibility
+  # Entry point emits bounded content-free JSON, validates all 18 rows, and
+  # exits nonzero for partial/fixture-only evidence. EXIT trap owns DB cleanup.
+  compose "$NEXT_TAG" --profile sdk-test up -d --no-deps sdk-probe
+  python3 "$ROOT/scripts/operator_sdk_probe.py" \
+    --container "$(compose "$NEXT_TAG" --profile sdk-test ps --all --quiet sdk-probe)" \
+    --image "$SDK_PROBE_IMAGE" --output "$TMP.evidence"
+fi
 
 phase result
 python3 - "$TMP/result.json" "$STARTED_AT" "$PREVIOUS_TAG" "$NEXT_TAG" "$backup_sha256" <<'PY'
