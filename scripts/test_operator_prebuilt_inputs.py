@@ -160,7 +160,7 @@ elif args[0]=="compose":
     if "-p" in args: (Path(os.environ["FAKE_MANIFEST"]).parent/"owner-label").write_text(args[args.index("-p")+1])
     tag=os.environ.get("IICP_IMAGE_TAG","")
     if "ps" in args and "sdk-probe" in args: print("d"*64)
-    if "ps" in args and "app" in args: print("e"*64)
+    if "ps" in args and "--all" in args and "app" in args: print("e"*64)
     if "down" in args: sys.exit(55 if os.environ.get("FAKE_FAIL")=="cleanup" else 0)
     if "--status" in args and os.environ.get("FAKE_FAIL")=="still-running": print("synthetic-container")
     if "wget" in args: print(json.dumps({"ok":True,"role":"directory","ready":True}))
