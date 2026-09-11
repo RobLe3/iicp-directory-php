@@ -127,9 +127,25 @@ args=sys.argv[1:]
 with open(os.environ["FAKE_LOG"], "a") as out: out.write(json.dumps(args)+"\\n")
 value=json.loads(Path(os.environ["FAKE_MANIFEST"]).read_text())
 if args[0]=="info": print(value["platform"])
-elif args[0]=="inspect": print("sha256:"+"c"*64)
+elif args[0]=="inspect":
+    if args[-2]=="{{.Image}}": print("sha256:"+"c"*64)
+    else:
+        base=Path(os.environ["FAKE_MANIFEST"]).parent
+        print(json.dumps({"id":args[-1],"image":"sha256:"+"c"*64,
+            "owner":(base/"owner-label").read_text(),"running":True,
+            "paused":(base/"paused").exists() if args[-1]=="e"*64 else False,
+            "network":"container:"+"e"*64}))
+elif args[0] in ("pause","unpause"):
+    path=Path(os.environ["FAKE_MANIFEST"]).parent/"paused"
+    if args[0]=="pause": path.touch()
+    else: path.unlink(missing_ok=True)
+elif args[0]=="exec":
+    if args[4]=="read":
+        seq=int(args[5])
+        print(json.dumps({"schema":"iicp.directory-outage-control.v1","nonce":"f"*32,
+            "sequence":seq,"action":{1:"pause",2:"resume"}[seq]}))
 elif args[0]=="wait": print("1" if os.environ.get("FAKE_FAIL")=="probe" else "0")
-elif args[0]=="logs": print(json.dumps({"schema":"iicp.directory-sdk-probe.v1", "status":"PASS", "non_authorizing":True, "qualification_credit":0, "matrix":{"rows":[{}]*18}}))
+elif args[0]=="logs": print(json.dumps({"schema":"iicp.directory-sdk-probe.v1", "status":"PASS", "non_authorizing":True, "qualification_credit":0, "matrix":{"rows":[{}]*18},"outage_nonce":"f"*32}))
 elif args[:2]==["image","inspect"]:
     fmt,image=args[-2:]
     if fmt=="{{.Id}} {{.Os}} {{.Architecture}}": print(image+" linux amd64")
@@ -141,8 +157,10 @@ elif args[:2]==["image","inspect"]:
         print(c[key])
 elif args[0] in ("container","volume","network"): pass
 elif args[0]=="compose":
+    if "-p" in args: (Path(os.environ["FAKE_MANIFEST"]).parent/"owner-label").write_text(args[args.index("-p")+1])
     tag=os.environ.get("IICP_IMAGE_TAG","")
     if "ps" in args and "sdk-probe" in args: print("d"*64)
+    if "ps" in args and "app" in args: print("e"*64)
     if "down" in args: sys.exit(55 if os.environ.get("FAKE_FAIL")=="cleanup" else 0)
     if "--status" in args and os.environ.get("FAKE_FAIL")=="still-running": print("synthetic-container")
     if "wget" in args: print(json.dumps({"ok":True,"role":"directory","ready":True}))
