@@ -4,9 +4,9 @@
 from pathlib import Path
 import unittest
 if __package__:
-    from .test_operator_sdk_probe import ProbeTests
+    from .test_operator_sdk_probe import ProbeTests, OutageOwnerTests
 else:
-    from test_operator_sdk_probe import ProbeTests
+    from test_operator_sdk_probe import ProbeTests, OutageOwnerTests
 
 
 class OperatorUpgradeRehearsalTests(unittest.TestCase):
