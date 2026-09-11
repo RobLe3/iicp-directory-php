@@ -20,11 +20,13 @@ class ProbeTests(unittest.TestCase):
             link = root/'link'
             link.symlink_to(root, target_is_directory=True)
             with patch.object(probe, 'capture') as capture:
-                for container, image, output in [('b'*64, 'probe:latest', root),
-                                                   ('--help', 'sha256:'+'a'*64, root),
-                                                   ('b'*64, 'sha256:'+'a'*64, link)]:
+                image_id = 'sha256:' + 'a'*64
+                image_ref = 'iicp-pre1-directory-probe:' + 'a'*64
+                for container, ref, identity, output in [('b'*64, 'probe:latest', image_id, root),
+                                                          ('--help', image_ref, image_id, root),
+                                                          ('b'*64, image_ref, image_id, link)]:
                     with self.assertRaises(ValueError):
-                        probe.collect(container, image, output)
+                        probe.collect(container, ref, identity, output)
                 capture.assert_not_called()
 
     def test_bounded_capture_timeout_and_overflow(self):
@@ -34,30 +36,33 @@ class ProbeTests(unittest.TestCase):
             probe.capture([sys.executable, '-c', 'print("x"*65537)'], 5)
 
     def test_complete_and_partial_capture(self):
-        image = 'sha256:' + 'a' * 64
+        image_id = 'sha256:' + 'a' * 64
+        image_ref = 'iicp-pre1-directory-probe:' + 'a' * 64
         for count in (0, 17, 18):
             with tempfile.TemporaryDirectory() as tmp:
                 value = {'schema': 'iicp.directory-sdk-probe.v1', 'status': 'PASS',
                          'non_authorizing': True, 'qualification_credit': 0,
                          'matrix': {'rows': [{}] * count}}
-                with patch.object(probe, 'capture', side_effect=[image.encode(), b'0', json.dumps(value).encode()]):
-                    result = probe.collect('b'*64, image, Path(tmp).resolve())
+                with patch.object(probe, 'capture', side_effect=[image_id.encode(), b'0', json.dumps(value).encode()]):
+                    result = probe.collect('b'*64, image_ref, image_id, Path(tmp).resolve())
                 self.assertEqual(result['status'], 'PASS' if count == 18 else 'FAIL')
                 self.assertTrue((Path(tmp)/'sdk-probe.json').exists())
                 self.assertTrue((Path(tmp)/'sdk-capture.json').exists())
 
     def test_wait_timeout_retains_failure(self):
-        image = 'sha256:' + 'a'*64
+        image_id = 'sha256:' + 'a'*64
+        image_ref = 'iicp-pre1-directory-probe:' + 'a'*64
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(probe, 'capture', side_effect=[image.encode(), subprocess.TimeoutExpired('wait', 1800)]):
-                result = probe.collect('b'*64, image, Path(tmp).resolve())
+            with patch.object(probe, 'capture', side_effect=[image_id.encode(), subprocess.TimeoutExpired('wait', 1800)]):
+                result = probe.collect('b'*64, image_ref, image_id, Path(tmp).resolve())
             self.assertEqual(result['status'], 'FAIL')
             self.assertTrue((Path(tmp)/'sdk-capture.json').exists())
 
     def test_identity_mismatch_never_waits(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(probe, 'capture', return_value=b'wrong') as capture:
-                result = probe.collect('b'*64, 'sha256:'+'a'*64, Path(tmp).resolve())
+                result = probe.collect('b'*64, 'iicp-pre1-directory-probe:'+'a'*64,
+                                       'sha256:'+'a'*64, Path(tmp).resolve())
             self.assertEqual(capture.call_count, 1)
             self.assertEqual(result['status'], 'FAIL')
 

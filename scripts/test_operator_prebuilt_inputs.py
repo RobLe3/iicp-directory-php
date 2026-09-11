@@ -148,7 +148,9 @@ elif args[0]=="wait": print("1" if os.environ.get("FAKE_FAIL")=="probe" else "0"
 elif args[0]=="logs": print(json.dumps({"schema":"iicp.directory-sdk-probe.v1", "status":"PASS", "non_authorizing":True, "qualification_credit":0, "matrix":{"rows":[{}]*18},"outage_nonce":"f"*32}))
 elif args[:2]==["image","inspect"]:
     fmt,image=args[-2:]
-    if fmt=="{{.Id}} {{.Os}} {{.Architecture}}": print(image+" linux amd64")
+    if fmt=="{{.Id}} {{.Os}} {{.Architecture}}":
+        identity="sha256:"+"c"*64 if image.startswith("iicp-pre1-directory-probe:") else image
+        print(identity+" linux amd64")
     elif fmt=="{{.Os}}/{{.Architecture}}": print(value["platform"])
     elif fmt=="{{.Id}}": print(image)
     else:
@@ -182,7 +184,8 @@ else: sys.exit(99)
                "IICP_OPERATOR_UPGRADE_DIR": str(self.base), "IICP_OPERATOR_UPGRADE_PROJECT": "iicp-operator-upgrade-test"}
         args = ["bash", str(inputs.ROOT/"scripts/rehearse_operator_upgrade.sh"), "--prebuilt-manifest", str(self.path),
                 "--manifest-sha256", self.digest, "--previous-source", "a"*40, "--next-source", "b"*40]
-        if probe: args.extend(["--sdk-probe-image", "sha256:"+"c"*64])
+        if probe: args.extend(["--sdk-probe-image-ref", "iicp-pre1-directory-probe:"+"c"*64,
+                               "--sdk-probe-image-id", "sha256:"+"c"*64])
         if interrupt: args.extend(["--interrupt-at", interrupt])
         result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
         evidence = next(self.base.glob("*.evidence"))

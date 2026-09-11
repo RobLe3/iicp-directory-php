@@ -17,9 +17,10 @@ NEXT_SOURCE=""
 PREBUILT_JSON=""
 INTERRUPT_AT=""
 SDK_PROBE_IMAGE=""
+SDK_PROBE_IMAGE_ID=""
 
 usage() {
-  echo "usage: $0 (--previous-tag TAG --next-tag TAG | --prebuilt-manifest FILE --manifest-sha256 HEX --previous-source SHA --next-source SHA) [--sdk-probe-image sha256:IMAGE_ID] [--keep] [--interrupt-at before-migration|after-migration|after-activation]" >&2
+  echo "usage: $0 (--previous-tag TAG --next-tag TAG | --prebuilt-manifest FILE --manifest-sha256 HEX --previous-source SHA --next-source SHA) [--sdk-probe-image-ref REF --sdk-probe-image-id sha256:ID] [--keep] [--interrupt-at before-migration|after-migration|after-activation]" >&2
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -31,17 +32,19 @@ while [[ "$#" -gt 0 ]]; do
     --previous-source) PREVIOUS_SOURCE="${2:-}"; shift 2 ;;
     --next-source) NEXT_SOURCE="${2:-}"; shift 2 ;;
     --interrupt-at) INTERRUPT_AT="${2:-}"; shift 2 ;;
-    --sdk-probe-image) SDK_PROBE_IMAGE="${2:-}"; shift 2 ;;
+    --sdk-probe-image-ref) SDK_PROBE_IMAGE="${2:-}"; shift 2 ;;
+    --sdk-probe-image-id) SDK_PROBE_IMAGE_ID="${2:-}"; shift 2 ;;
     --keep) KEEP=1; shift ;;
     *) usage; exit 2 ;;
   esac
 done
 
-if [[ -n "$SDK_PROBE_IMAGE" ]]; then
+if [[ -n "$SDK_PROBE_IMAGE$SDK_PROBE_IMAGE_ID" ]]; then
   [[ -n "$PREBUILT_MANIFEST" && "$KEEP" -eq 0 ]] || { usage; exit 2; }
-  [[ "$SDK_PROBE_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] || { usage; exit 2; }
+  [[ "$SDK_PROBE_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || { usage; exit 2; }
+  [[ "$SDK_PROBE_IMAGE" == "iicp-pre1-directory-probe:${SDK_PROBE_IMAGE_ID#sha256:}" ]] || { usage; exit 2; }
   # Only a preloaded content-addressed Linux amd64 image; no pull or build.
-  [[ "$(docker image inspect --format '{{.Id}} {{.Os}} {{.Architecture}}' "$SDK_PROBE_IMAGE")" == "$SDK_PROBE_IMAGE linux amd64" ]] || exit 2
+  [[ "$(docker image inspect --format '{{.Id}} {{.Os}} {{.Architecture}}' "$SDK_PROBE_IMAGE")" == "$SDK_PROBE_IMAGE_ID linux amd64" ]] || exit 2
   export IICP_SDK_PROBE_IMAGE="$SDK_PROBE_IMAGE"
 fi
 
@@ -284,7 +287,7 @@ if [[ -n "$SDK_PROBE_IMAGE" ]]; then
   compose "$NEXT_TAG" --profile sdk-test up -d --no-deps sdk-probe
   python3 "$ROOT/scripts/operator_sdk_probe.py" \
     --container "$(compose "$NEXT_TAG" --profile sdk-test ps --all --quiet sdk-probe)" \
-    --image "$SDK_PROBE_IMAGE" --output "$TMP.evidence" \
+    --image-ref "$SDK_PROBE_IMAGE" --image-id "$SDK_PROBE_IMAGE_ID" --output "$TMP.evidence" \
     --app "$(compose "$NEXT_TAG" ps --all --quiet app)" --project "$PROJECT"
 fi
 
