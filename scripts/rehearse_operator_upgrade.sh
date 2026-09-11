@@ -284,7 +284,8 @@ if [[ -n "$SDK_PROBE_IMAGE" ]]; then
   compose "$NEXT_TAG" --profile sdk-test up -d --no-deps sdk-probe
   python3 "$ROOT/scripts/operator_sdk_probe.py" \
     --container "$(compose "$NEXT_TAG" --profile sdk-test ps --all --quiet sdk-probe)" \
-    --image "$SDK_PROBE_IMAGE" --output "$TMP.evidence"
+    --image "$SDK_PROBE_IMAGE" --output "$TMP.evidence" \
+    --app "$(compose "$NEXT_TAG" ps --all --quiet app)" --project "$PROJECT"
 fi
 
 phase result

@@ -23,7 +23,7 @@ services:
     pull_policy: never
     network_mode: service:app
     entrypoint: [python3, /probe/scripts/pre1_directory_probe.py]
-    command: [--directory, http://127.0.0.1:8080/api]
+    command: [--directory, http://127.0.0.1:8080/api, --directory-outage]
     user: "65534:65534"
     read_only: true
     tmpfs:

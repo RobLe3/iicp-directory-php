@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Capture an already-owned SDK probe before the Compose owner tears it down."""
 import argparse
+import hashlib
 import json
 import re
 import subprocess
 import threading
 
 if __package__:
+    from .operator_directory_outage import Owner
     from .operator_rehearsal_evidence import safe_directory, write_json
 else:
+    from operator_directory_outage import Owner
     from operator_rehearsal_evidence import safe_directory, write_json
 
 
@@ -39,7 +42,7 @@ def capture(args, timeout):
     return bytes(output)
 
 
-def collect(container, image, output):
+def collect(container, image, output, *, app=None, project=None):
     if not re.fullmatch(r'[0-9a-f]{64}', container) or not re.fullmatch(r'sha256:[0-9a-f]{64}', image):
         raise ValueError('exact_container_and_image_required')
     output = safe_directory(output)
@@ -49,6 +52,14 @@ def collect(container, image, output):
         identity = capture(['docker', 'inspect', '--format', '{{.Image}}', container], 30).decode().strip()
         if identity != image:
             raise ValueError('probe_image_identity_differs')
+        owner = None
+        if app is not None:
+            controller = Owner(lambda args, timeout: capture(['docker', *args], timeout),
+                               container, app, 'com.docker.compose.project', project, image)
+            try:
+                owner = controller.run()
+            finally:
+                write_json(output / 'directory-outage-control.json', controller.snapshot())
         status = capture(['docker', 'wait', container], 1800).strip()
         raw = capture(['docker', 'logs', '--tail', '1000', container], 30)
         value = json.loads(raw)
@@ -58,8 +69,13 @@ def collect(container, image, output):
                 or type(value.get('qualification_credit')) is not int or value['qualification_credit'] != 0
                 or len(value.get('matrix', {}).get('rows', [])) != 18):
             raise ValueError('probe_failed_or_incomplete')
+        if owner is not None:
+            if value.get('outage_nonce') != owner['nonce']:
+                raise ValueError('outage_nonce_differs')
+            owner['probe_sha256'] = hashlib.sha256(raw).hexdigest()
+            write_json(output / 'directory-outage.json', owner)
         result['status'] = 'PASS'
-    except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, RuntimeError, TypeError, AttributeError, subprocess.SubprocessError) as error:
         result['failure_class'] = type(error).__name__
     finally:
         write_json(output / 'sdk-capture.json', result)
@@ -72,5 +88,9 @@ if __name__ == '__main__':
     parser.add_argument('--container', required=True)
     parser.add_argument('--image', required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument("--app")
+    parser.add_argument("--project")
     args = parser.parse_args()
-    raise SystemExit(0 if collect(args.container, args.image, args.output)['status'] == 'PASS' else 1)
+    if bool(args.app) != bool(args.project):
+        parser.error("app and project required together")
+    raise SystemExit(0 if collect(args.container, args.image, args.output, app=args.app, project=args.project)['status'] == 'PASS' else 1)
