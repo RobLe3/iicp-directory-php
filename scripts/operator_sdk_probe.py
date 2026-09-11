@@ -42,20 +42,28 @@ def capture(args, timeout):
     return bytes(output)
 
 
-def collect(container, image, output, *, app=None, project=None):
-    if not re.fullmatch(r'[0-9a-f]{64}', container) or not re.fullmatch(r'sha256:[0-9a-f]{64}', image):
+def validate_identity(container, image_ref, image_id):
+    expected_ref = 'iicp-pre1-directory-probe:' + image_id.removeprefix('sha256:')
+    if (not re.fullmatch(r'[0-9a-f]{64}', container)
+            or not re.fullmatch(r'sha256:[0-9a-f]{64}', image_id)
+            or image_ref != expected_ref):
         raise ValueError('exact_container_and_image_required')
+
+
+def collect(container, image_ref, image_id, output, *, app=None, project=None):
+    validate_identity(container, image_ref, image_id)
     output = safe_directory(output)
     result = {'schema': 'iicp.directory-sdk-capture.v1', 'status': 'FAIL',
-              'image': image, 'qualification_credit': 0, 'non_authorizing': True}
+              'image_ref': image_ref, 'image_id': image_id,
+              'qualification_credit': 0, 'non_authorizing': True}
     try:
         identity = capture(['docker', 'inspect', '--format', '{{.Image}}', container], 30).decode().strip()
-        if identity != image:
+        if identity != image_id:
             raise ValueError('probe_image_identity_differs')
         owner = None
         if app is not None:
             controller = Owner(lambda args, timeout: capture(['docker', *args], timeout),
-                               container, app, 'com.docker.compose.project', project, image)
+                               container, app, 'com.docker.compose.project', project, image_id)
             try:
                 owner = controller.run()
             finally:
@@ -86,11 +94,12 @@ if __name__ == '__main__':
     from pathlib import Path
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--container', required=True)
-    parser.add_argument('--image', required=True)
+    parser.add_argument('--image-ref', required=True)
+    parser.add_argument('--image-id', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument("--app")
     parser.add_argument("--project")
     args = parser.parse_args()
     if bool(args.app) != bool(args.project):
         parser.error("app and project required together")
-    raise SystemExit(0 if collect(args.container, args.image, args.output, app=args.app, project=args.project)['status'] == 'PASS' else 1)
+    raise SystemExit(0 if collect(args.container, args.image_ref, args.image_id, args.output, app=args.app, project=args.project)['status'] == 'PASS' else 1)
