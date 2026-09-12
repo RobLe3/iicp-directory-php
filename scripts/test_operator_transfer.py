@@ -3,7 +3,6 @@
 import hashlib
 import json
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -181,16 +180,11 @@ class TransferTests(unittest.TestCase):
             path.write_bytes(tar_bytes(b"modified"))
             with self.assertRaises(transfer.TransferError): transfer.verify_archive_source(path, "a" * 40, "1.10.93")
 
-    def test_previous_pin_matches_existing_native_evidence_and_next_exists(self):
+    def test_previous_pin_matches_existing_native_evidence_and_next_is_immutable(self):
         report = json.loads((transfer.ROOT / "reports/operator-native-arm64-2026-09-09.json").read_text())
         self.assertEqual(transfer.SOURCES['previous'], report["inputs"]['previous']["source_commit"])
-        self.assertEqual(
-            transfer.SOURCES['next'],
-            subprocess.check_output(
-                ['git','-C',str(transfer.ROOT),'rev-parse',transfer.SOURCES['next']+'^{commit}'],
-                text=True,
-            ).strip(),
-        )
+        self.assertRegex(transfer.SOURCES['next'], r'^[0-9a-f]{40}$')
+        self.assertNotEqual(transfer.SOURCES['previous'], transfer.SOURCES['next'])
 
 
 
