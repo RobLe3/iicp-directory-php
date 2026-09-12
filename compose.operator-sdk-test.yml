@@ -5,14 +5,17 @@ services:
     # The production entrypoint intentionally refuses APP_ENV=testing. The
     # operator artifact has already passed its production startup/upgrade
     # phases before this isolated overlay is selected.
-    entrypoint: !reset []
+    # An explicit empty entrypoint overrides the image entrypoint. `!reset []`
+    # restores the image default on Docker Compose 2.40, which would run the
+    # production guard under APP_ENV=testing and fail with exit 78.
+    entrypoint: []
     environment:
       APP_ENV: testing
   migrate:
     environment:
       APP_ENV: testing
   scheduler:
-    entrypoint: !reset []
+    entrypoint: []
     environment:
       APP_ENV: testing
     network_mode: service:app
