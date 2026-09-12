@@ -143,7 +143,15 @@ compose() {
   shift
   local files=(-f "$COMPOSE_FILE")
   if [[ -n "$PREBUILT_JSON" ]]; then files+=(-f "$TMP/$tag.yml"); fi
-  if [[ -n "$SDK_PROBE_IMAGE" ]]; then files+=(-f "$ROOT/compose.operator-sdk-test.yml"); fi
+  IICP_IMAGE_TAG="$tag" docker compose -p "$PROJECT" "${files[@]}" "$@"
+}
+
+compose_sdk() {
+  local tag="$1"
+  shift
+  local files=(-f "$COMPOSE_FILE")
+  [[ -n "$PREBUILT_JSON" ]] && files+=(-f "$TMP/$tag.yml")
+  files+=(-f "$ROOT/compose.operator-sdk-test.yml")
   IICP_IMAGE_TAG="$tag" docker compose -p "$PROJECT" "${files[@]}" "$@"
 }
 
@@ -282,13 +290,18 @@ verify_fixture "$NEXT_TAG" forward
 
 if [[ -n "$SDK_PROBE_IMAGE" ]]; then
   phase sdk_compatibility
+  # The operator artifact is first qualified with its production entrypoint.
+  # Only the isolated SDK workload may use the test environment needed for
+  # loopback provider fixtures; never apply this overlay during migration.
+  compose "$NEXT_TAG" rm -sf app web scheduler
+  compose_sdk "$NEXT_TAG" up -d --no-deps app scheduler web
   # Entry point emits bounded content-free JSON, validates all 18 rows, and
   # exits nonzero for partial/fixture-only evidence. EXIT trap owns DB cleanup.
-  compose "$NEXT_TAG" --profile sdk-test up -d --no-deps sdk-probe
+  compose_sdk "$NEXT_TAG" --profile sdk-test up -d --no-deps sdk-probe
   python3 "$ROOT/scripts/operator_sdk_probe.py" \
-    --container "$(compose "$NEXT_TAG" --profile sdk-test ps --all --quiet sdk-probe)" \
+    --container "$(compose_sdk "$NEXT_TAG" --profile sdk-test ps --all --quiet sdk-probe)" \
     --image-ref "$SDK_PROBE_IMAGE" --image-id "$SDK_PROBE_IMAGE_ID" --output "$TMP.evidence" \
-    --app "$(compose "$NEXT_TAG" ps --all --quiet app)" --project "$PROJECT"
+    --app "$(compose_sdk "$NEXT_TAG" ps --all --quiet app)" --project "$PROJECT"
 fi
 
 phase result

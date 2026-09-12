@@ -2,12 +2,17 @@
 # Loopback providers must be reachable from nginx, PHP-FPM and the scheduler.
 services:
   app:
+    # The production entrypoint intentionally refuses APP_ENV=testing. The
+    # operator artifact has already passed its production startup/upgrade
+    # phases before this isolated overlay is selected.
+    entrypoint: !reset []
     environment:
       APP_ENV: testing
   migrate:
     environment:
       APP_ENV: testing
   scheduler:
+    entrypoint: !reset []
     environment:
       APP_ENV: testing
     network_mode: service:app

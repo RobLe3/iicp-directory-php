@@ -201,7 +201,10 @@ else: sys.exit(99)
         wait = next(i for i,c in enumerate(calls) if c[0] == "wait")
         down = next(i for i,c in enumerate(calls) if "down" in c)
         self.assertLess(wait, down)
-        self.assertEqual(3, sum("rm" in c and "scheduler" in c for c in calls))
+        self.assertEqual(4, sum("rm" in c and "scheduler" in c for c in calls))
+        migrations = [c for c in calls if "run" in c and "migrate" in c]
+        self.assertTrue(migrations)
+        self.assertTrue(all("compose.operator-sdk-test.yml" not in " ".join(c) for c in migrations))
         self.assertTrue(any("compose.operator-sdk-test.yml" in " ".join(c) for c in calls))
 
     def test_full_shell_sdk_failure_preserved_and_cleaned(self):
