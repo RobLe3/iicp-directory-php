@@ -5,19 +5,23 @@ services:
     # The production entrypoint intentionally refuses APP_ENV=testing. The
     # operator artifact has already passed its production startup/upgrade
     # phases before this isolated overlay is selected.
-    # An explicit empty entrypoint overrides the image entrypoint. `!reset []`
-    # restores the image default on Docker Compose 2.40, which would run the
-    # production guard under APP_ENV=testing and fail with exit 78.
-    entrypoint: []
+    # The rehearsal entry point retains secret-file loading while enforcing an
+    # explicit loopback-only test boundary. Bypassing the production entry
+    # point entirely leaves APP_KEY and DB_PASSWORD unset.
+    entrypoint: [/usr/local/bin/iicp-operator-rehearsal-entrypoint]
+    command: [php-fpm, -F]
     environment:
       APP_ENV: testing
+      IICP_OPERATOR_REHEARSAL: "1"
   migrate:
     environment:
       APP_ENV: testing
   scheduler:
-    entrypoint: []
+    entrypoint: [/usr/local/bin/iicp-operator-rehearsal-entrypoint]
+    command: [php, artisan, schedule:work]
     environment:
       APP_ENV: testing
+      IICP_OPERATOR_REHEARSAL: "1"
     network_mode: service:app
     depends_on:
       app:
