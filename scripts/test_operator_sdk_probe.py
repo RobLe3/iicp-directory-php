@@ -5,7 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 if __package__:
     from . import operator_sdk_probe as probe
@@ -65,6 +65,26 @@ class ProbeTests(unittest.TestCase):
                                        'sha256:'+'a'*64, Path(tmp).resolve())
             self.assertEqual(capture.call_count, 1)
             self.assertEqual(result['status'], 'FAIL')
+
+    def test_owner_failure_still_captures_probe_result(self):
+        image_id = 'sha256:' + 'a'*64
+        image_ref = 'iicp-pre1-directory-probe:' + 'a'*64
+        value = {'schema': 'iicp.directory-sdk-probe.v1', 'status': 'FAIL',
+                 'non_authorizing': True, 'qualification_credit': 0,
+                 'matrix': {'rows': []}}
+        controller = MagicMock()
+        controller.run.side_effect = ValueError('probe_not_running')
+        controller.snapshot.return_value = {'schema': 'test'}
+        with tempfile.TemporaryDirectory() as tmp:
+            with (patch.object(probe, 'Owner', return_value=controller),
+                  patch.object(probe, 'capture', side_effect=[
+                      image_id.encode(), b'1', json.dumps(value).encode()
+                  ])):
+                result = probe.collect('b'*64, image_ref, image_id,
+                                       Path(tmp).resolve(), app='app', project='project')
+            self.assertEqual(result['status'], 'FAIL')
+            self.assertTrue((Path(tmp)/'sdk-probe.json').exists())
+            self.assertTrue((Path(tmp)/'directory-outage-control.json').exists())
 
     def test_overlay_and_hook_are_test_only(self):
         root = Path(__file__).resolve().parents[1]
