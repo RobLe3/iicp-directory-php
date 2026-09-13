@@ -129,6 +129,9 @@ export IICP_DB_USERNAME="iicp_operator"
 export IICP_APP_KEY_FILE="$TMP/app_key"
 export IICP_DB_PASSWORD_FILE="$TMP/db_password"
 export IICP_DB_ROOT_PASSWORD_FILE="$TMP/db_root_password"
+IICP_OPERATOR_REHEARSAL_ENTRYPOINT="$TMP/rehearsal-entrypoint.sh"
+install -m 0555 "$ROOT/operator/rehearsal-entrypoint.sh" "$IICP_OPERATOR_REHEARSAL_ENTRYPOINT"
+export IICP_OPERATOR_REHEARSAL_ENTRYPOINT
 export IICP_OPERATOR_PORT="${IICP_OPERATOR_PORT:-$(python3 - <<'PY'
 import socket
 s = socket.socket()

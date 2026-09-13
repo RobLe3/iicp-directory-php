@@ -10,6 +10,11 @@ services:
     # point entirely leaves APP_KEY and DB_PASSWORD unset.
     entrypoint: [/usr/local/bin/iicp-operator-rehearsal-entrypoint]
     command: [php-fpm, -F]
+    volumes:
+      - type: bind
+        source: ${IICP_OPERATOR_REHEARSAL_ENTRYPOINT:?set exact rehearsal entrypoint path}
+        target: /usr/local/bin/iicp-operator-rehearsal-entrypoint
+        read_only: true
     environment:
       APP_ENV: testing
       IICP_OPERATOR_REHEARSAL: "1"
@@ -19,6 +24,11 @@ services:
   scheduler:
     entrypoint: [/usr/local/bin/iicp-operator-rehearsal-entrypoint]
     command: [php, artisan, schedule:work]
+    volumes:
+      - type: bind
+        source: ${IICP_OPERATOR_REHEARSAL_ENTRYPOINT:?set exact rehearsal entrypoint path}
+        target: /usr/local/bin/iicp-operator-rehearsal-entrypoint
+        read_only: true
     environment:
       APP_ENV: testing
       IICP_OPERATOR_REHEARSAL: "1"
