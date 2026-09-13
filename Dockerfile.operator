@@ -33,6 +33,7 @@ COPY --from=vendor --chown=root:root /source/vendor /app/vendor
 COPY --chown=root:root operator/php-fpm.conf /usr/local/etc/php-fpm.d/zz-iicp.conf
 COPY --chown=root:root operator/php.ini /usr/local/etc/php/conf.d/zz-iicp.ini
 COPY --chown=root:root operator/entrypoint.sh /usr/local/bin/iicp-operator-entrypoint
+COPY --chown=root:root operator/rehearsal-entrypoint.sh /usr/local/bin/iicp-operator-rehearsal-entrypoint
 
 RUN mkdir -p \
       bootstrap/cache \
@@ -44,7 +45,7 @@ RUN mkdir -p \
       storage/logs \
     && php artisan package:discover --ansi \
     && chown -R 10001:10001 bootstrap/cache storage \
-    && chmod 0555 /usr/local/bin/iicp-operator-entrypoint \
+    && chmod 0555 /usr/local/bin/iicp-operator-entrypoint /usr/local/bin/iicp-operator-rehearsal-entrypoint \
     && find /app -xdev -type d \
          ! -path '/app/bootstrap/cache*' \
          ! -path '/app/storage*' -exec chmod 0555 {} + \
