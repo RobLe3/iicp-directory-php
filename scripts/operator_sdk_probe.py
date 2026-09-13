@@ -61,17 +61,25 @@ def collect(container, image_ref, image_id, output, *, app=None, project=None):
         if identity != image_id:
             raise ValueError('probe_image_identity_differs')
         owner = None
+        owner_error = None
         if app is not None:
-            controller = Owner(lambda args, timeout: capture(['docker', *args], timeout),
-                               container, app, 'com.docker.compose.project', project, image_id)
             try:
-                owner = controller.run()
-            finally:
-                write_json(output / 'directory-outage-control.json', controller.snapshot())
+                controller = Owner(lambda args, timeout: capture(['docker', *args], timeout),
+                                   container, app, 'com.docker.compose.project', project, image_id)
+                try:
+                    owner = controller.run()
+                finally:
+                    write_json(output / 'directory-outage-control.json', controller.snapshot())
+            except Exception as error:
+                # Preserve the probe's bounded, content-free result even if the
+                # independent outage controller loses its race with a fast failure.
+                owner_error = error
         status = capture(['docker', 'wait', container], 1800).strip()
         raw = capture(['docker', 'logs', '--tail', '1000', container], 30)
         value = json.loads(raw)
         write_json(output / 'sdk-probe.json', value)
+        if owner_error is not None:
+            raise owner_error
         if (status != b'0' or value.get('schema') != 'iicp.directory-sdk-probe.v1'
                 or value.get('status') != 'PASS' or value.get('non_authorizing') is not True
                 or type(value.get('qualification_credit')) is not int or value['qualification_credit'] != 0
