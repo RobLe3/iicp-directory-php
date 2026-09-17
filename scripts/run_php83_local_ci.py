@@ -110,9 +110,22 @@ def capture(args, log, timeout, *, progress_interval=PROGRESS_INTERVAL):
     return code if not reader.is_alive() else 125
 
 
-def run(command, output, command_digest, *, image_timeout=IMAGE_TIMEOUT, progress_interval=PROGRESS_INTERVAL):
+def normalize_cleanup(cleanup, absent):
+    # Removal of a never-created object may return nonzero. Independent
+    # absence verification, not an error-message substring, closes cleanup.
+    if absent:
+        for row in cleanup:
+            row["raw_exit_code"] = row["exit_code"]
+            row["exit_code"] = 0
+
+
+def validate_limits(image_timeout, progress_interval):
     if not 1 <= image_timeout <= 7200 or not 1 <= progress_interval <= 300:
         raise ValueError("image timeout must be 1..7200 and progress interval 1..300 seconds")
+
+
+def run(command, output, command_digest, *, image_timeout=IMAGE_TIMEOUT, progress_interval=PROGRESS_INTERVAL):
+    validate_limits(image_timeout, progress_interval)
     if output.is_relative_to(ROOT):
         raise ValueError("output must be outside the source checkout")
     source = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
@@ -182,12 +195,7 @@ def run(command, output, command_digest, *, image_timeout=IMAGE_TIMEOUT, progres
         except (OSError, subprocess.SubprocessError):
             absent = False
         receipt["resources_absent"] = absent
-        # Removal of a never-created object may return nonzero. Independent
-        # absence verification, not an error-message substring, closes cleanup.
-        if absent:
-            for row in cleanup:
-                row["raw_exit_code"] = row["exit_code"]
-                row["exit_code"] = 0
+        normalize_cleanup(cleanup, absent)
         if any(x["exit_code"] for x in cleanup) or not absent:
             receipt["status"] = "FAIL"
         if receipt["status"] == "PASS":
