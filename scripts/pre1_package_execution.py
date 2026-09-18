@@ -1379,7 +1379,10 @@ def directory_payload(artifact, installed, component, target):
 
 def stage_directory_previous(artifact, workspace):
     """Stage the exact supported predecessor, never a relabelled current tree."""
-    if file_digest(safe_path(artifact)) != DIRECTORY_PHP_PREVIOUS_SHA256:
+    safe_path(artifact)
+    if not artifact.is_file() or artifact.stat().st_size > 2 * 1024 * 1024:
+        raise ValueError("Directory previous release artifact exceeds bound")
+    if file_digest(artifact) != DIRECTORY_PHP_PREVIOUS_SHA256:
         raise ValueError("Directory previous release artifact differs")
     installed = stage_directory_payload(artifact, workspace, "directory-php")
     (workspace / "archive.tar.gz").write_bytes(artifact.read_bytes())
@@ -1387,20 +1390,25 @@ def stage_directory_previous(artifact, workspace):
     return installed
 
 
-def directory_operator_dependencies(workspace):
-    config = workspace / "directory-operator-fixture.json"
-    if not config.exists() and not config.is_symlink():
-        return {}
+def directory_operator_config(config):
     safe_path(config)
     if not config.is_file() or config.stat().st_size > 4096:
         raise ValueError("Directory operator fixture configuration exceeds bound")
     raw = config.read_bytes()
     value = json.loads(raw)
-    if (set(value) != {"schema", "database", "username", "port"}
+    if (not isinstance(value, dict) or set(value) != {"schema", "database", "username", "port"}
         or value["schema"] != "iicp.pre1-directory-operator-fixture.v1"
         or not re.fullmatch(r"iicp_pre1_[a-f0-9]{16}", str(value["database"]))
         or value["username"] != "iicp_pre1_fixture" or value["port"] != 3306):
         raise ValueError("Directory operator fixture configuration differs")
+    return raw
+
+
+def directory_operator_dependencies(workspace):
+    config = workspace / "directory-operator-fixture.json"
+    if not config.exists() and not config.is_symlink():
+        return {}
+    raw = directory_operator_config(config)
     password = safe_path(workspace / "directory-operator-password")
     if not stat.S_ISREG(password.stat().st_mode) or stat.S_IMODE(password.stat().st_mode) != 0o600 or not 16 <= password.stat().st_size <= 128:
         raise ValueError("Directory operator secret must be a private regular file")
@@ -1409,6 +1417,8 @@ def directory_operator_dependencies(workspace):
         if (installed / "bootstrap/cache/config.php").exists() or (installed / "bootstrap/cache/config.php").is_symlink():
             raise ValueError("Directory operator cached configuration is forbidden")
     archive = safe_path(previous / "archive.tar.gz")
+    if not archive.is_file() or archive.stat().st_size > 2 * 1024 * 1024:
+        raise ValueError("Directory previous release artifact exceeds bound")
     if file_digest(archive) != DIRECTORY_PHP_PREVIOUS_SHA256:
         raise ValueError("Directory previous release artifact differs")
     payload, deps = directory_payload(archive, safe_path(previous / "payload"), "directory-php", "any")
