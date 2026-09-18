@@ -134,6 +134,101 @@ class PackageExecutionTests(unittest.TestCase):
                    "target": "linux-aarch64", "mode": "local-only", "scenario_id": "config-missing"}
         return artifact, installed, value, context
 
+    def operator_inputs(self):
+        artifact, installed, value, context = self.directory_inputs("directory-php")
+        previous = self.workspace / "previous"
+        previous.mkdir()
+        # Synthetic release bytes are admitted only under this explicit unit-test pin.
+        self.previous_pin = adapter.file_digest(artifact)
+        with patch.object(adapter, "DIRECTORY_PHP_PREVIOUS_SHA256", self.previous_pin):
+            payload = adapter.stage_directory_previous(artifact, previous)
+        (payload / "vendor").mkdir()
+        (payload / "vendor/autoload.php").write_text("locked previous vendor")
+        config = {"schema": "iicp.pre1-directory-operator-fixture.v1", "database": "iicp_pre1_" + "a" * 16,
+                  "username": "iicp_pre1_fixture", "port": 3306}
+        (self.workspace / "directory-operator-fixture.json").write_text(json.dumps(config))
+        password = self.workspace / "directory-operator-password"
+        password.write_text("test-only-not-a-credential")
+        password.chmod(0o600)
+        return artifact, installed, context
+
+    def test_directory_operator_previous_release_pin_refuses_current_substitution(self):
+        artifact, installed, value, context = self.directory_inputs("directory-php")
+        previous = self.workspace / "previous"
+        previous.mkdir()
+        with self.assertRaisesRegex(ValueError, "previous release artifact differs"):
+            adapter.stage_directory_previous(artifact, previous)
+        self.assertEqual(list(previous.iterdir()), [])
+
+    def test_directory_operator_dependency_binding_detects_previous_payload_and_secret_changes(self):
+        artifact, installed, context = self.operator_inputs()
+        with patch.object(adapter, "DIRECTORY_PHP_PREVIOUS_SHA256", self.previous_pin):
+            binding = adapter.create_binding(self.root, self.workspace, installed, artifact,
+                "directory-php", "php-8.3", "linux-aarch64", self.bindings)
+            self.assertNotIn("test-only-not-a-credential", json.dumps(binding))
+            (self.workspace / "directory-operator-password").write_text("different-test-only-value")
+            with self.assertRaisesRegex(ValueError, "inputs changed"):
+                adapter.validate_binding(binding, context, artifact, self.root)
+            (self.workspace / "previous/payload/app/runtime.php").write_text("checkout fallback")
+            with self.assertRaisesRegex(ValueError, "installed archive differs"):
+                adapter.directory_operator_dependencies(self.workspace)
+
+    def test_directory_operator_fixture_refuses_unsafe_database_and_secret_paths(self):
+        artifact, installed, context = self.operator_inputs()
+        fixture = self.workspace / "directory-operator-fixture.json"
+        original = fixture.read_text()
+        for database in ("production", "iicp_pre1_../escape", "iicp_pre1_" + "a" * 16 + ";DROP"):
+            value = json.loads(original)
+            value["database"] = database
+            fixture.write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValueError, "configuration differs"):
+                adapter.directory_operator_dependencies(self.workspace)
+        fixture.write_text(original)
+        password = self.workspace / "directory-operator-password"
+        password.chmod(0o644)
+        with self.assertRaisesRegex(ValueError, "private regular file"):
+            adapter.directory_operator_dependencies(self.workspace)
+        password.unlink()
+        password.symlink_to(self.workspace / "directory-probe.py")
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            adapter.directory_operator_dependencies(self.workspace)
+
+    def test_directory_operator_cached_config_cannot_redirect_packaged_runtime(self):
+        artifact, installed, context = self.operator_inputs()
+        (installed / "bootstrap/cache/config.php").write_text("external database")
+        with self.assertRaisesRegex(ValueError, "cached configuration"):
+            adapter.directory_operator_dependencies(self.workspace)
+
+    def test_directory_operator_fixture_requires_loopback_before_subprocess(self):
+        run = self.directory_http_functions()["php_operator_case"]
+        with self.directory_network({"lo", "eth0"}), patch.object(subprocess, "Popen") as launch:
+            with self.assertRaisesRegex(ValueError, "loopback-only"):
+                run(Path("/fixture/payload"), {}, "backup-restore", "1.10.94")
+            launch.assert_not_called()
+
+    def test_directory_operator_commands_require_bound_fixture_not_structural_fallback(self):
+        artifact, installed, context = self.operator_inputs()
+        mapping = json.loads((self.root / "qualification/pre1-cases.json").read_text())
+        mapping["scenarios"]["backup-restore"]["command"] = ["@python", "-m", "unittest", "structural_only"]
+        (self.root / "qualification/pre1-cases.json").write_text(json.dumps(mapping))
+        (self.workspace / "directory-case-map.json").unlink()
+        with patch.object(adapter, "DIRECTORY_PHP_PREVIOUS_SHA256", self.previous_pin):
+            binding = adapter.create_binding(self.root, self.workspace, installed, artifact,
+                "directory-php", "php-8.3", "linux-aarch64", self.bindings)
+            context["scenario_id"] = "backup-restore"
+            manifest = {"source_version": "1.10.94", "artifacts": [{"kind": "release-archive",
+                "target": "any", "name": artifact.name, "sha256": adapter.file_digest(artifact)}]}
+            root = self.home / "artifacts"
+            (root / "directory-php").mkdir(parents=True)
+            (root / "directory-php" / artifact.name).write_bytes(artifact.read_bytes())
+            runtime = self.home / "runtime.json"
+            runtime.write_text(json.dumps({"runtimes": {"php-8.3": {"programs": {"php": "/fixture/php"}}}}))
+            with patch.dict(os.environ, {"IICP_PRE1_RUNTIME_MAP": str(runtime)}):
+                argv, env, cwd, summary = adapter.directory_package_command(self.root, context, manifest, root, {}, binding)
+            self.assertEqual(argv[-2], str(self.workspace / "directory-probe.py"))
+            self.assertNotIn("unittest", argv)
+            self.assertEqual(env["IICP_PRE1_DIRECTORY_PHP"], "/fixture/php")
+
     def test_directory_binary_binding_and_proof_are_candidate_bound(self):
         artifact, installed, value, context = self.directory_inputs()
         self.assertEqual(adapter.validate_binding(value, context, artifact, self.root), self.workspace)
