@@ -896,6 +896,10 @@ DIRECTORY_RUST_SCENARIOS = DIRECTORY_RUST_HTTP_SCENARIOS | DIRECTORY_RUST_DATABA
     "package-version-self-report", "config-missing", "config-malformed"})
 
 DIRECTORY_PHP_OPERATOR_SCENARIOS = frozenset({"backup-restore", "migration-interrupted", "rollback-last-supported"})
+DIRECTORY_PHP_MODE_ASSERTIONS = {
+    "public": "test_public_mode_omits_restricted_decision_projection",
+    "restricted": "test_scoped_client_can_discover_but_not_bootstrap",
+}
 DIRECTORY_PHP_PREVIOUS_SHA256 = "sha256:20ab5112879ec9a6e51db82ad52a799c5cf5dc9babed1448960b3d073f16cda1"
 
 DIRECTORY_PROBE = r'''import json, os, resource, signal, subprocess, sys, tempfile, time
@@ -1518,6 +1522,58 @@ def php_operator_case(installed, env, scenario, version):
             raise ValueError("Directory operator schema cleanup failed")
         backup.unlink(missing_ok=True)
 
+def run_php_mode_case(installed, env, assertion, report):
+    argv = [os.environ["IICP_PRE1_DIRECTORY_PHP"], "vendor/bin/phpunit",
+        "tests/Feature/RestrictedDomainMembershipTest.php", "--filter", "/::" + assertion + "$/",
+        "--do-not-cache-result", "--bootstrap", str(Path("directory-origin.php").resolve()),
+        "--log-junit", str(report)]
+    resource.setrlimit(resource.RLIMIT_FSIZE, (32 * 1024 * 1024, 32 * 1024 * 1024))
+    with tempfile.TemporaryFile() as output:
+        process = subprocess.Popen(argv, cwd=installed,
+            env={**env, "PRE1_DIRECTORY_INSTALLED": str(installed)},
+            stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            process.wait(timeout=180)
+        finally:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=10)
+        output.seek(0)
+        oversized = len(output.read(32 * 1024 * 1024 + 1)) > 32 * 1024 * 1024
+    return process.returncode, oversized
+
+def validate_php_mode_report(report, assertion, code, oversized):
+    if (code != 0 or oversized or not report.is_file() or report.is_symlink()
+            or report.stat().st_size > 1024 * 1024):
+        raise ValueError("Directory installed mode assertion failed")
+    document = ET.parse(report)
+    cases = list(document.iter("testcase"))
+    if (len(cases) != 1 or cases[0].get("name") != assertion
+            or any(list(document.iter(tag)) for tag in ("skipped", "failure", "error"))):
+        raise ValueError("Directory installed mode assertion did not pass once")
+    report.unlink()
+
+def php_mode_postcondition(installed, env, mode):
+    # These tests execute the installed Laravel package in a private Linux
+    # namespace. A mode label alone is never accepted as profile evidence.
+    if mode == "local-only":
+        return
+    require_loopback_only()
+    assertions = {
+        "public": "test_public_mode_omits_restricted_decision_projection",
+        "restricted": "test_scoped_client_can_discover_but_not_bootstrap",
+    }
+    if mode not in assertions:
+        raise ValueError("Directory packaged mode differs")
+    assertion = assertions[mode]
+    report = Path.cwd() / ("directory-mode-" + mode + "-junit.xml")
+    if report.exists() or report.is_symlink():
+        raise ValueError("Directory mode result already exists")
+    code, oversized = run_php_mode_case(installed, env, assertion, report)
+    validate_php_mode_report(report, assertion, code, oversized)
+
 def interrupt_migration(installed, workspace, php, env, command, helper):
     checkpoint = workspace / "directory-interruption-ready"
     if checkpoint.exists() or checkpoint.is_symlink():
@@ -1547,8 +1603,10 @@ def interrupt_migration(installed, workspace, php, env, command, helper):
 
 context = json.loads(os.environ["IICP_PRE1_EXECUTION_CONTEXT"])
 component, scenario = context["component"], context["scenario_id"]
-if context["mode"] != "local-only":
+if component == "directory-rust" and context["mode"] != "local-only":
     raise ValueError("Directory packaged mode is not implemented")
+if component == "directory-php" and context["mode"] not in {"public", "restricted", "local-only"}:
+    raise ValueError("Directory packaged mode differs")
 installed = Path(os.environ["IICP_PRE1_DIRECTORY_INSTALLED"])
 assertion = sys.argv[1]
 env = {k: os.environ[k] for k in ("HOME", "PATH", "TMPDIR", "TEMP", "TMP") if k in os.environ}
@@ -1583,6 +1641,7 @@ if component == "directory-rust":
     else:
         raise ValueError("Directory packaged scenario is not implemented")
 else:
+    php_mode_postcondition(installed, env, context["mode"])
     if scenario in {"backup-restore", "migration-interrupted", "rollback-last-supported"}:
         resource.setrlimit(resource.RLIMIT_FSIZE, (32 * 1024 * 1024, 32 * 1024 * 1024))
         php_operator_case(installed, env, scenario, os.environ["IICP_PRE1_DIRECTORY_VERSION"])
@@ -1959,10 +2018,16 @@ def require_directory_database_fixture(component, scenario, workspace):
             raise ValueError("Directory packaged database fixture is missing")
 
 
+def validate_directory_mode(component, mode):
+    if component == "directory-rust" and mode != "local-only":
+        raise ValueError("Directory packaged mode remains unimplemented")
+    if component == "directory-php" and mode not in {*DIRECTORY_PHP_MODE_ASSERTIONS, "local-only"}:
+        raise ValueError("Directory packaged mode differs")
+
+
 def directory_package_command(root, context, component_manifest, artifact_root, env, value):
     component, scenario = context["component"], context["scenario_id"]
-    if context["mode"] != "local-only":
-        raise ValueError("Directory packaged mode remains unimplemented")
+    validate_directory_mode(component, context["mode"])
     kind = "release-artifact" if component == "directory-rust" else "release-archive"
     rows = [r for r in component_manifest["artifacts"] if r["kind"] == kind and r["target"] in {context["target"], "any"}]
     if len(rows) != 1:

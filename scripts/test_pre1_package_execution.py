@@ -620,6 +620,59 @@ class PackageExecutionTests(unittest.TestCase):
                 run(Path("/fixture/payload"), {}, "backup-restore", "1.10.94")
             launch.assert_not_called()
 
+    def test_php_mode_probe_requires_exact_installed_profile_assertion(self):
+        import sys
+        import xml.etree.ElementTree as ET
+        from unittest.mock import Mock
+        ns = self.directory_http_functions()
+        ns["resource"], ns["ET"] = Mock(RLIMIT_FSIZE=1), ET
+        runtime = self.home / "fake-php-mode"
+        runtime.write_text("#!" + sys.executable + "\nimport os,sys\nfrom pathlib import Path\n"
+            "name = os.environ['FAKE_ASSERTION']\n"
+            "xml = '<testsuite><testcase name=\"' + name + '\"' + "
+            "('><skipped/></testcase></testsuite>' if os.environ.get('FAKE_SKIP') else '/></testsuite>')\n"
+            "Path(sys.argv[sys.argv.index('--log-junit')+1]).write_text(xml)\n")
+        runtime.chmod(0o700)
+        ns["require_loopback_only"] = lambda: None
+        check = ns["php_mode_postcondition"]
+        env = {"PATH": os.environ.get("PATH", ""), "HOME": str(self.home)}
+        with patch.dict(os.environ, {"IICP_PRE1_DIRECTORY_PHP": str(runtime)}), \
+                patch.object(Path, "cwd", return_value=self.workspace):
+            for mode, assertion in adapter.DIRECTORY_PHP_MODE_ASSERTIONS.items():
+                with self.subTest(mode=mode):
+                    check(self.workspace, {**env, "FAKE_ASSERTION": assertion}, mode)
+                    self.assertFalse((self.workspace / f"directory-mode-{mode}-junit.xml").exists())
+                    with self.assertRaisesRegex(ValueError, "did not pass once"):
+                        check(self.workspace, {**env, "FAKE_ASSERTION": assertion, "FAKE_SKIP": "1"}, mode)
+                    (self.workspace / f"directory-mode-{mode}-junit.xml").unlink()
+            with self.assertRaisesRegex(ValueError, "mode differs"):
+                check(self.workspace, env, "unknown")
+
+    def test_php_restricted_mode_refuses_non_loopback_network_before_launch(self):
+        check = self.directory_http_functions()["php_mode_postcondition"]
+        with self.directory_network({"lo", "eth0"}), patch.object(subprocess, "Popen") as launch:
+            with self.assertRaisesRegex(ValueError, "loopback-only"):
+                check(Path("/fixture/payload"), {}, "restricted")
+            launch.assert_not_called()
+
+    def test_php_public_and_restricted_modes_use_bound_packaged_probe(self):
+        artifact, installed, value, context = self.directory_inputs("directory-php")
+        manifest = {"source_version": "1.10.94", "artifacts": [{"kind": "release-archive",
+            "target": "any", "name": artifact.name, "sha256": adapter.file_digest(artifact)}]}
+        artifact_root = self.home / "artifacts"
+        (artifact_root / "directory-php").mkdir(parents=True)
+        (artifact_root / "directory-php" / artifact.name).write_bytes(artifact.read_bytes())
+        runtime = self.home / "runtime.json"
+        runtime.write_text(json.dumps({"runtimes": {"php-8.3": {"programs": {"php": "/fixture/php"}}}}))
+        with patch.dict(os.environ, {"IICP_PRE1_RUNTIME_MAP": str(runtime)}):
+            for mode in ("public", "restricted"):
+                with self.subTest(mode=mode):
+                    argv, env, cwd, _proof = adapter.directory_package_command(
+                        self.root, {**context, "mode": mode}, manifest, artifact_root, {}, value)
+                    self.assertEqual(argv[-2:], [str(self.workspace / "directory-probe.py"), "config-missing"])
+                    self.assertEqual(json.loads(env["IICP_PRE1_EXECUTION_CONTEXT"])["mode"], mode)
+                    self.assertEqual(cwd, self.workspace)
+
     def test_directory_operator_commands_require_bound_fixture_not_structural_fallback(self):
         artifact, installed, context = self.operator_inputs()
         mapping = json.loads((self.root / "qualification/pre1-cases.json").read_text())
