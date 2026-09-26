@@ -645,7 +645,7 @@ class PackageExecutionTests(unittest.TestCase):
         ns["resource"] = Mock(RLIMIT_FSIZE=1)
         ns["require_loopback_only"] = lambda: None
         check = ns["php_mode_postcondition"]
-        env = {"PATH": os.environ.get("PATH", ""), "DB_URL": "external-database",
+        env = {"PATH": os.environ.get("PATH", ""), "HOME": str(self.home), "DB_URL": "external-database",
             "IICP_RESTRICTED_DOMAIN_ENABLED": "true"}
         with patch.object(Path, "cwd", return_value=self.workspace):
             for mode in ("public", "restricted"):
@@ -657,7 +657,7 @@ class PackageExecutionTests(unittest.TestCase):
                     with patch.dict(os.environ, {"IICP_PRE1_DIRECTORY_PHP": str(runtime)}):
                         with self.assertRaisesRegex(ValueError, "result differs"):
                             check(self.workspace, env, mode)
-                    self.assertEqual(list(self.workspace.glob("directory-mode-*")), [])
+                    self.assertEqual(list(self.home.glob("directory-mode-*")), [])
             with self.assertRaisesRegex(ValueError, "mode differs"):
                 check(self.workspace, env, "unknown")
 
@@ -673,7 +673,7 @@ class PackageExecutionTests(unittest.TestCase):
         with patch.dict(os.environ, {"IICP_PRE1_DIRECTORY_PHP": str(runtime)}), \
                 patch.object(Path, "cwd", return_value=self.workspace):
             with self.assertRaises(ValueError):
-                ns["php_mode_postcondition"](self.workspace, {}, "restricted")
+                ns["php_mode_postcondition"](self.workspace, {"HOME": str(self.home)}, "restricted")
         self.assertEqual(list(self.workspace.glob("directory-mode-*")), [])
 
     def test_php_public_checks_default_and_explicit_environment_separately(self):
@@ -685,9 +685,26 @@ class PackageExecutionTests(unittest.TestCase):
         run = Mock(return_value=receipt)
         ns["run_php_mode_case"] = run
         with patch.object(Path, "cwd", return_value=self.workspace):
-            ns["php_mode_postcondition"](self.workspace, {}, "public")
+            ns["php_mode_postcondition"](self.workspace, {"HOME": str(self.home)}, "public")
         self.assertEqual([call.args[-1] for call in run.call_args_list], [None, "false"])
         self.assertNotEqual(run.call_args_list[0].args[-2], run.call_args_list[1].args[-2])
+
+    def test_php_mode_state_is_outside_read_only_package_workspace(self):
+        from unittest.mock import Mock
+        ns = self.directory_http_functions()
+        ns["resource"] = Mock(RLIMIT_FSIZE=1)
+        ns["require_loopback_only"] = lambda: None
+        runtime = self.mode_probe_runtime()
+        before = set(self.workspace.iterdir())
+        self.workspace.chmod(0o500)
+        try:
+            with patch.dict(os.environ, {"IICP_PRE1_DIRECTORY_PHP": str(runtime)}), \
+                    patch.object(Path, "cwd", return_value=self.workspace):
+                ns["php_mode_postcondition"](self.workspace, {"HOME": str(self.home)}, "restricted")
+            self.assertEqual(set(self.workspace.iterdir()), before)
+            self.assertEqual(list(self.home.glob("directory-mode-*")), [])
+        finally:
+            self.workspace.chmod(0o700)
 
     def test_php_mode_refuses_cached_and_dotenv_configuration(self):
         ns = self.directory_http_functions()

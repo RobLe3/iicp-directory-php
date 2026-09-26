@@ -1577,8 +1577,11 @@ def php_mode_postcondition(installed, env, mode):
         raise ValueError("Directory mode fixture rejects cached or dotenv configuration")
     # Every variant boots the installed package afresh; no PHPUnit setUp or config mutation.
     variants = (None, "false") if mode == "public" else ("true",)
+    home = Path(env["HOME"])
+    if not home.is_absolute() or home.is_symlink() or not home.is_dir() or home.stat().st_mode & 0o077:
+        raise ValueError("Directory mode state requires a private case HOME")
     for enabled in variants:
-        with tempfile.TemporaryDirectory(prefix="directory-mode-", dir=Path.cwd()) as temporary:
+        with tempfile.TemporaryDirectory(prefix="directory-mode-", dir=home) as temporary:
             state = Path(temporary)
             validate_php_mode_result(run_php_mode_case(installed, env, mode, state, enabled), mode)
 
