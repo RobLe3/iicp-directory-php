@@ -1523,11 +1523,12 @@ def php_operator_case(installed, env, scenario, version):
         backup.unlink(missing_ok=True)
 
 def run_php_mode_case(installed, env, mode, state, enabled):
+    import base64
     argv = [os.environ["IICP_PRE1_DIRECTORY_PHP"], str(Path("directory-mode.php").resolve())]
     launch_env = {"PATH": env.get("PATH", ""), "HOME": str(state), "TMPDIR": str(state),
         "PRE1_DIRECTORY_INSTALLED": str(installed), "IICP_PRE1_MODE": mode,
         "IICP_PRE1_MODE_STATE": str(state), "APP_ENV": "testing",
-        "APP_KEY": "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "APP_KEY": "base64:" + base64.b64encode(os.urandom(32)).decode(),
         "DB_CONNECTION": "sqlite", "DB_DATABASE": str(state / "database.sqlite"),
         "DB_URL": "", "DATABASE_URL": "", "CACHE_STORE": "array", "SESSION_DRIVER": "array",
         "QUEUE_CONNECTION": "sync", "LOG_CHANNEL": "stderr",
