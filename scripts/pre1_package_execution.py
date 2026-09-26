@@ -1089,6 +1089,14 @@ def require_loopback_only():
     if active != {"lo"}:
         raise ValueError("Directory HTTP fixture requires loopback-only isolation")
 
+def private_case_home(env):
+    home = Path(env["HOME"])
+    workspace = Path.cwd().resolve()
+    if (not home.is_absolute() or home.is_symlink() or not home.is_dir()
+        or home.stat().st_mode & 0o077 or home == workspace or workspace in home.parents):
+        raise ValueError("Directory state requires a private case HOME outside the prepared workspace")
+    return home
+
 def database_fixture_inputs():
     import re, stat
     workspace = Path.cwd()
@@ -1116,7 +1124,7 @@ def database_observation():
         "--port=3306", "--connect-timeout=3", "--user=" + config["username"],
         "--database=" + config["database"], "--execute",
         "SELECT UNIX_TIMESTAMP(liveness_verified_at), liveness_challenge FROM nodes WHERE id = 'fixture-replay'"]
-    with tempfile.TemporaryDirectory(prefix="directory-oracle-home-", dir=Path.cwd()) as private_home, tempfile.TemporaryFile() as output:
+    with tempfile.TemporaryDirectory(prefix="directory-oracle-home-", dir=private_case_home(os.environ)) as private_home, tempfile.TemporaryFile() as output:
         result = subprocess.run(argv, env={"PATH": os.environ.get("PATH", ""), "MYSQL_PWD": password, "HOME": private_home},
             stdout=output, stderr=subprocess.DEVNULL, timeout=10)
         output.seek(0); raw = output.read(4097)
@@ -1487,7 +1495,7 @@ def php_operator_case(installed, env, scenario, version):
     # Each case gets an empty, disposable schema. Never erase a pre-existing schema.
     if command(installed, [helper, "empty"]).strip() != "true":
         raise ValueError("Directory operator database is not empty")
-    backup = workspace / "directory-backup.json"
+    backup = private_case_home(env) / "directory-backup.json"
     if backup.exists() or backup.is_symlink():
         raise ValueError("Directory operator backup already exists")
     try:
@@ -1577,16 +1585,14 @@ def php_mode_postcondition(installed, env, mode):
         raise ValueError("Directory mode fixture rejects cached or dotenv configuration")
     # Every variant boots the installed package afresh; no PHPUnit setUp or config mutation.
     variants = (None, "false") if mode == "public" else ("true",)
-    home = Path(env["HOME"])
-    if not home.is_absolute() or home.is_symlink() or not home.is_dir() or home.stat().st_mode & 0o077:
-        raise ValueError("Directory mode state requires a private case HOME")
+    home = private_case_home(env)
     for enabled in variants:
         with tempfile.TemporaryDirectory(prefix="directory-mode-", dir=home) as temporary:
             state = Path(temporary)
             validate_php_mode_result(run_php_mode_case(installed, env, mode, state, enabled), mode)
 
 def interrupt_migration(installed, workspace, php, env, command, helper):
-    checkpoint = workspace / "directory-interruption-ready"
+    checkpoint = private_case_home(env) / "directory-interruption-ready"
     if checkpoint.exists() or checkpoint.is_symlink():
         raise ValueError("Directory interruption checkpoint already exists")
     with tempfile.TemporaryFile() as output:
@@ -1622,6 +1628,7 @@ installed = Path(os.environ["IICP_PRE1_DIRECTORY_INSTALLED"])
 assertion = sys.argv[1]
 env = {k: os.environ[k] for k in ("HOME", "PATH", "TMPDIR", "TEMP", "TMP") if k in os.environ}
 env.update(APP_ENV="testing", NO_COLOR="1")
+case_home = private_case_home(env)
 if component == "directory-rust":
     argv = [str(installed / "iicp-directory-rs")]
     if scenario in {"credential-missing", "unsupported-version", "credential-expired",
@@ -1663,7 +1670,7 @@ else:
     argv = [os.environ["IICP_PRE1_DIRECTORY_PHP"], *case["command"][1:]]
     if case["command"][0] != "@php" or case["assertion"] != assertion:
         raise ValueError("structural Python checks are not packaged Directory operations")
-    report = Path("directory-junit.xml").resolve()
+    report = case_home / "directory-junit.xml"
     if report.exists():
         raise ValueError("Directory case result already exists")
     argv.extend(["--do-not-cache-result", "--bootstrap", str(Path("directory-origin.php").resolve()),
@@ -1672,7 +1679,7 @@ else:
     expected_code, expected = 0, None
 limit = 32 * 1024 * 1024
 resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
-with tempfile.NamedTemporaryFile(prefix="directory-output-", dir=Path.cwd(), delete=False) as log:
+with tempfile.NamedTemporaryFile(prefix="directory-output-", dir=case_home, delete=False) as log:
     output_file = Path(log.name)
     process = subprocess.Popen(argv, cwd=installed, env=env, stdout=log, stderr=subprocess.STDOUT,
                                start_new_session=True)
