@@ -897,8 +897,8 @@ DIRECTORY_RUST_SCENARIOS = DIRECTORY_RUST_HTTP_SCENARIOS | DIRECTORY_RUST_DATABA
 
 DIRECTORY_PHP_OPERATOR_SCENARIOS = frozenset({"backup-restore", "migration-interrupted", "rollback-last-supported"})
 DIRECTORY_PHP_MODE_ASSERTIONS = {
-    "public": "test_public_mode_omits_restricted_decision_projection",
-    "restricted": "test_scoped_client_can_discover_but_not_bootstrap",
+    "public": "environment-public-default-and-explicit",
+    "restricted": "environment-restricted-membership",
 }
 DIRECTORY_PHP_PREVIOUS_SHA256 = "sha256:20ab5112879ec9a6e51db82ad52a799c5cf5dc9babed1448960b3d073f16cda1"
 
@@ -1522,15 +1522,28 @@ def php_operator_case(installed, env, scenario, version):
             raise ValueError("Directory operator schema cleanup failed")
         backup.unlink(missing_ok=True)
 
-def run_php_mode_case(installed, env, assertion, report):
-    argv = [os.environ["IICP_PRE1_DIRECTORY_PHP"], "vendor/bin/phpunit",
-        "tests/Feature/RestrictedDomainMembershipTest.php", "--filter", "/::" + assertion + "$/",
-        "--do-not-cache-result", "--bootstrap", str(Path("directory-origin.php").resolve()),
-        "--log-junit", str(report)]
+def run_php_mode_case(installed, env, mode, state, enabled):
+    argv = [os.environ["IICP_PRE1_DIRECTORY_PHP"], str(Path("directory-mode.php").resolve())]
+    launch_env = {"PATH": env.get("PATH", ""), "HOME": str(state), "TMPDIR": str(state),
+        "PRE1_DIRECTORY_INSTALLED": str(installed), "IICP_PRE1_MODE": mode,
+        "IICP_PRE1_MODE_STATE": str(state), "APP_ENV": "testing",
+        "APP_KEY": "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "DB_CONNECTION": "sqlite", "DB_DATABASE": str(state / "database.sqlite"),
+        "DB_URL": "", "DATABASE_URL": "", "CACHE_STORE": "array", "SESSION_DRIVER": "array",
+        "QUEUE_CONNECTION": "sync", "LOG_CHANNEL": "stderr",
+        "APP_CONFIG_CACHE": str(state / "no-config-cache.php"),
+        "APP_ROUTES_CACHE": str(state / "no-routes-cache.php"),
+        "APP_PACKAGES_CACHE": str(state / "packages.php"), "APP_SERVICES_CACHE": str(state / "services.php"),
+        "IICP_TRUST_DOMAIN_ID": "example.internal", "IICP_DIRECTORY_AUTHORITY_ID": "did:key:directory",
+        "IICP_DIRECTORY_AUTHORITY_KEY_ID": "did:key:directory#key-1", "IICP_MEMBERSHIP_EPOCH": "1"}
+    if enabled is not None:
+        launch_env["IICP_RESTRICTED_DOMAIN_ENABLED"] = enabled
+    (state / "database.sqlite").touch(mode=0o600)
+    for relative in ("storage/logs", "storage/framework/cache/data", "storage/framework/sessions", "storage/framework/views"):
+        (state / relative).mkdir(mode=0o700, parents=True, exist_ok=True)
     resource.setrlimit(resource.RLIMIT_FSIZE, (32 * 1024 * 1024, 32 * 1024 * 1024))
     with tempfile.TemporaryFile() as output:
-        process = subprocess.Popen(argv, cwd=installed,
-            env={**env, "PRE1_DIRECTORY_INSTALLED": str(installed)},
+        process = subprocess.Popen(argv, cwd=installed, env=launch_env,
             stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             process.wait(timeout=180)
@@ -1541,38 +1554,32 @@ def run_php_mode_case(installed, env, assertion, report):
                 pass
             process.wait(timeout=10)
         output.seek(0)
-        oversized = len(output.read(32 * 1024 * 1024 + 1)) > 32 * 1024 * 1024
-    return process.returncode, oversized
+        raw = output.read(65537)
+    if process.returncode != 0 or len(raw) > 65536:
+        raise ValueError("Directory installed environment mode probe failed")
+    return json.loads(raw)
 
-def validate_php_mode_report(report, assertion, code, oversized):
-    if (code != 0 or oversized or not report.is_file() or report.is_symlink()
-            or report.stat().st_size > 1024 * 1024):
-        raise ValueError("Directory installed mode assertion failed")
-    document = ET.parse(report)
-    cases = list(document.iter("testcase"))
-    if (len(cases) != 1 or cases[0].get("name") != assertion
-            or any(list(document.iter(tag)) for tag in ("skipped", "failure", "error"))):
-        raise ValueError("Directory installed mode assertion did not pass once")
-    report.unlink()
+def validate_php_mode_result(value, mode):
+    checks = ["environment-mode", "public-discovery", "public-projection"] if mode == "public" else [
+        "environment-mode", "anonymous-denied", "scoped-discovery", "bootstrap-denied",
+        "wrong-scope-denied", "invalid-credential-denied", "revoked-denied"]
+    if value != {"schema": "iicp.pre1-directory-mode-result.v1", "mode": mode, "checks": checks}:
+        raise ValueError("Directory installed environment mode result differs")
 
 def php_mode_postcondition(installed, env, mode):
-    # These tests execute the installed Laravel package in a private Linux
-    # namespace. A mode label alone is never accepted as profile evidence.
     if mode == "local-only":
         return
     require_loopback_only()
-    assertions = {
-        "public": "test_public_mode_omits_restricted_decision_projection",
-        "restricted": "test_scoped_client_can_discover_but_not_bootstrap",
-    }
-    if mode not in assertions:
+    if mode not in {"public", "restricted"}:
         raise ValueError("Directory packaged mode differs")
-    assertion = assertions[mode]
-    report = Path.cwd() / ("directory-mode-" + mode + "-junit.xml")
-    if report.exists() or report.is_symlink():
-        raise ValueError("Directory mode result already exists")
-    code, oversized = run_php_mode_case(installed, env, assertion, report)
-    validate_php_mode_report(report, assertion, code, oversized)
+    if (installed / "bootstrap/cache/config.php").exists() or (installed / ".env").exists():
+        raise ValueError("Directory mode fixture rejects cached or dotenv configuration")
+    # Every variant boots the installed package afresh; no PHPUnit setUp or config mutation.
+    variants = (None, "false") if mode == "public" else ("true",)
+    for enabled in variants:
+        with tempfile.TemporaryDirectory(prefix="directory-mode-", dir=Path.cwd()) as temporary:
+            state = Path(temporary)
+            validate_php_mode_result(run_php_mode_case(installed, env, mode, state, enabled), mode)
 
 def interrupt_migration(installed, workspace, php, env, command, helper):
     checkpoint = workspace / "directory-interruption-ready"
@@ -1774,6 +1781,84 @@ return new class extends Illuminate\Database\Migrations\Migration {
 };
 '''
 
+DIRECTORY_MODE = r'''<?php
+try {
+$root = realpath(getenv('PRE1_DIRECTORY_INSTALLED'));
+$state = realpath(getenv('IICP_PRE1_MODE_STATE'));
+$mode = getenv('IICP_PRE1_MODE');
+if (!$root || !$state || !in_array($mode, ['public', 'restricted'], true)) {
+    throw new RuntimeException('Mode fixture inputs unavailable');
+}
+// Synthetic run-local authority, supplied through the real configuration input before boot.
+putenv('IICP_GENESIS_ED25519_SECRET_KEY=' . sodium_bin2hex(sodium_crypto_sign_secretkey(sodium_crypto_sign_keypair())));
+require __DIR__ . '/directory-origin.php';
+$app = require $root . '/bootstrap/app.php';
+$app->useStoragePath($state . '/storage');
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+function demand(bool $value): void {
+    if (!$value) { throw new RuntimeException('Installed mode behavior differs'); }
+}
+demand(config('iicp.restricted_domain.enabled') === ($mode === 'restricted'));
+demand(config('database.default') === 'sqlite');
+demand(config('database.connections.sqlite.database') === $state . '/database.sqlite');
+demand(Illuminate\Support\Facades\Artisan::call('migrate', ['--force' => true, '--no-interaction' => true]) === 0);
+$kernel = $app->make(Illuminate\Contracts\Http\Kernel::class);
+function requestMode($kernel, string $path, array $headers = []): array {
+    $server = ['HTTP_ACCEPT' => 'application/json', 'REMOTE_ADDR' => '127.0.0.1'];
+    foreach ($headers as $name => $value) {
+        $server['HTTP_' . strtoupper(str_replace('-', '_', $name))] = $value;
+    }
+    $request = Illuminate\Http\Request::create($path, 'GET', [], [], [], $server);
+    $response = $kernel->handle($request);
+    $kernel->terminate($request, $response);
+    return [$response->getStatusCode(), json_decode($response->getContent(), true, 512, JSON_THROW_ON_ERROR)];
+}
+$discover = '/api/v1/discover?intent=urn:iicp:intent:llm:chat:v1';
+$checks = ['environment-mode'];
+[$status, $body] = requestMode($kernel, $discover);
+if ($mode === 'public') {
+    demand($status === 200);
+    $checks[] = 'public-discovery';
+    demand(!array_key_exists('restricted_domain_decision', $body));
+    $checks[] = 'public-projection';
+} else {
+    demand(config('iicp.restricted_domain.domain_id') === 'example.internal');
+    demand(config('iicp.restricted_domain.authority_id') === 'did:key:directory');
+    demand($status === 401 && ($body['error']['code'] ?? null) === 'restricted_domain_denied');
+    $checks[] = 'anonymous-denied';
+    $memberships = $app->make(App\Services\TrustDomainMembershipService::class);
+    $issued = $memberships->issue('client', 'fixture-client', ['discovery'], 3600);
+    $headers = ['X-IICP-Membership' => $issued['token'], 'X-IICP-Subject-Id' => 'fixture-client'];
+    [$status, $body] = requestMode($kernel, $discover, $headers);
+    demand($status === 200 && ($body['restricted_domain_decision']['decision'] ?? null) === 'eligible');
+    demand(($body['restricted_domain_decision']['operation'] ?? null) === 'discovery');
+    demand(($body['restricted_domain_decision']['domain_id'] ?? null) === 'example.internal');
+    $checks[] = 'scoped-discovery';
+    [$status] = requestMode($kernel, '/api/v1/bootstrap', $headers);
+    demand($status === 401);
+    $checks[] = 'bootstrap-denied';
+    $wrong = $memberships->issue('client', 'fixture-other', ['bootstrap'], 3600);
+    [$status] = requestMode($kernel, $discover, ['X-IICP-Membership' => $wrong['token'], 'X-IICP-Subject-Id' => 'fixture-other']);
+    demand($status === 401);
+    $checks[] = 'wrong-scope-denied';
+    $invalid = $issued['token'];
+    $invalid[-1] = $invalid[-1] === 'A' ? 'B' : 'A';
+    [$status] = requestMode($kernel, $discover, ['X-IICP-Membership' => $invalid, 'X-IICP-Subject-Id' => 'fixture-client']);
+    demand($status === 401);
+    $checks[] = 'invalid-credential-denied';
+    demand($memberships->revoke('client', 'fixture-client'));
+    [$status] = requestMode($kernel, $discover, $headers);
+    demand($status === 401);
+    $checks[] = 'revoked-denied';
+}
+echo json_encode(['schema' => 'iicp.pre1-directory-mode-result.v1', 'mode' => $mode, 'checks' => $checks], JSON_THROW_ON_ERROR) . "\n";
+    exit(0);
+} catch (Throwable $failure) {
+    fwrite(STDERR, 'Directory mode probe failed at line ' . $failure->getLine() . ': ' . get_class($failure) . "\n");
+    exit(1);
+}
+'''
+
 DIRECTORY_ORIGIN = r'''<?php
 $root = realpath(getenv('PRE1_DIRECTORY_INSTALLED'));
 if (!$root) { throw new RuntimeException('Directory package root unavailable'); }
@@ -1874,6 +1959,7 @@ def directory_fixtures(root, component):
               "directory-case-map.json": safe_path(root / "qualification/pre1-cases.json").read_bytes()}
     if component == "directory-php":
         result["directory-origin.php"] = DIRECTORY_ORIGIN.encode()
+        result["directory-mode.php"] = DIRECTORY_MODE.encode()
         result["directory-operator.php"] = DIRECTORY_OPERATOR.encode()
         result["directory-interruption.php"] = DIRECTORY_INTERRUPTION.encode()
     return result
