@@ -620,6 +620,140 @@ class PackageExecutionTests(unittest.TestCase):
                 run(Path("/fixture/payload"), {}, "backup-restore", "1.10.94")
             launch.assert_not_called()
 
+    def mode_probe_runtime(self, *, broken=False):
+        import sys
+        runtime = self.home / "fake-php-mode"
+        runtime.write_text("#!" + sys.executable + "\nimport os,sys,json\n"
+            "from pathlib import Path\n"
+            "assert sys.argv[1].endswith('directory-mode.php')\n"
+            "assert os.environ['DB_CONNECTION'] == 'sqlite'\n"
+            "assert os.environ['DB_URL'] == ''\n"
+            "assert Path(os.environ['DB_DATABASE']).is_file()\n"
+            "mode=os.environ['IICP_PRE1_MODE']\n"
+            "enabled=os.environ.get('IICP_RESTRICTED_DOMAIN_ENABLED')\n"
+            "assert (enabled == 'true') == (mode == 'restricted')\n"
+            "checks=['environment-mode','public-discovery','public-projection'] if mode == 'public' else "
+            "['environment-mode','anonymous-denied','scoped-discovery','bootstrap-denied','wrong-scope-denied','invalid-credential-denied','revoked-denied']\n"
+            + ("checks.pop()\n" if broken else "")
+            + "print(json.dumps({'schema':'iicp.pre1-directory-mode-result.v1','mode':mode,'checks':checks}))\n")
+        runtime.chmod(0o700)
+        return runtime
+
+    def test_php_mode_probe_requires_real_environment_and_complete_behavior(self):
+        from unittest.mock import Mock
+        ns = self.directory_http_functions()
+        ns["resource"] = Mock(RLIMIT_FSIZE=1)
+        ns["require_loopback_only"] = lambda: None
+        check = ns["php_mode_postcondition"]
+        env = {"PATH": os.environ.get("PATH", ""), "HOME": str(self.home), "DB_URL": "external-database",
+            "IICP_RESTRICTED_DOMAIN_ENABLED": "true"}
+        with patch.object(Path, "cwd", return_value=self.workspace):
+            for mode in ("public", "restricted"):
+                with self.subTest(mode=mode):
+                    runtime = self.mode_probe_runtime()
+                    with patch.dict(os.environ, {"IICP_PRE1_DIRECTORY_PHP": str(runtime)}):
+                        check(self.workspace, env, mode)
+                    runtime = self.mode_probe_runtime(broken=True)
+                    with patch.dict(os.environ, {"IICP_PRE1_DIRECTORY_PHP": str(runtime)}):
+                        with self.assertRaisesRegex(ValueError, "result differs"):
+                            check(self.workspace, env, mode)
+                    self.assertEqual(list(self.home.glob("directory-mode-*")), [])
+            with self.assertRaisesRegex(ValueError, "mode differs"):
+                check(self.workspace, env, "unknown")
+
+    def test_php_mode_zero_exit_without_json_is_not_success(self):
+        import sys
+        from unittest.mock import Mock
+        ns = self.directory_http_functions()
+        ns["resource"] = Mock(RLIMIT_FSIZE=1)
+        ns["require_loopback_only"] = lambda: None
+        runtime = self.home / "fake-zero-exit"
+        runtime.write_text("#!" + sys.executable + "\nprint('PHP framework handled an exception')\n")
+        runtime.chmod(0o700)
+        with patch.dict(os.environ, {"IICP_PRE1_DIRECTORY_PHP": str(runtime)}), \
+                patch.object(Path, "cwd", return_value=self.workspace):
+            with self.assertRaises(ValueError):
+                ns["php_mode_postcondition"](self.workspace, {"HOME": str(self.home)}, "restricted")
+        self.assertEqual(list(self.workspace.glob("directory-mode-*")), [])
+
+    def test_php_public_checks_default_and_explicit_environment_separately(self):
+        from unittest.mock import Mock
+        ns = self.directory_http_functions()
+        ns["require_loopback_only"] = lambda: None
+        receipt = {"schema": "iicp.pre1-directory-mode-result.v1", "mode": "public",
+            "checks": ["environment-mode", "public-discovery", "public-projection"]}
+        run = Mock(return_value=receipt)
+        ns["run_php_mode_case"] = run
+        with patch.object(Path, "cwd", return_value=self.workspace):
+            ns["php_mode_postcondition"](self.workspace, {"HOME": str(self.home)}, "public")
+        self.assertEqual([call.args[-1] for call in run.call_args_list], [None, "false"])
+        self.assertNotEqual(run.call_args_list[0].args[-2], run.call_args_list[1].args[-2])
+
+    def test_php_mode_state_is_outside_read_only_package_workspace(self):
+        from unittest.mock import Mock
+        ns = self.directory_http_functions()
+        ns["resource"] = Mock(RLIMIT_FSIZE=1)
+        ns["require_loopback_only"] = lambda: None
+        runtime = self.mode_probe_runtime()
+        before = set(self.workspace.iterdir())
+        self.workspace.chmod(0o500)
+        try:
+            with patch.dict(os.environ, {"IICP_PRE1_DIRECTORY_PHP": str(runtime)}), \
+                    patch.object(Path, "cwd", return_value=self.workspace):
+                ns["php_mode_postcondition"](self.workspace, {"HOME": str(self.home)}, "restricted")
+            self.assertEqual(set(self.workspace.iterdir()), before)
+            self.assertEqual(list(self.home.glob("directory-mode-*")), [])
+        finally:
+            self.workspace.chmod(0o700)
+
+    def test_php_mode_refuses_cached_and_dotenv_configuration(self):
+        ns = self.directory_http_functions()
+        ns["require_loopback_only"] = lambda: None
+        for name in ("bootstrap/cache/config.php", ".env"):
+            path = self.workspace / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("stale configuration")
+            with patch.object(subprocess, "Popen") as launch:
+                with self.assertRaisesRegex(ValueError, "cached or dotenv"):
+                    ns["php_mode_postcondition"](self.workspace, {}, "restricted")
+                launch.assert_not_called()
+            path.unlink()
+
+    def test_php_mode_fixture_boots_installed_code_without_configuration_override(self):
+        self.assertIn("/bootstrap/app.php", adapter.DIRECTORY_MODE)
+        self.assertIn("config('iicp.restricted_domain.enabled') ===", adapter.DIRECTORY_MODE)
+        self.assertNotIn("config()->set", adapter.DIRECTORY_MODE)
+        self.assertNotIn("RestrictedDomainMembershipTest", adapter.DIRECTORY_MODE)
+        self.assertNotIn("putenv('IICP_RESTRICTED_DOMAIN_ENABLED", adapter.DIRECTORY_MODE)
+        (self.root / "qualification").mkdir(exist_ok=True)
+        (self.root / "qualification/pre1-cases.json").write_text("{}")
+        self.assertIn("directory-mode.php", adapter.directory_fixtures(self.root, "directory-php"))
+
+    def test_php_restricted_mode_refuses_non_loopback_network_before_launch(self):
+        check = self.directory_http_functions()["php_mode_postcondition"]
+        with self.directory_network({"lo", "eth0"}), patch.object(subprocess, "Popen") as launch:
+            with self.assertRaisesRegex(ValueError, "loopback-only"):
+                check(Path("/fixture/payload"), {}, "restricted")
+            launch.assert_not_called()
+
+    def test_php_public_and_restricted_modes_use_bound_packaged_probe(self):
+        artifact, installed, value, context = self.directory_inputs("directory-php")
+        manifest = {"source_version": "1.10.94", "artifacts": [{"kind": "release-archive",
+            "target": "any", "name": artifact.name, "sha256": adapter.file_digest(artifact)}]}
+        artifact_root = self.home / "artifacts"
+        (artifact_root / "directory-php").mkdir(parents=True)
+        (artifact_root / "directory-php" / artifact.name).write_bytes(artifact.read_bytes())
+        runtime = self.home / "runtime.json"
+        runtime.write_text(json.dumps({"runtimes": {"php-8.3": {"programs": {"php": "/fixture/php"}}}}))
+        with patch.dict(os.environ, {"IICP_PRE1_RUNTIME_MAP": str(runtime)}):
+            for mode in ("public", "restricted"):
+                with self.subTest(mode=mode):
+                    argv, env, cwd, _proof = adapter.directory_package_command(
+                        self.root, {**context, "mode": mode}, manifest, artifact_root, {}, value)
+                    self.assertEqual(argv[-2:], [str(self.workspace / "directory-probe.py"), "config-missing"])
+                    self.assertEqual(json.loads(env["IICP_PRE1_EXECUTION_CONTEXT"])["mode"], mode)
+                    self.assertEqual(cwd, self.workspace)
+
     def test_directory_operator_commands_require_bound_fixture_not_structural_fallback(self):
         artifact, installed, context = self.operator_inputs()
         mapping = json.loads((self.root / "qualification/pre1-cases.json").read_text())
@@ -741,6 +875,89 @@ class PackageExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not a directory"):
             adapter.provision_directory_runtime_paths(installed)
 
+    def test_directory_private_case_home_rejects_package_storage_and_unsafe_paths(self):
+        validate = self.directory_http_functions()["private_case_home"]
+        with patch.object(Path, "cwd", return_value=self.workspace):
+            self.assertEqual(validate({"HOME": str(self.home)}), self.home)
+            nested = self.workspace / "case-home"
+            nested.mkdir(mode=0o700)
+            link = self.home / "home-link"
+            link.symlink_to(self.home, target_is_directory=True)
+            public = self.home / "public-home"
+            public.mkdir(mode=0o755)
+            for home in ("relative", str(self.workspace), str(nested), str(link), str(public)):
+                with self.subTest(home=home), self.assertRaisesRegex(ValueError, "private case HOME"):
+                    validate({"HOME": home})
+
+    def test_database_oracle_home_is_private_and_outside_read_only_workspace(self):
+        _artifact, _installed, _context = self.operator_inputs()
+        ns = self.directory_http_functions()
+        ns["require_loopback_only"] = lambda: None
+        seen = []
+        def observe(argv, **kwargs):
+            home = Path(kwargs["env"]["HOME"])
+            self.assertEqual(home.parent, self.home)
+            self.assertEqual(home.stat().st_mode & 0o077, 0)
+            seen.append(home)
+            kwargs["stdout"].write(b"NULL\tfixture-challenge\n")
+            return subprocess.CompletedProcess(argv, 0)
+        self.workspace.chmod(0o500)
+        try:
+            with patch.object(Path, "cwd", return_value=self.workspace), \
+                    patch.object(subprocess, "run", side_effect=observe):
+                self.assertEqual(ns["database_observation"](),
+                    {"verified_at": None, "challenge": "fixture-challenge"})
+            self.assertEqual(len(seen), 1)
+            self.assertFalse(seen[0].exists())
+        finally:
+            self.workspace.chmod(0o700)
+
+    def test_migration_checkpoint_uses_private_home_and_real_child_is_reaped(self):
+        import sys
+        ns = self.directory_http_functions()
+        runtime = self.home / "fake-migration"
+        runtime.write_text("#!" + sys.executable + "\nimport os,time\nfrom pathlib import Path\n"
+            "checkpoint=Path(os.environ['IICP_PRE1_INTERRUPTION_READY'])\n"
+            "assert checkpoint.parent == Path(os.environ['HOME'])\n"
+            "checkpoint.write_text('transaction-open')\ntime.sleep(30)\n")
+        runtime.chmod(0o700)
+        self.workspace.chmod(0o500)
+        try:
+            with patch.object(Path, "cwd", return_value=self.workspace):
+                ns["interrupt_migration"](self.workspace, self.workspace, str(runtime),
+                    {"HOME": str(self.home), "PATH": os.environ.get("PATH", "")}, None, None)
+            self.assertFalse((self.home / "directory-interruption-ready").exists())
+            self.assertFalse((self.workspace / "directory-interruption-ready").exists())
+        finally:
+            self.workspace.chmod(0o700)
+
+    def test_directory_php_generated_probe_keeps_read_only_workspace_unchanged(self):
+        import sys
+        _artifact, installed, _binding, context = self.directory_inputs("directory-php")
+        context["scenario_id"] = "package-version-self-report"
+        runtime = self.home / "fake-php-readonly"
+        runtime.write_text("#!" + sys.executable + "\nimport sys\nfrom pathlib import Path\n"
+            "report=Path(sys.argv[sys.argv.index('--log-junit')+1])\n"
+            "report.write_text('<testsuite><testcase name=\"package-version-self-report\"/></testsuite>')\n")
+        runtime.chmod(0o700)
+        snapshot = lambda: {str(p.relative_to(self.workspace)): p.read_bytes() if p.is_file() else None
+                            for p in self.workspace.rglob("*")}
+        before = snapshot()
+        self.workspace.chmod(0o500)
+        try:
+            result = subprocess.run([sys.executable, "-I", "-S", str(self.workspace / "directory-probe.py"),
+                "package-version-self-report"], cwd=self.workspace,
+                env={**os.environ, "HOME": str(self.home), "IICP_PRE1_EXECUTION_CONTEXT": json.dumps(context),
+                     "IICP_PRE1_DIRECTORY_INSTALLED": str(installed), "IICP_PRE1_DIRECTORY_PHP": str(runtime)},
+                capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IICP_PRE1_DIRECTORY_ASSERTION_PASS", result.stdout)
+            self.assertEqual(snapshot(), before)
+            self.assertFalse((self.home / "directory-junit.xml").exists())
+            self.assertEqual(list(self.home.glob("directory-output-*")), [])
+        finally:
+            self.workspace.chmod(0o700)
+
     def test_directory_php_probe_self_report_and_junit_fail_closed(self):
         import sys
         artifact, installed, value, context = self.directory_inputs("directory-php")
@@ -760,7 +977,7 @@ class PackageExecutionTests(unittest.TestCase):
             ('<testsuite><testcase name="wrong"/></testsuite>', 1),
             ('<testsuite><testcase name="package-version-self-report"/><testcase name="extra"/></testsuite>', 1),
         ]:
-            (self.workspace / "directory-junit.xml").unlink(missing_ok=True)
+            (self.home / "directory-junit.xml").unlink(missing_ok=True)
             # The child environment is intentionally sanitized; vary the fake
             # runtime itself instead of relying on inherited environment values.
             runtime.write_text("#!" + sys.executable + "\nimport sys\nfrom pathlib import Path\n" +
