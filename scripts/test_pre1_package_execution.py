@@ -30,6 +30,19 @@ class PackageExecutionTests(unittest.TestCase):
         exec(compile(functions, "directory-probe.py", "exec"), namespace)
         return namespace
 
+    def test_registration_profile_reaches_only_its_native_assertion(self):
+        apply = self.directory_http_functions()["php_registration_environment"]
+        original = {"HOME": "/private", "IICP_PRE1_REGISTRATION_MODE": "inherited"}
+        for mode in ("local-only", "public", "restricted"):
+            self.assertEqual(apply(original, "cross-flavor-equivalence", mode)[
+                "IICP_PRE1_REGISTRATION_MODE"], mode)
+        self.assertNotIn("IICP_PRE1_REGISTRATION_MODE", apply(original, "credential-missing", "public"))
+        self.assertEqual(original["IICP_PRE1_REGISTRATION_MODE"], "inherited")
+        with self.assertRaises(ValueError):
+            apply(original, "cross-flavor-equivalence", "unknown")
+        self.assertIn('env = php_registration_environment(env, scenario, context["mode"])',
+                      adapter.DIRECTORY_PROBE)
+
     def test_phpunit_runtime_paths_are_private_and_not_reused(self):
         ns = self.directory_http_functions()
         env = {"HOME": str(self.home), "APP_ENV": "testing", "PATH": "/fixture"}

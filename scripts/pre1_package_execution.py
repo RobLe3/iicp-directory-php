@@ -1631,6 +1631,16 @@ def validate_php_mode_result(value, mode):
     if value != {"schema": "iicp.pre1-directory-mode-result.v1", "mode": mode, "checks": checks}:
         raise ValueError("Directory installed environment mode result differs")
 
+def php_registration_environment(env, scenario, mode):
+    result = dict(env)
+    result.pop("IICP_PRE1_REGISTRATION_MODE", None)
+    if scenario == "cross-flavor-equivalence":
+        if mode not in {"local-only", "public", "restricted"}:
+            raise ValueError("PHP registration profile is unsupported")
+        result["IICP_PRE1_REGISTRATION_MODE"] = mode
+    return result
+
+
 def php_mode_postcondition(installed, env, mode):
     if mode == "local-only":
         return
@@ -1733,6 +1743,7 @@ else:
                  "--log-junit", str(report)])
     env = php_test_environment(env)
     env.update(PRE1_DIRECTORY_INSTALLED=str(installed))
+    env = php_registration_environment(env, scenario, context["mode"])
     expected_code, expected = 0, None
 limit = 32 * 1024 * 1024
 resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
