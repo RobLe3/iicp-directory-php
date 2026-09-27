@@ -1779,6 +1779,11 @@ if component == "directory-php":
         raise ValueError("Directory exact assertion did not pass once without skips")
     report.unlink()
 output_file.unlink()
+if component == "directory-php" and scenario == "cross-flavor-equivalence":
+    rows = [line for line in output.splitlines() if line.startswith("IICP_PRE1_REGISTRATION_OBSERVATION ")]
+    if len(rows) != 1:
+        raise ValueError("Directory registration observation is missing or duplicated")
+    print(rows[0])
 print("IICP_PRE1_DIRECTORY_ASSERTION_PASS " + assertion)
 '''
 DIRECTORY_OPERATOR = r'''<?php

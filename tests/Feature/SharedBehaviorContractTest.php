@@ -19,6 +19,7 @@ use App\Services\OperatorDelegationVerifier;
 use App\Services\TrustDomainMembershipService;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
@@ -238,6 +239,12 @@ class SharedBehaviorContractTest extends TestCase
         $this->assertDatabaseCount('nodes', $recovery['expected']['node_rows']);
         $this->assertDatabaseCount('capabilities', $recovery['expected']['capability_rows']);
         $this->assertDatabaseCount('availability_windows', $recovery['expected']['availability_rows']);
+        $observedRecovery = [
+            'node_rows' => DB::table('nodes')->count(),
+            'capability_rows' => DB::table('capabilities')->count(),
+            'availability_rows' => DB::table('availability_windows')->count(),
+            'recovered' => $second->json('recovered'),
+        ];
         $recovered = Node::findOrFail($nodeId);
         $this->assertSame(['model-b'], $recovered->capabilities()->firstOrFail()->models);
         $this->assertSame('09:00', $recovered->availabilityWindows()->firstOrFail()->start_time);
@@ -281,7 +288,7 @@ class SharedBehaviorContractTest extends TestCase
             'identity_status' => Operator::IDENTITY_REVOKED,
         ]);
 
-        $this->registrationRequest($claim)
+        $refused = $this->registrationRequest($claim)
             ->assertStatus($rollback['expected']['status'])
             ->assertJsonPath('error.code', 'validation_error')
             ->assertJsonPath('error.fields.operator_delegation', [
@@ -290,6 +297,18 @@ class SharedBehaviorContractTest extends TestCase
         $this->assertDatabaseCount('nodes', $rollback['expected']['node_rows']);
         $this->assertDatabaseCount('capabilities', $rollback['expected']['capability_rows']);
         $this->assertDatabaseCount('availability_windows', $rollback['expected']['availability_rows']);
+        if (getenv('IICP_PRE1_REGISTRATION_MODE') !== false) {
+            fwrite(STDOUT, 'IICP_PRE1_REGISTRATION_OBSERVATION '.json_encode([
+                'recovery_replaces_relations' => $observedRecovery,
+                'revoked_operator_rolls_back' => [
+                    'node_rows' => DB::table('nodes')->count(),
+                    'capability_rows' => DB::table('capabilities')->count(),
+                    'availability_rows' => DB::table('availability_windows')->count(),
+                    'status' => $refused->status(),
+                ],
+            ], JSON_THROW_ON_ERROR).PHP_EOL);
+        }
+
     }
 
     /** @param array<string,mixed> $payload */
