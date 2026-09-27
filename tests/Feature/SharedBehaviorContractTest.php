@@ -218,7 +218,9 @@ class SharedBehaviorContractTest extends TestCase
         $this->assertDatabaseCount('nodes', $recovery['expected']['node_rows']);
         $this->assertDatabaseCount('capabilities', $recovery['expected']['capability_rows']);
         $this->assertDatabaseCount('availability_windows', $recovery['expected']['availability_rows']);
-        $this->assertSame(['model-b'], Node::findOrFail($nodeId)->capabilities()->firstOrFail()->models);
+        $recovered = Node::findOrFail($nodeId);
+        $this->assertSame(['model-b'], $recovered->capabilities()->firstOrFail()->models);
+        $this->assertSame('09:00', $recovered->availabilityWindows()->firstOrFail()->start_time);
 
         Node::query()->delete();
         $rollback = $cases->get('revoked_operator_rolls_back');
@@ -230,11 +232,11 @@ class SharedBehaviorContractTest extends TestCase
             OperatorDelegationVerifier::canonicalBytes($rollbackId, $public, $notAfter),
             sodium_crypto_sign_secretkey($keypair),
         ));
-        Operator::create([
+        $operator = Operator::create([
             'operator_pubkey' => $public,
-            'identity_status' => Operator::IDENTITY_REVOKED,
+            'identity_status' => Operator::IDENTITY_ACTIVE,
         ]);
-        $this->postJson('/api/v1/register', [
+        $claim = [
             ...$this->payload($rollbackId, 'model-a', '08:00'),
             'operator_delegation' => [
                 'node_id' => $rollbackId,
@@ -242,7 +244,29 @@ class SharedBehaviorContractTest extends TestCase
                 'not_after' => $notAfter,
                 'sig' => $signature,
             ],
-        ])->assertStatus($rollback['expected']['status']);
+        ];
+
+        // A revoked refusal is meaningful only after this exact signed claim
+        // successfully binds the active identity in the installed application.
+        $this->postJson('/api/v1/register', $claim)
+            ->assertCreated()
+            ->assertJsonPath('node_id', $rollbackId);
+        $bound = Node::findOrFail($rollbackId);
+        $this->assertSame(1, $bound->operator_verified);
+        $this->assertSame($public, $bound->operator_pubkey);
+        Node::query()->delete();
+        $operator->refresh()->update(['identity_status' => Operator::IDENTITY_REVOKED]);
+        $this->assertDatabaseHas('operators', [
+            'operator_pubkey' => $public,
+            'identity_status' => Operator::IDENTITY_REVOKED,
+        ]);
+
+        $this->postJson('/api/v1/register', $claim)
+            ->assertStatus($rollback['expected']['status'])
+            ->assertJsonPath('error.code', 'validation_error')
+            ->assertJsonPath('error.fields.operator_delegation', [
+                'operator identity is rotated or revoked and cannot make new delegation claims (IICP-E063)',
+            ]);
         $this->assertDatabaseCount('nodes', $rollback['expected']['node_rows']);
         $this->assertDatabaseCount('capabilities', $rollback['expected']['capability_rows']);
         $this->assertDatabaseCount('availability_windows', $rollback['expected']['availability_rows']);
