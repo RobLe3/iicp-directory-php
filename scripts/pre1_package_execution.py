@@ -344,6 +344,13 @@ def validate_binding_context(value: dict, context: dict) -> None:
     if any(value.get(k) != context[k] for k in ("component", "runtime", "target")) or value.get("bindings") != {k: context[k] for k in BINDINGS}:
         raise ValueError("package execution candidate/environment/runtime binding differs")
 
+def prepared_package_home() -> Path:
+    """Keep the immutable preparation boundary separate from per-case HOME."""
+    return safe_path(
+        Path(os.environ.get("IICP_PRE1_PREPARED_PACKAGE_HOME", os.environ["HOME"]))
+    )
+
+
 def validate_binding(value: dict, context: dict, artifact: Path, root: Path,
                      vendor_artifact: Path | None = None) -> Path:
     if context["component"] in {"directory-php", "directory-rust"}:
@@ -355,7 +362,7 @@ def validate_binding(value: dict, context: dict, artifact: Path, root: Path,
     validate_binding_identity(value)
     validate_binding_context(value, context)
     workspace = safe_path(Path(value["workspace"]))
-    home = safe_path(Path(os.environ["HOME"]))
+    home = prepared_package_home()
     installed = safe_path(Path(value["installed_package"]))
     validate_workspace_boundary(workspace, home, installed, root)
     if value["artifact_sha256"] != file_digest(artifact) or value["installed_payload_sha256"] != digest(installed_payload(artifact, installed, context["component"])):
@@ -512,7 +519,7 @@ def validate_summary_identity(summary: dict) -> None:
 def write_case_proof(value: dict) -> Path:
     """Publish a complete sidecar atomically, without overwriting earlier evidence."""
     path = Path(os.environ["IICP_PRE1_CASE_PROOF_OUTPUT"])
-    home = safe_path(Path(os.environ["HOME"]))
+    home = prepared_package_home()
     parent = safe_path(path.parent)
     if not path.is_absolute() or not parent.is_relative_to(home) or path.exists() or path.is_symlink():
         raise ValueError("case proof output is unsafe or already exists")
@@ -604,7 +611,7 @@ def rust_fixtures(root: Path, installed: Path) -> dict[str, str]:
 
 def create_rust_binding(root, workspace, installed, artifact, runtime, target, bindings, vendor_artifact):
     validate_immutable_bindings(bindings)
-    validate_workspace_boundary(safe_path(workspace), safe_path(Path(os.environ["HOME"])),
+    validate_workspace_boundary(safe_path(workspace), prepared_package_home(),
                                safe_path(installed), root)
     payload, deps = verify_rust_payload(workspace, installed, artifact, vendor_artifact)
     value = {"schema": SCHEMA, "component": "client-rust", "runtime": runtime,
@@ -625,7 +632,7 @@ def validate_rust_binding(value, context, artifact, root, vendor_artifact):
     validate_binding_context(value, context)
     workspace = safe_path(Path(value["workspace"]))
     installed = safe_path(Path(value["installed_package"]))
-    validate_workspace_boundary(workspace, safe_path(Path(os.environ["HOME"])), installed, root)
+    validate_workspace_boundary(workspace, prepared_package_home(), installed, root)
     payload, deps = verify_rust_payload(workspace, installed, artifact, vendor_artifact)
     expected = {"artifact_sha256": file_digest(artifact),
                 "vendor_artifact_sha256": file_digest(vendor_artifact),
@@ -803,7 +810,7 @@ def management_assertions(name, source):
 def stage_management_consumer(root: Path, artifact: Path, workspace: Path) -> dict:
     """Prepare only; the caller owns dependency acquisition and isolation."""
     root, artifact, workspace = safe_path(root), safe_path(artifact), safe_path(workspace)
-    home = safe_path(Path(os.environ["HOME"]))
+    home = prepared_package_home()
     if workspace == home or not workspace.is_relative_to(home) or workspace.is_relative_to(root) or any(workspace.iterdir()):
         raise ValueError("Management consumer workspace is not empty and run-isolated")
     expected = rust_archive_files(artifact, artifact.stem + "/")
@@ -827,7 +834,7 @@ def stage_management_consumer(root: Path, artifact: Path, workspace: Path) -> di
 def validate_management_consumer(root: Path, artifact: Path, workspace: Path, binding: dict) -> Path:
     """Recheck artifact and reviewed assertions, even after a forged rehash."""
     workspace = safe_path(workspace)
-    home = safe_path(Path(os.environ["HOME"]))
+    home = prepared_package_home()
     if workspace == home or not workspace.is_relative_to(home) or workspace.is_relative_to(root.resolve()):
         raise ValueError("Management consumer workspace is not run-isolated")
     payload = safe_path(workspace / "payload")
@@ -1096,6 +1103,55 @@ def private_case_home(env):
         or home.stat().st_mode & 0o077 or home == workspace or workspace in home.parents):
         raise ValueError("Directory state requires a private case HOME outside the prepared workspace")
     return home
+
+def php_test_environment(env):
+    # PHPUnit boots the installed Laravel application itself. Keep generated
+    # package/service manifests, framework storage and logs out of its payload.
+    state = private_case_home(env) / "phpunit-runtime"
+    state.mkdir(mode=0o700)
+    for relative in ("cache", "storage/logs", "storage/framework/cache/data",
+                     "storage/framework/sessions", "storage/framework/views"):
+        (state / relative).mkdir(mode=0o700, parents=True, exist_ok=True)
+    return {**env, "LARAVEL_STORAGE_PATH": str(state / "storage"), "LOG_CHANNEL": "stderr",
+        "APP_CONFIG_CACHE": str(state / "cache/config.php"),
+        "APP_ROUTES_CACHE": str(state / "cache/routes.php"),
+        "APP_PACKAGES_CACHE": str(state / "cache/packages.php"),
+        "APP_SERVICES_CACHE": str(state / "cache/services.php")}
+
+def preserve_directory_failure(output, native_exit, reason):
+    # Optional private evidence complements the digest-only qualification log.
+    # Do not expose raw native output on stdout or dump process environments.
+    import hashlib, re, stat
+    destination = os.environ.get("IICP_PRE1_CASE_EVIDENCE_ROOT")
+    if destination is None:
+        return
+    root = Path(destination)
+    home = Path(os.environ["HOME"])
+    workspace = Path.cwd().resolve()
+    if (not root.is_absolute() or root.is_symlink()
+            or any(parent.is_symlink() for parent in root.parents)
+            or root == workspace or root.is_relative_to(workspace)
+            or root == home or root.is_relative_to(home)):
+        raise ValueError("Directory failure evidence requires a separate private root")
+    info = root.stat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        raise ValueError("Directory failure evidence root ownership differs")
+    scenario = context["scenario_id"]
+    if not re.fullmatch(r"[a-z0-9-]+", scenario) or reason not in {"native-exit", "exact-assertion"}:
+        raise ValueError("Directory failure evidence identity differs")
+    raw = output.encode("utf-8", errors="replace")
+    if len(raw) > 32 * 1024 * 1024:
+        raise ValueError("Directory failure evidence exceeds native output bound")
+    stem = "directory-php-" + scenario + "-" + reason
+    metadata = {"schema": "iicp.pre1-directory-native-failure.v1",
+        "component": "directory-php", "scenario": scenario, "reason": reason,
+        "exit_code": native_exit, "output_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "qualification_credit": False}
+    for suffix, data in ((".log", raw), (".json", json.dumps(metadata, sort_keys=True).encode())):
+        fd = os.open(root / (stem + suffix), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as evidence:
+            evidence.write(data)
 
 def database_fixture_inputs():
     import re, stat
@@ -1675,6 +1731,7 @@ else:
         raise ValueError("Directory case result already exists")
     argv.extend(["--do-not-cache-result", "--bootstrap", str(Path("directory-origin.php").resolve()),
                  "--log-junit", str(report)])
+    env = php_test_environment(env)
     env.update(PRE1_DIRECTORY_INSTALLED=str(installed))
     expected_code, expected = 0, None
 limit = 32 * 1024 * 1024
@@ -1699,6 +1756,7 @@ with tempfile.NamedTemporaryFile(prefix="directory-output-", dir=case_home, dele
 if process.returncode != expected_code or (expected is not None and expected not in output) or (
     component == "directory-rust" and scenario == "package-version-self-report" and output.strip() != expected
 ):
+    preserve_directory_failure(output, process.returncode, "native-exit")
     raise ValueError("Directory packaged postcondition failed")
 if component == "directory-php":
     document = ET.parse(report)
@@ -1706,6 +1764,7 @@ if component == "directory-php":
     if len(cases) != 1 or cases[0].get("name") != assertion or any(
         list(document.iter(tag)) for tag in ("skipped", "failure", "error")
     ):
+        preserve_directory_failure(output, process.returncode, "exact-assertion")
         raise ValueError("Directory exact assertion did not pass once without skips")
     report.unlink()
 output_file.unlink()
@@ -1913,7 +1972,7 @@ def directory_archive_payload(artifact):
 
 def stage_directory_payload(artifact, workspace, component):
     workspace = safe_path(workspace)
-    home = safe_path(Path(os.environ["HOME"]))
+    home = prepared_package_home()
     if workspace == home or not workspace.is_relative_to(home) or list(workspace.iterdir()):
         raise ValueError("Directory staging requires an empty run workspace")
     safe_path(artifact)
@@ -2072,7 +2131,7 @@ def directory_database_dependencies(workspace):
 
 def create_directory_binding(root, workspace, installed, artifact, component, runtime, target, bindings, *, stage_fixtures=True):
     validate_immutable_bindings(bindings)
-    validate_workspace_boundary(safe_path(workspace), safe_path(Path(os.environ["HOME"])), safe_path(installed), root)
+    validate_workspace_boundary(safe_path(workspace), prepared_package_home(), safe_path(installed), root)
     payload, deps = directory_payload(artifact, installed, component, target)
     if component == "directory-php":
         deps.update(directory_operator_dependencies(workspace))

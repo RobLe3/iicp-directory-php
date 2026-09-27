@@ -30,6 +30,58 @@ class PackageExecutionTests(unittest.TestCase):
         exec(compile(functions, "directory-probe.py", "exec"), namespace)
         return namespace
 
+    def test_phpunit_runtime_paths_are_private_and_not_reused(self):
+        ns = self.directory_http_functions()
+        env = {"HOME": str(self.home), "APP_ENV": "testing", "PATH": "/fixture"}
+        result = ns["php_test_environment"](env)
+        self.assertEqual(result["HOME"], env["HOME"])
+        self.assertEqual(result["APP_ENV"], "testing")
+        self.assertEqual(result["LOG_CHANNEL"], "stderr")
+        for key in ("LARAVEL_STORAGE_PATH", "APP_CONFIG_CACHE", "APP_ROUTES_CACHE",
+                    "APP_PACKAGES_CACHE", "APP_SERVICES_CACHE"):
+            self.assertTrue(Path(result[key]).is_relative_to(self.home / "phpunit-runtime"))
+            self.assertFalse(Path(result[key]).is_relative_to(self.installed))
+        self.assertEqual(env, {"HOME": str(self.home), "APP_ENV": "testing", "PATH": "/fixture"})
+        with self.assertRaises(FileExistsError):
+            ns["php_test_environment"](env)
+
+    def test_native_failure_is_retained_privately_without_stdout(self):
+        ns = self.directory_http_functions()
+        ns["context"] = {"scenario_id": "credential-missing"}
+        evidence = self.home / "evidence"
+        evidence.mkdir(mode=0o700)
+        case = self.home / "private-case"
+        case.mkdir(mode=0o700)
+        with patch.dict(os.environ, {"HOME": str(case), "IICP_PRE1_CASE_EVIDENCE_ROOT": str(evidence)}):
+            ns["preserve_directory_failure"]("native failure detail", 2, "native-exit")
+            with self.assertRaises(FileExistsError):
+                ns["preserve_directory_failure"]("do not overwrite", 2, "native-exit")
+        files = sorted(evidence.iterdir())
+        self.assertEqual(len(files), 2)
+        self.assertTrue(all(p.stat().st_mode & 0o777 == 0o600 for p in files))
+        metadata = json.loads(next(p for p in files if p.suffix == ".json").read_text())
+        self.assertEqual(metadata["exit_code"], 2)
+        self.assertIs(metadata["qualification_credit"], False)
+        self.assertEqual(next(p for p in files if p.suffix == ".log").read_text(), "native failure detail")
+
+    def test_native_failure_rejects_unsafe_or_case_local_evidence(self):
+        ns = self.directory_http_functions()
+        ns["context"] = {"scenario_id": "credential-missing"}
+        evidence = self.home / "evidence"
+        evidence.mkdir(mode=0o700)
+        case = self.home / "private-case"
+        case.mkdir(mode=0o700)
+        alias = self.home / "evidence-alias"
+        alias.symlink_to(evidence, target_is_directory=True)
+        for destination in (case, alias):
+            with patch.dict(os.environ, {"HOME": str(case), "IICP_PRE1_CASE_EVIDENCE_ROOT": str(destination)}):
+                with self.assertRaises(ValueError):
+                    ns["preserve_directory_failure"]("private", 2, "native-exit")
+        evidence.chmod(0o755)
+        with patch.dict(os.environ, {"HOME": str(case), "IICP_PRE1_CASE_EVIDENCE_ROOT": str(evidence)}):
+            with self.assertRaises(ValueError):
+                ns["preserve_directory_failure"]("private", 2, "native-exit")
+
     def test_all_admitted_http_cases_reach_staged_runtime_dispatch(self):
         import ast
         from unittest.mock import Mock
