@@ -18,6 +18,84 @@ class InstalledDiscoveryTests(unittest.TestCase):
         return {"count": 2, "nodes": [{"node_id": "eligible", "score": 0.9},
                                      {"node_id": "fallback-capability", "score": 0.7}]}
 
+    def registration_snapshot(self, identifier=None, **changes):
+        counts = {"node_rows": 1, "capability_rows": 1, "availability_rows": 1} if identifier else {
+            "node_rows": 0, "capability_rows": 0, "availability_rows": 0}
+        return {"headers": {}, "claim": None, "counts": counts, "node_id": identifier,
+            "models": ["model-b"], "start": "09:00", "operator_verified": 1,
+            "operator_pubkey": "synthetic-public", "operator_status": "active", **changes}
+
+    def test_tcp_recovery_reads_token_and_actual_replaced_relations(self):
+        state = Mock(side_effect=[self.registration_snapshot(), self.registration_snapshot("fixture-http-recovery")])
+        responses = [(201, {"node_id": "fixture-http-recovery", "node_token": "first"}),
+            (201, {"node_id": "fixture-http-recovery", "node_token": "second", "recovered": True})]
+        expected = self.contract["registration_cases"][0]["expected"]
+        with patch.object(probe, "request", side_effect=responses) as request:
+            self.assertEqual(probe.observe_registration_recovery(state, "public", expected), expected)
+            self.assertEqual(request.call_args.args[2]["current_node_token"], "first")
+        self.assertEqual(state.call_args.args[0], "registration_snapshot")
+
+    def test_tcp_recovery_wrong_models_windows_rows_or_boolean_refused(self):
+        expected = self.contract["registration_cases"][0]["expected"]
+        for changes in ({"models": ["model-a"]}, {"start": "08:00"}, {"node_id": "other"},
+                        {"counts": {"node_rows": True, "capability_rows": 1, "availability_rows": 1}}):
+            state = Mock(side_effect=[self.registration_snapshot(), self.registration_snapshot("fixture-http-recovery", **changes)]) if "node_id" not in changes else Mock(side_effect=[self.registration_snapshot(), self.registration_snapshot(**changes)])
+            responses = [(201, {"node_id": "fixture-http-recovery", "node_token": "first"}),
+                (201, {"node_id": "fixture-http-recovery", "node_token": "second", "recovered": True})]
+            with patch.object(probe, "request", side_effect=responses), self.assertRaises(ValueError):
+                probe.observe_registration_recovery(state, "public", expected)
+
+    def rollback_inputs(self):
+        claim = {"node_id": "fixture-http-operator", "operator_pub": "synthetic-public", "not_after": 9999999999, "sig": "fixture"}
+        states = [self.registration_snapshot(claim=claim), self.registration_snapshot("fixture-http-operator"),
+            self.registration_snapshot(operator_status="revoked"), self.registration_snapshot(operator_status="revoked")]
+        responses = [(201, {"node_id": "fixture-http-operator", "node_token": "fixture"}),
+            (422, {"error": {"code": "validation_error", "fields": {"operator_delegation": [
+                "operator identity is rotated or revoked and cannot make new delegation claims (IICP-E063)"]}}})]
+        return states, responses
+
+    def test_tcp_revocation_requires_bound_operator_and_zero_partial_rows(self):
+        states, responses = self.rollback_inputs()
+        expected = self.contract["registration_cases"][1]["expected"]
+        state = Mock(side_effect=states)
+        with patch.object(probe, "request", side_effect=responses) as request:
+            self.assertEqual(probe.observe_registration_rollback(state, expected), expected)
+            self.assertEqual(request.call_args_list[0].args[2], request.call_args_list[1].args[2])
+        self.assertIn((("registration_operator_revoke",), {}), [(row.args, row.kwargs) for row in state.call_args_list])
+
+    def test_tcp_revocation_refuses_bad_positive_wrong_reason_and_partial_rollback(self):
+        expected = self.contract["registration_cases"][1]["expected"]
+        for defect in ("unverified", "boolean", "wrong-public", "not-revoked", "generic-422", "partial"):
+            states, responses = self.rollback_inputs()
+            if defect == "unverified": states[1]["operator_verified"] = 0
+            elif defect == "boolean": states[1]["operator_verified"] = True
+            elif defect == "wrong-public": states[1]["operator_pubkey"] = "other"
+            elif defect == "not-revoked": states[2]["operator_status"] = "active"
+            elif defect == "generic-422": responses[1][1]["error"]["fields"]["operator_delegation"] = ["bad signature"]
+            else: states[3]["counts"]["capability_rows"] = 1
+            with self.subTest(defect=defect), patch.object(probe, "request", side_effect=responses), self.assertRaises(ValueError):
+                probe.observe_registration_rollback(Mock(side_effect=states), expected)
+
+    def test_tcp_restricted_anonymous_refusal_must_not_persist(self):
+        for response, snapshot in (((200, {}), self.registration_snapshot()),
+                ((401, {"error": {"code": "other"}}), self.registration_snapshot()),
+                ((401, {"error": {"code": "restricted_domain_denied"}}), self.registration_snapshot("fixture-http-recovery"))):
+            with patch.object(probe, "request", return_value=response), self.assertRaises(ValueError):
+                probe.observe_registration_recovery(Mock(side_effect=[self.registration_snapshot(), snapshot]),
+                    "restricted", self.contract["registration_cases"][0]["expected"])
+
+    def test_registration_state_refuses_bad_actions_and_redacts_error_capture(self):
+        with self.assertRaises(ValueError): probe.registration_state(Path("/installed"), "php", {}, Path("/router"), "other")
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {"IICP_PRE1_CASE_EVIDENCE_ROOT": temporary}), \
+             patch.object(probe.subprocess, "run", return_value=Mock(returncode=1, stdout=b"credential-marker", stderr=b"private-app-key private-genesis-key")):
+            with self.assertRaises(ValueError):
+                probe.registration_state(Path("/installed"), "php", {"APP_KEY": "private-app-key", "IICP_GENESIS_ED25519_SECRET_KEY": "private-genesis-key"}, Path("/router"), "registration_snapshot")
+            logs = list(Path(temporary).glob("registration-state-failure-*.log"))
+            self.assertEqual(len(logs), 1)
+            self.assertNotIn(b"private-", logs[0].read_bytes())
+            self.assertNotIn(b"credential-marker", logs[0].read_bytes())
+            self.assertEqual(logs[0].stat().st_mode & 0o777, 0o600)
+
     def test_eligible_set_and_recommendation_order_are_separate(self):
         result = probe.discovery_projection(200, self.answer(), self.contract["eligibility_cases"][0], "eligibility_cases")
         self.assertEqual(["eligible", "fallback-capability"], result["recommendation_order"])

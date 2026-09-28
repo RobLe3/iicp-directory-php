@@ -50,9 +50,52 @@ if (hash_file('sha256', $fixturePath) !== '61f84608db554cf2a3da02c46e01f27c77e57
     throw new RuntimeException('Installed HTTP fixture differs');
 }
 $fixture = json_decode(file_get_contents($fixturePath), true, flags: JSON_THROW_ON_ERROR);
-App\Models\Node::query()->delete();
 $group = $argv[1];
 $index = (int) $argv[2];
+if (str_starts_with($group, 'registration_')) {
+    $headers = [];
+    $claim = null;
+    if (in_array($group, ['registration_recovery_init', 'registration_operator_init'], true)) {
+        App\Models\Node::query()->delete();
+        $id = $group === 'registration_recovery_init' ? 'fixture-http-recovery' : 'fixture-http-operator';
+        if (config('iicp.restricted_domain.enabled')) {
+            $issued = $app->make(App\Services\TrustDomainMembershipService::class)->issue('node', $id, ['registration'], 3600);
+            $headers = ['X-IICP-Membership' => $issued['token'], 'X-IICP-Subject-Id' => $id];
+        }
+        if ($group === 'registration_operator_init') {
+            $keypair = sodium_crypto_sign_keypair();
+            $public = base64_encode(sodium_crypto_sign_publickey($keypair));
+            $notAfter = time() + 3600;
+            $signature = base64_encode(sodium_crypto_sign_detached(
+                App\Services\OperatorDelegationVerifier::canonicalBytes($id, $public, $notAfter),
+                sodium_crypto_sign_secretkey($keypair)));
+            App\Models\Operator::create(['operator_pubkey' => $public, 'identity_status' => App\Models\Operator::IDENTITY_ACTIVE]);
+            $claim = ['node_id' => $id, 'operator_pub' => $public, 'not_after' => $notAfter, 'sig' => $signature];
+        }
+    } elseif ($group === 'registration_operator_revoke') {
+        $node = App\Models\Node::findOrFail('fixture-http-operator');
+        $public = $node->operator_pubkey;
+        if ($node->operator_verified !== 1 || !$public) { throw new RuntimeException('Operator positive control missing'); }
+        App\Models\Node::query()->delete();
+        if (App\Models\Operator::where('operator_pubkey', $public)->update(['identity_status' => App\Models\Operator::IDENTITY_REVOKED]) !== 1) {
+            throw new RuntimeException('Operator revocation differs');
+        }
+    } elseif ($group !== 'registration_snapshot') {
+        throw new RuntimeException('Unknown registration action');
+    }
+    $node = App\Models\Node::query()->first();
+    echo 'IICP_PRE1_REGISTRATION_STATE ' . json_encode([
+        'headers' => (object) $headers, 'claim' => $claim,
+        'counts' => ['node_rows' => App\Models\Node::count(), 'capability_rows' => App\Models\Capability::count(),
+            'availability_rows' => Illuminate\Support\Facades\DB::table('availability_windows')->count()],
+        'node_id' => $node?->id, 'models' => $node?->capabilities()->first()?->models,
+        'start' => $node?->availabilityWindows()->first()?->start_time,
+        'operator_verified' => $node?->operator_verified, 'operator_pubkey' => $node?->operator_pubkey,
+        'operator_status' => App\Models\Operator::query()->latest('id')->first()?->identity_status,
+    ], JSON_THROW_ON_ERROR) . "\n";
+    return;
+}
+App\Models\Node::query()->delete();
 $headers = [];
 $membership = $app->make(App\Services\TrustDomainMembershipService::class);
 if (config('iicp.restricted_domain.enabled')) {
@@ -287,6 +330,101 @@ def observe_pricing(case, headers):
     return round(actual, 6)
 
 
+def registration_state(installed, php, env, router, action):
+    if action not in {"registration_recovery_init", "registration_operator_init", "registration_operator_revoke", "registration_snapshot"}:
+        raise ValueError("installed registration action differs")
+    result = subprocess.run([php, str(router), action, "0"], cwd=installed, env=env,
+        capture_output=True, timeout=40, check=False)
+    prefix = b"IICP_PRE1_REGISTRATION_STATE "
+    rows = [line[len(prefix):] for line in result.stdout.splitlines() if line.startswith(prefix)]
+    if result.returncode or len(result.stdout) > 65536 or len(rows) != 1:
+        destination = os.environ.get("IICP_PRE1_CASE_EVIDENCE_ROOT")
+        if destination:
+            diagnostic = result.stderr[:16384]
+            for key in ("APP_KEY", "IICP_GENESIS_ED25519_SECRET_KEY"):
+                diagnostic = diagnostic.replace(env[key].encode(), b"[REDACTED]")
+            with tempfile.NamedTemporaryFile(prefix="registration-state-failure-", suffix=".log", dir=destination, delete=False) as log:
+                os.fchmod(log.fileno(), 0o600); log.write(diagnostic[:16384])
+        raise ValueError("installed registration state failed; bounded private error retained")
+    value = json.loads(rows[0])
+    fields = {"headers", "claim", "counts", "node_id", "models", "start", "operator_verified", "operator_pubkey", "operator_status"}
+    if not isinstance(value, dict) or set(value) != fields or not isinstance(value["headers"], dict):
+        raise ValueError("installed registration state projection differs")
+    return value
+
+
+def registration_body(identifier, model, start):
+    return {"node_id": identifier, "endpoint": "http://127.0.0.1:8092", "region": "eu-central",
+        "capabilities": [{"intent": INTENT, "models": [model], "max_tokens": 4096}],
+        "availability": [{"start": start, "end": "17:00", "share": 1.0}],
+        "limits": {"max_concurrent": 4, "tokens_per_min": 10000}}
+
+
+def registration_counts(value):
+    counts = value["counts"]
+    if (not isinstance(counts, dict) or set(counts) != {"node_rows", "capability_rows", "availability_rows"}
+            or any(type(number) is not int or number < 0 for number in counts.values())):
+        raise ValueError("installed registration relation counts differ")
+    return counts
+
+
+def registration_created(body, headers):
+    status, value = request("/api/v1/register", headers, body)
+    if status != 201 or value.get("node_id") != body["node_id"] or not isinstance(value.get("node_token"), str) or not value["node_token"]:
+        raise ValueError("installed registration positive control failed")
+    return value
+
+
+def observe_registration_recovery(state, mode, expected):
+    initialized = state("registration_recovery_init")
+    body = registration_body("fixture-http-recovery", "model-a", "08:00")
+    if mode == "restricted":
+        status, denied = request("/api/v1/register", {}, body)
+        if status != 401 or denied.get("error", {}).get("code") != "restricted_domain_denied" or any(registration_counts(state("registration_snapshot")).values()):
+            raise ValueError("installed anonymous registration admitted or persisted")
+    first = registration_created(body, initialized["headers"])
+    second = registration_created({**registration_body(body["node_id"], "model-b", "09:00"),
+        "current_node_token": first["node_token"]}, initialized["headers"])
+    actual = state("registration_snapshot")
+    observation = {**registration_counts(actual), "recovered": second.get("recovered")}
+    if (observation.get("recovered") is not True or observation != expected
+            or actual["node_id"] != body["node_id"] or actual["models"] != ["model-b"] or actual["start"] != "09:00"):
+        raise ValueError("installed registration recovery differs")
+    return observation
+
+
+def observe_registration_rollback(state, expected):
+    initialized = state("registration_operator_init")
+    claim = initialized["claim"]
+    if not isinstance(claim, dict) or set(claim) != {"node_id", "operator_pub", "not_after", "sig"}:
+        raise ValueError("installed registration delegation differs")
+    body = {**registration_body("fixture-http-operator", "model-a", "08:00"), "operator_delegation": claim}
+    registration_created(body, initialized["headers"])
+    positive = state("registration_snapshot")
+    if (positive["operator_verified"] != 1 or type(positive["operator_verified"]) is not int
+            or positive["operator_pubkey"] != claim["operator_pub"] or positive["operator_status"] != "active"):
+        raise ValueError("installed operator delegation not bound")
+    revoked = state("registration_operator_revoke")
+    if revoked["operator_status"] != "revoked" or any(registration_counts(revoked).values()):
+        raise ValueError("installed operator revocation differs")
+    status, denied = request("/api/v1/register", initialized["headers"], body)
+    reason = ['operator identity is rotated or revoked and cannot make new delegation claims (IICP-E063)']
+    if (status != 422 or denied.get("error", {}).get("code") != "validation_error"
+            or denied["error"].get("fields", {}).get("operator_delegation") != reason):
+        raise ValueError("installed revoked operator refusal cause differs")
+    observation = {**registration_counts(state("registration_snapshot")), "status": status}
+    if observation != expected:
+        raise ValueError("installed revoked operator rollback left partial rows")
+    return observation
+
+
+def observe_registration(installed, php, env, router, contract, mode):
+    expected = {row["name"]: row["expected"] for row in contract["registration_cases"]}
+    state = lambda action: registration_state(installed, php, env, router, action)
+    return {"recovery_replaces_relations": observe_registration_recovery(state, mode, expected["recovery_replaces_relations"]),
+        "revoked_operator_rolls_back": observe_registration_rollback(state, expected["revoked_operator_rolls_back"])}
+
+
 def validate_private_home(installed, env):
     home = Path(env["HOME"])
     if home.is_symlink() or not home.is_absolute() or home.stat().st_mode & 0o077:
@@ -348,6 +486,7 @@ def execute(installed, php, env, mode):
             cwd=installed, env=launch, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             wait_listener(process)
+            registration = observe_registration(installed, php, launch, router, contract, mode)
             observations = observe_cases(installed, php, launch, router, contract, mode)
         except BaseException:
             retain_server_failure(log)
@@ -356,4 +495,5 @@ def execute(installed, php, env, mode):
             stop_server(process)
     return {"scope": "installed-php-tcp-discovery-and-registration-pricing", "mode": mode,
         "fixture_sha256": "sha256:" + FIXTURE_SHA256, "observations": observations,
-        "qualification_credit": False, "production_endpoint_validation": False}
+        "qualification_credit": False, "production_endpoint_validation": False,
+        "registration_observations": registration}
