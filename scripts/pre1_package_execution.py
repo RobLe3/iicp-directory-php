@@ -1784,6 +1784,14 @@ if component == "directory-php" and scenario == "cross-flavor-equivalence":
     if len(rows) != 1:
         raise ValueError("Directory registration observation is missing or duplicated")
     print(rows[0])
+    # Execute real loopback HTTP against the same installed bytes. The native
+    # transaction assertions above remain separate HTTP-kernel evidence.
+    require_loopback_only()
+    import runpy
+    installed_observer = runpy.run_path(str(Path("directory-discovery.py").resolve()))
+    observed = installed_observer["execute"](installed,
+        os.environ["IICP_PRE1_DIRECTORY_PHP"], env, context["mode"])
+    print("IICP_PRE1_INSTALLED_DISCOVERY_OBSERVATION " + json.dumps(observed, sort_keys=True))
 print("IICP_PRE1_DIRECTORY_ASSERTION_PASS " + assertion)
 '''
 DIRECTORY_OPERATOR = r'''<?php
@@ -2048,6 +2056,7 @@ def directory_fixtures(root, component):
         result["directory-mode.php"] = DIRECTORY_MODE.encode()
         result["directory-operator.php"] = DIRECTORY_OPERATOR.encode()
         result["directory-interruption.php"] = DIRECTORY_INTERRUPTION.encode()
+        result["directory-discovery.py"] = safe_path(root / "scripts/pre1_installed_discovery.py").read_bytes()
     return result
 
 

@@ -1217,6 +1217,9 @@ class PackageExecutionTests(unittest.TestCase):
         (self.root / "tests/test_fixture.py").write_text("def test_fixture(): pass\n")
         (self.root / "src").mkdir()
         (self.root / "src/runtime.py").write_text("must not be staged")
+        (self.root / "scripts").mkdir()
+        (self.root / "scripts/pre1_installed_discovery.py").write_bytes(
+            (Path(__file__).resolve().parent / "pre1_installed_discovery.py").read_bytes())
         subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
         subprocess.run(["git", "add", "."], cwd=self.root, check=True)
         self.installed = self.workspace / "site/iicp_client"
