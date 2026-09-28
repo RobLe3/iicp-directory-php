@@ -29,6 +29,9 @@ class SharedBehaviorContractTest extends TestCase
 {
     use RefreshDatabase;
 
+    /** @var array<string,mixed> */
+    private array $policyObservations = [];
+
     /** @return array<string,mixed> */
     private function fixture(): array
     {
@@ -158,6 +161,7 @@ class SharedBehaviorContractTest extends TestCase
                 0.000001,
                 $case['name'],
             );
+            $this->policyObservations['ranking_cases/'.$case['name']] = round($actual, 6);
         }
     }
 
@@ -175,6 +179,7 @@ class SharedBehaviorContractTest extends TestCase
                 ->values()
                 ->all();
             $this->assertSame($case['expected_ids'], $actual, $case['name']);
+            $this->policyObservations['eligibility_cases/'.$case['name']] = $actual;
         }
     }
 
@@ -194,13 +199,29 @@ class SharedBehaviorContractTest extends TestCase
                 0.000001,
                 $case['name'],
             );
+            $this->policyObservations['pricing_cases/'.$case['name']] = round($actual['credit_cost_multiplier'], 6);
         }
         foreach ($fixture['endpoint_cases'] as $case) {
-            $this->assertSame(
-                $case['blocked'],
-                RoutableEndpoint::ipIsBlocked($case['ip']),
-                $case['name'],
-            );
+            $actual = RoutableEndpoint::ipIsBlocked($case['ip']);
+            $this->assertSame($case['blocked'], $actual, $case['name']);
+            $this->policyObservations['endpoint_cases/'.$case['name']] = $actual;
+        }
+    }
+
+    public function test_shared_policy_cases_emit_bounded_observations(): void
+    {
+        $this->test_v11080_manifest_pins_the_shared_fixture_bytes();
+        $this->policyObservations = [];
+        $this->test_shared_ranking_cases_match_authoritative_policy();
+        $this->test_shared_eligibility_cases_match_authoritative_policy();
+        $this->test_shared_pricing_and_endpoint_cases_match_authoritative_policies();
+        $this->assertCount(15, $this->policyObservations);
+        // These are source-policy observations, not TCP or qualification evidence.
+        // Existing assertions run before six-decimal numeric normalization.
+        if (getenv('IICP_PRE1_POLICY_OBSERVATION') === '1') {
+            fwrite(STDOUT, PHP_EOL.'IICP_PRE1_POLICY_OBSERVATION '.json_encode(
+                $this->policyObservations, JSON_THROW_ON_ERROR,
+            ).PHP_EOL);
         }
     }
 
