@@ -14,6 +14,50 @@ class InstalledDiscoveryTests(unittest.TestCase):
     def setUp(self):
         self.contract = probe.fixture(Path(__file__).resolve().parents[1])
 
+    def endpoint_env(self):
+        return {"APP_ENV": "production", "IICP_SKIP_LIVENESS_CHECK": "false", "IICP_DEV_ALLOW_INSECURE_TLS": "false"}
+
+    def endpoint_answer(self, path, headers, body):
+        internal = body["endpoint"] in {"https://127.0.0.1", "https://10.0.0.1", "https://[::1]", "https://[fc00::1]"}
+        return 422, {"error": {"code": "validation_error", "fields": {
+            "endpoint": [("IICP-E035" if internal else "IICP-E036") + ": fixture failure"]}}}
+
+    def test_production_endpoints_use_actual_refusal_and_zero_counts(self):
+        with patch.object(probe, 'registration_state', return_value=self.registration_snapshot()), \
+             patch.object(probe, 'request', side_effect=self.endpoint_answer) as request:
+            result = probe.observe_endpoints(Path('/fixture'), 'php', self.endpoint_env(), Path('/router'), self.contract, 'public')
+        self.assertEqual(len(result['observations']), 6)
+        self.assertIs(result['qualification_credit'], False)
+        self.assertEqual(result['observations']['endpoint_cases/public_ipv6']['reason'], 'IICP-E036')
+        bodies = [call.args[2] for call in request.call_args_list]
+        self.assertTrue(all('nat_type' not in body and 'transport_method' not in body for body in bodies))
+        self.assertIn('https://[2606:4700:4700::1111]', [body['endpoint'] for body in bodies])
+
+    def test_endpoint_environment_cannot_enable_bypass(self):
+        for field, value in (("APP_ENV", "testing"), ("IICP_SKIP_LIVENESS_CHECK", "true"), ("IICP_DEV_ALLOW_INSECURE_TLS", "true")):
+            env = self.endpoint_env();env[field] = value
+            with self.assertRaisesRegex(ValueError, 'environment differs'):
+                probe.observe_endpoints(Path('/fixture'), 'php', env, Path('/router'), self.contract, 'public')
+
+    def test_endpoint_reason_status_and_fields_fail_closed(self):
+        for answer in ((201, {}), (422, {'error': {'code': 'other'}}),
+                       (422, {'error': {'code': 'validation_error', 'fields': {'endpoint': ['IICP-E036: wrong']}}}),
+                       (422, {'error': {'code': 'validation_error', 'fields': {'endpoint': ['IICP-E035: fixture'], 'limits': ['bad']}}})):
+            with patch.object(probe, 'registration_state', return_value=self.registration_snapshot()), \
+                 patch.object(probe, 'request', return_value=answer), self.assertRaises(ValueError):
+                probe.observe_endpoints(Path('/fixture'), 'php', self.endpoint_env(), Path('/router'), self.contract, 'public')
+
+    def test_endpoint_partial_rows_are_not_credited(self):
+        with patch.object(probe, 'registration_state', return_value=self.registration_snapshot('partial')), \
+             patch.object(probe, 'request', side_effect=self.endpoint_answer), self.assertRaisesRegex(ValueError, 'partial rows'):
+            probe.observe_endpoints(Path('/fixture'), 'php', self.endpoint_env(), Path('/router'), self.contract, 'public')
+
+    def test_restricted_endpoint_anonymous_denial_is_required(self):
+        for answer in ((200, {}), (401, {'error': {'code': 'other'}})):
+            with patch.object(probe, 'registration_state', return_value=self.registration_snapshot()), \
+                 patch.object(probe, 'request', return_value=answer), self.assertRaisesRegex(ValueError, 'anonymous endpoint'):
+                probe.observe_endpoints(Path('/fixture'), 'php', self.endpoint_env(), Path('/router'), self.contract, 'restricted')
+
     def answer(self):
         return {"count": 2, "nodes": [{"node_id": "eligible", "score": 0.9},
                                      {"node_id": "fallback-capability", "score": 0.7}]}

@@ -32,7 +32,9 @@ $app = require $root . '/bootstrap/app.php';
 $app->useStoragePath($state . '/storage');
 if (PHP_SAPI === 'cli-server') {
     $app->make(Illuminate\Contracts\Http\Kernel::class)->bootstrap();
-    if (config('app.env') !== 'testing' || config('database.connections.sqlite.database') !== $state . '/database.sqlite') {
+    if (!in_array(getenv('APP_ENV'), ['testing', 'production'], true) || config('app.env') !== getenv('APP_ENV')
+        || config('database.default') !== 'sqlite' || config('database.connections.sqlite.database') !== $state . '/database.sqlite'
+        || (getenv('APP_ENV') === 'production' && (config('iicp.registry.skip_liveness_check') || config('iicp.registry.dev_allow_insecure_tls')))) {
         throw new RuntimeException('Installed HTTP configuration boundary differs');
     }
     $app->handleRequest(Illuminate\Http\Request::capture());
@@ -425,6 +427,46 @@ def observe_registration(installed, php, env, router, contract, mode):
         "revoked_operator_rolls_back": observe_registration_rollback(state, expected["revoked_operator_rolls_back"])}
 
 
+def endpoint_refusal_reason(status, value, case):
+    error = value.get("error", {})
+    fields = error.get("fields", {})
+    reasons = fields.get("endpoint")
+    expected = "IICP-E035" if case["blocked"] else "IICP-E036"
+    if (status != 422 or error.get("code") != "validation_error" or set(fields) != {"endpoint"}
+            or not isinstance(reasons, list) or len(reasons) != 1
+            or not isinstance(reasons[0], str) or not reasons[0].startswith(expected + ":")):
+        raise ValueError("installed production endpoint refusal differs: " + case["name"])
+    return reasons[0].split(":", 1)[0]
+
+
+def observe_endpoints(installed, php, env, router, contract, mode):
+    if (mode not in {"public", "restricted", "local-only"} or env.get("APP_ENV") != "production"
+            or env.get("IICP_SKIP_LIVENESS_CHECK") != "false" or env.get("IICP_DEV_ALLOW_INSECURE_TLS") != "false"):
+        raise ValueError("installed endpoint environment differs")
+    state = lambda action: registration_state(installed, php, env, router, action)
+    observations = {}
+    for case in contract["endpoint_cases"]:
+        initialized = state("registration_recovery_init")
+        body = registration_body("fixture-http-recovery", "model-a", "08:00")
+        host = "[" + case["ip"] + "]" if ":" in case["ip"] else case["ip"]
+        body["endpoint"] = "https://" + host
+        if mode == "restricted":
+            status, denied = request("/api/v1/register", {}, body)
+            if (status != 401 or denied.get("error", {}).get("code") != "restricted_domain_denied"
+                    or any(registration_counts(state("registration_snapshot")).values())):
+                raise ValueError("installed anonymous endpoint registration admitted")
+        status, value = request("/api/v1/register", initialized["headers"], body)
+        reason = endpoint_refusal_reason(status, value, case)
+        counts = registration_counts(state("registration_snapshot"))
+        if any(counts.values()):
+            raise ValueError("installed endpoint refusal left partial rows")
+        observations["endpoint_cases/" + case["name"]] = {
+            "blocked": reason == "IICP-E035", "status": status, "reason": reason, **counts}
+    return {"scope": "installed-php-tcp-production-endpoints", "mode": mode,
+        "fixture_sha256": "sha256:" + FIXTURE_SHA256, "app_env": "production",
+        "observations": observations, "qualification_credit": False}
+
+
 def validate_private_home(installed, env):
     home = Path(env["HOME"])
     if home.is_symlink() or not home.is_absolute() or home.stat().st_mode & 0o077:
@@ -493,7 +535,19 @@ def execute(installed, php, env, mode):
             raise
         finally:
             stop_server(process)
+        production = {**launch, "APP_ENV": "production", "IICP_SKIP_LIVENESS_CHECK": "false",
+            "IICP_DEV_ALLOW_INSECURE_TLS": "false"}
+        process = subprocess.Popen([php, "-S", "127.0.0.1:8091", str(router)],
+            cwd=installed, env=production, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            wait_listener(process)
+            endpoints = observe_endpoints(installed, php, production, router, contract, mode)
+        except BaseException:
+            retain_server_failure(log)
+            raise
+        finally:
+            stop_server(process)
     return {"scope": "installed-php-tcp-discovery-and-registration-pricing", "mode": mode,
         "fixture_sha256": "sha256:" + FIXTURE_SHA256, "observations": observations,
         "qualification_credit": False, "production_endpoint_validation": False,
-        "registration_observations": registration}
+        "registration_observations": registration, "endpoint_observations": endpoints}
