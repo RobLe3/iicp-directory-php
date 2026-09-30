@@ -507,7 +507,7 @@ def stop_server(process):
     listener_absent()
 
 
-def execute(installed, php, env, mode):
+def execute(installed, php, env, mode, listener_check=None):
     isolated_network()
     listener_absent()
     contract = fixture(installed)
@@ -528,6 +528,8 @@ def execute(installed, php, env, mode):
             cwd=installed, env=launch, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             wait_listener(process)
+            if listener_check is not None:
+                listener_check()
             registration = observe_registration(installed, php, launch, router, contract, mode)
             observations = observe_cases(installed, php, launch, router, contract, mode)
         except BaseException:
@@ -541,6 +543,8 @@ def execute(installed, php, env, mode):
             cwd=installed, env=production, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             wait_listener(process)
+            if listener_check is not None:
+                listener_check()
             endpoints = observe_endpoints(installed, php, production, router, contract, mode)
         except BaseException:
             retain_server_failure(log)

@@ -1,6 +1,7 @@
 """Negative controls for bounded installed HTTP discovery observations."""
 import json
 import os
+from contextlib import nullcontext
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,6 +12,28 @@ import pre1_package_execution as adapter
 
 
 class InstalledDiscoveryTests(unittest.TestCase):
+    def test_comparative_listener_check_runs_for_both_installed_servers(self):
+        with tempfile.TemporaryDirectory() as home, \
+                patch.object(probe, "isolated_network"), \
+                patch.object(probe, "listener_absent"), \
+                patch.object(probe, "fixture", return_value={}), \
+                patch.object(probe, "validate_private_home", return_value=Path(home)), \
+                patch.object(probe, "health_fixture", return_value=nullcontext()), \
+                patch.object(probe, "launch_environment", return_value={"PATH": "/fixture"}), \
+                patch.object(probe.subprocess, "check_output", return_value=b"synthetic-key"), \
+                patch.object(probe, "seed_case"), \
+                patch.object(probe.subprocess, "Popen"), \
+                patch.object(probe, "wait_listener"), \
+                patch.object(probe, "observe_registration", return_value={}), \
+                patch.object(probe, "observe_cases", return_value={}), \
+                patch.object(probe, "observe_endpoints", return_value={}), \
+                patch.object(probe, "stop_server") as stopped:
+            listener = Mock()
+            probe.execute(Path("/installed"), "php", {"HOME": home}, "local-only",
+                          listener_check=listener)
+            self.assertEqual(listener.call_count, 2)
+            self.assertEqual(stopped.call_count, 2)
+
     def setUp(self):
         self.contract = probe.fixture(Path(__file__).resolve().parents[1])
 

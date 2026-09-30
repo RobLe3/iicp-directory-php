@@ -68,9 +68,11 @@ def validate_comparative_topology_output(rows, marker, context):
         "own_http_observed": True,
         "scope": "declared-peer-port-in-one-isolated-network-namespace",
         "global_authority_established": False}
-    if (not isinstance(value, dict) or set(value) != {*expected, "address_families"}
+    if (not isinstance(value, dict) or set(value) != {*expected, "address_families", "own_listener_observations"}
             or any(value.get(key) != item for key, item in expected.items())
-            or value.get("address_families") not in (["ipv4"], ["ipv4", "ipv6"])):
+            or value.get("address_families") not in (["ipv4"], ["ipv4", "ipv6"])
+            or type(value.get("own_listener_observations")) is not int
+            or not 1 <= value["own_listener_observations"] <= 10000):
         raise ValueError("Directory comparative topology proof differs")
 
 
@@ -1585,7 +1587,7 @@ def stale_owner_postcondition(process, snapshot, request, contender, contender_l
     wait_snapshot_checkpoint(process, snapshot, sequence)
     return crash_restart_snapshot_postcondition(process, snapshot, request, restart, version)
 
-def rust_http_case(binary, env, scenario, version, database=False):
+def rust_http_case(binary, env, scenario, version, database=False, listener_check=None):
     require_loopback_only()
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
@@ -1635,6 +1637,8 @@ def rust_http_case(binary, env, scenario, version, database=False):
                 if time.monotonic() >= deadline:
                     raise ValueError("Directory HTTP fixture readiness timed out")
                 time.sleep(0.1)
+            if listener_check is not None:
+                listener_check()
             if scenario == "config-permission-denied":
                 permission_snapshot_postcondition(process, snapshot, log, request)
             elif scenario == "disk-full":
@@ -1866,6 +1870,8 @@ if scenario == "no-dual-authority":
         raise ValueError("comparative Directory case map differs")
     topology = runpy.run_path(str(Path("directory-topology.py").resolve()))
     with topology["hold_peer_port"](component, require_loopback_only) as lease:
+        def observe_listener():
+            topology["observe_own_listener"](component, lease, require_loopback_only)
         if component == "directory-rust":
             launch = rust_mode_environment(env, context["mode"])
             if context["mode"] == "restricted":
@@ -1876,11 +1882,13 @@ if scenario == "no-dual-authority":
                 reset_directory_database(launch)
             rust_http_case(installed / "iicp-directory-rs", launch, "credential-missing",
                 os.environ["IICP_PRE1_DIRECTORY_VERSION"],
-                database=(Path.cwd() / "directory-operator-fixture.json").exists())
+                database=(Path.cwd() / "directory-operator-fixture.json").exists(),
+                listener_check=observe_listener)
         else:
             php_mode_postcondition(installed, env, context["mode"])
             observation = runpy.run_path(str(Path("directory-discovery.py").resolve()))["execute"](
-                installed, os.environ["IICP_PRE1_DIRECTORY_PHP"], env, context["mode"])
+                installed, os.environ["IICP_PRE1_DIRECTORY_PHP"], env, context["mode"],
+                listener_check=observe_listener)
             if (not isinstance(observation, dict) or observation.get("mode") != context["mode"]
                     or observation.get("scope") != "installed-php-tcp-discovery-and-registration-pricing"
                     or observation.get("qualification_credit") is not False
