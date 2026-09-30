@@ -61,6 +61,10 @@ class DriverContractTests(unittest.TestCase):
     def test_referenced_test_files_exist(self) -> None:
         commands = [module.SUPPORT_COMMAND, *module.SCENARIO_COMMANDS.values()]
         for command in commands:
+            if command == ["@installed"]:
+                self.assertEqual(module.SCENARIO_COMMANDS["no-dual-authority"], command)
+                self.assertTrue((ROOT / "scripts/pre1_comparative_topology.py").is_file())
+                continue
             if command[0] == "@php":
                 assertion = command[-1].removeprefix("/::").removesuffix("$/")
                 source = ROOT / command[2]

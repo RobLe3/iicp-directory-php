@@ -71,7 +71,10 @@ def _case_command(value: object, label: str) -> list[str]:
         or not all(isinstance(row, str) and row for row in command)
     ):
         raise RuntimeError(f"qualification case is not an exact PHP/Python assertion: {label}")
-    if not (_exact_php_command(command, assertion) or _exact_python_command(command, assertion)):
+    installed_topology = (label == "no-dual-authority"
+        and assertion == "installed_comparative_authority_exclusion"
+        and command == ["@installed"])
+    if not (installed_topology or _exact_php_command(command, assertion) or _exact_python_command(command, assertion)):
         raise RuntimeError(f"qualification case is not an exact PHP/Python assertion: {label}")
     return command
 

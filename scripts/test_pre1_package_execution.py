@@ -1223,6 +1223,8 @@ class PackageExecutionTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         (self.root / "scripts/pre1_installed_discovery.py").write_bytes(
             (Path(__file__).resolve().parent / "pre1_installed_discovery.py").read_bytes())
+        (self.root / "scripts/pre1_comparative_topology.py").write_bytes(
+            (Path(__file__).resolve().parent / "pre1_comparative_topology.py").read_bytes())
         subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
         subprocess.run(["git", "add", "."], cwd=self.root, check=True)
         self.installed = self.workspace / "site/iicp_client"

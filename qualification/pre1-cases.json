@@ -143,14 +143,8 @@
       ]
     },
     "no-dual-authority": {
-      "assertion": "test_preview_contract_never_authorizes_dual_genesis",
-      "command": [
-        "@php",
-        "vendor/bin/phpunit",
-        "tests/Unit/ReleaseAuthorityTest.php",
-        "--filter",
-        "/::test_preview_contract_never_authorizes_dual_genesis$/"
-      ]
+      "assertion": "installed_comparative_authority_exclusion",
+      "command": ["@installed"]
     },
     "package-version-self-report": {
       "assertion": "test_version_truth_and_public_source_authority_are_explicit",
