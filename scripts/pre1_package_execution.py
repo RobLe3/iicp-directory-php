@@ -17,6 +17,159 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+def directory_output_exit_code(code, output, context, assertion, root):
+    """Preserve native failure; accept only the owned scenario's bounded output."""
+    if code:
+        return code
+    try:
+        validate_directory_output(output, context, assertion, root)
+    except (ValueError, KeyError, TypeError, OSError, UnicodeError):
+        return 2
+    return 0
+
+
+def validate_directory_output(output, context, assertion, root):
+    if not isinstance(output, str) or len(output.encode()) > 1048576:
+        raise ValueError("Directory output exceeds bound")
+    rows = output.splitlines()
+    marker = "IICP_PRE1_DIRECTORY_ASSERTION_PASS " + assertion
+    if context["scenario_id"] == "no-dual-authority":
+        validate_comparative_topology_output(rows, marker, context)
+        return
+    if context["scenario_id"] != "cross-flavor-equivalence":
+        if rows != [marker]:
+            raise ValueError("Directory exact assertion output differs")
+        return
+    if len(rows) != 5 or rows[-1] != marker or rows[1] != "IICP_PRE1_REGISTRATION_TRANSPORT tcp":
+        raise ValueError("Directory observed assertion output differs")
+    registration = directory_observation_json(rows[0], "IICP_PRE1_REGISTRATION_OBSERVATION ")
+    discovery = directory_observation_json(rows[2], "IICP_PRE1_INSTALLED_DISCOVERY_OBSERVATION ")
+    path = safe_path(root / "parity/behavior-contract-v1.json")
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != "61f84608db554cf2a3da02c46e01f27c77e57c9553ade0da8c5a017860d73f3f":
+        raise ValueError("Directory output fixture differs")
+    contract = json.loads(raw)
+    expected = {row["name"]: row["expected"] for row in contract["registration_cases"]}
+    if not directory_observation_equal(registration, expected):
+        raise ValueError("Directory registration output differs")
+    validate_directory_discovery_output(discovery, context, contract)
+    endpoints = directory_observation_json(rows[3], "IICP_PRE1_INSTALLED_ENDPOINT_OBSERVATION ")
+    validate_directory_endpoint_output(endpoints, context, contract)
+
+
+def validate_comparative_topology_output(rows, marker, context):
+    if len(rows) != 2 or rows[1] != marker:
+        raise ValueError("Directory comparative topology output differs")
+    value = directory_observation_json(rows[0], "IICP_PRE1_DIRECTORY_TOPOLOGY ")
+    component = context["component"]
+    expected = {"schema": "iicp.pre1-directory-comparative-topology.v1",
+        "component": component, "mode": context["mode"],
+        "peer_port": 8090 if component == "directory-php" else 8091,
+        "own_http_observed": True,
+        "scope": "declared-peer-port-in-one-isolated-network-namespace",
+        "global_authority_established": False}
+    if (not isinstance(value, dict) or set(value) != {*expected, "address_families", "own_listener_observations"}
+            or any(value.get(key) != item for key, item in expected.items())
+            or value.get("address_families") not in (["ipv4"], ["ipv4", "ipv6"])
+            or type(value.get("own_listener_observations")) is not int
+            or not 1 <= value["own_listener_observations"] <= 10000):
+        raise ValueError("Directory comparative topology proof differs")
+
+
+def directory_observation_json(row, prefix):
+    if not row.startswith(prefix) or len(row.encode()) > 65536:
+        raise ValueError("Directory observation marker differs")
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("Directory duplicate observation key")
+            value[key] = item
+        return value
+    def invalid(value):
+        raise ValueError("Directory nonfinite observation")
+    return json.loads(row[len(prefix):], object_pairs_hook=unique, parse_constant=invalid)
+
+
+def directory_observation_equal(actual, expected):
+    import math
+    if type(expected) in (int, float):
+        return type(actual) in (int, float) and math.isfinite(actual) and actual == expected
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(directory_observation_equal(actual[k], v) for k, v in expected.items())
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(directory_observation_equal(a, b) for a, b in zip(actual, expected))
+    return actual == expected
+
+
+def validate_directory_discovery_output(value, context, contract):
+    fields = {"scope", "mode", "fixture_sha256", "observations", "qualification_credit", "production_endpoint_validation"}
+    flavor = context["component"]
+    if (not isinstance(value, dict) or set(value) != fields or flavor not in {"directory-php", "directory-rust"}
+            or context["mode"] not in {"local-only", "public", "restricted"} or value["mode"] != context["mode"]
+            or value["scope"] != "installed-" + flavor.removeprefix("directory-") + "-tcp-discovery-and-registration-pricing"
+            or value["fixture_sha256"] != "sha256:61f84608db554cf2a3da02c46e01f27c77e57c9553ade0da8c5a017860d73f3f"
+            or value["qualification_credit"] is not False or value["production_endpoint_validation"] is not False):
+        raise ValueError("Directory discovery output scope differs")
+    expected = {group + "/" + row["name"]: (group, row)
+        for group in ("eligibility_cases", "ranking_cases", "pricing_cases") for row in contract[group]}
+    rows = value["observations"]
+    if not isinstance(rows, dict) or set(rows) != set(expected):
+        raise ValueError("Directory discovery output coverage differs")
+    for key, (group, case) in expected.items():
+        if group == "pricing_cases":
+            if not directory_observation_equal(rows[key], case["expected"]):
+                raise ValueError("Directory pricing output differs")
+        else:
+            validate_directory_selection_output(rows[key], group, case)
+
+
+def validate_directory_endpoint_output(value, context, contract):
+    fields = {"scope", "mode", "fixture_sha256", "app_env", "observations", "qualification_credit"}
+    flavor = context["component"]
+    if (not isinstance(value, dict) or set(value) != fields
+            or flavor not in {"directory-php", "directory-rust"}
+            or context["mode"] not in {"local-only", "public", "restricted"}
+            or value["mode"] != context["mode"] or value["app_env"] != "production"
+            or value["scope"] != "installed-" + flavor.removeprefix("directory-") + "-tcp-production-endpoints"
+            or value["fixture_sha256"] != "sha256:61f84608db554cf2a3da02c46e01f27c77e57c9553ade0da8c5a017860d73f3f"
+            or value["qualification_credit"] is not False):
+        raise ValueError("Directory endpoint output scope differs")
+    expected = {"endpoint_cases/" + row["name"]: {
+        "blocked": row["blocked"], "status": 422, "reason": "IICP-E035" if row["blocked"] else "IICP-E036",
+        "node_rows": 0, "capability_rows": 0, "availability_rows": 0} for row in contract["endpoint_cases"]}
+    if not directory_observation_equal(value["observations"], expected):
+        raise ValueError("Directory endpoint output coverage or refusal differs")
+
+
+def validate_directory_selection_output(value, group, case):
+    if not isinstance(value, dict) or set(value) != {"eligible_ids", "recommendation_order", "scores"}:
+        raise ValueError("Directory selection output differs")
+    ids, order, scores = value["eligible_ids"], value["recommendation_order"], value["scores"]
+    validate_directory_selection_values(ids, order, scores)
+    expected = sorted(case["expected_ids"]) if group == "eligibility_cases" else (
+        [] if case["requested_model"] == "missing-model" else ["fixture-http-ranking"])
+    if ids != expected or (group == "ranking_cases" and ids and scores != [case["expected"]]):
+        raise ValueError("Directory selection output contract differs")
+
+
+
+def validate_directory_selection_values(ids, order, scores):
+    import math
+    if any(not isinstance(value, list) for value in (ids, order, scores)):
+        raise ValueError("Directory selection output lists differ")
+    if any(not isinstance(value, str) for value in ids + order):
+        raise ValueError("Directory selection output identifiers differ")
+    if len(set(order)) != len(order) or sorted(order) != ids or len(scores) != len(order):
+        raise ValueError("Directory selection output coverage differs")
+    if any(type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1 for value in scores):
+        raise ValueError("Directory selection output scores differ")
+    if scores != sorted(scores, reverse=True):
+        raise ValueError("Directory selection output order differs")
+
+
 SCHEMA = "iicp.pre1-package-execution.v1"
 BINDINGS = (
     "candidate_manifest_sha256", "artifact_materialization_sha256",
@@ -344,6 +497,13 @@ def validate_binding_context(value: dict, context: dict) -> None:
     if any(value.get(k) != context[k] for k in ("component", "runtime", "target")) or value.get("bindings") != {k: context[k] for k in BINDINGS}:
         raise ValueError("package execution candidate/environment/runtime binding differs")
 
+def prepared_package_home() -> Path:
+    """Keep the immutable preparation boundary separate from per-case HOME."""
+    return safe_path(
+        Path(os.environ.get("IICP_PRE1_PREPARED_PACKAGE_HOME", os.environ["HOME"]))
+    )
+
+
 def validate_binding(value: dict, context: dict, artifact: Path, root: Path,
                      vendor_artifact: Path | None = None) -> Path:
     if context["component"] in {"directory-php", "directory-rust"}:
@@ -355,7 +515,7 @@ def validate_binding(value: dict, context: dict, artifact: Path, root: Path,
     validate_binding_identity(value)
     validate_binding_context(value, context)
     workspace = safe_path(Path(value["workspace"]))
-    home = safe_path(Path(os.environ["HOME"]))
+    home = prepared_package_home()
     installed = safe_path(Path(value["installed_package"]))
     validate_workspace_boundary(workspace, home, installed, root)
     if value["artifact_sha256"] != file_digest(artifact) or value["installed_payload_sha256"] != digest(installed_payload(artifact, installed, context["component"])):
@@ -512,7 +672,7 @@ def validate_summary_identity(summary: dict) -> None:
 def write_case_proof(value: dict) -> Path:
     """Publish a complete sidecar atomically, without overwriting earlier evidence."""
     path = Path(os.environ["IICP_PRE1_CASE_PROOF_OUTPUT"])
-    home = safe_path(Path(os.environ["HOME"]))
+    home = prepared_package_home()
     parent = safe_path(path.parent)
     if not path.is_absolute() or not parent.is_relative_to(home) or path.exists() or path.is_symlink():
         raise ValueError("case proof output is unsafe or already exists")
@@ -604,7 +764,7 @@ def rust_fixtures(root: Path, installed: Path) -> dict[str, str]:
 
 def create_rust_binding(root, workspace, installed, artifact, runtime, target, bindings, vendor_artifact):
     validate_immutable_bindings(bindings)
-    validate_workspace_boundary(safe_path(workspace), safe_path(Path(os.environ["HOME"])),
+    validate_workspace_boundary(safe_path(workspace), prepared_package_home(),
                                safe_path(installed), root)
     payload, deps = verify_rust_payload(workspace, installed, artifact, vendor_artifact)
     value = {"schema": SCHEMA, "component": "client-rust", "runtime": runtime,
@@ -625,7 +785,7 @@ def validate_rust_binding(value, context, artifact, root, vendor_artifact):
     validate_binding_context(value, context)
     workspace = safe_path(Path(value["workspace"]))
     installed = safe_path(Path(value["installed_package"]))
-    validate_workspace_boundary(workspace, safe_path(Path(os.environ["HOME"])), installed, root)
+    validate_workspace_boundary(workspace, prepared_package_home(), installed, root)
     payload, deps = verify_rust_payload(workspace, installed, artifact, vendor_artifact)
     expected = {"artifact_sha256": file_digest(artifact),
                 "vendor_artifact_sha256": file_digest(vendor_artifact),
@@ -803,7 +963,7 @@ def management_assertions(name, source):
 def stage_management_consumer(root: Path, artifact: Path, workspace: Path) -> dict:
     """Prepare only; the caller owns dependency acquisition and isolation."""
     root, artifact, workspace = safe_path(root), safe_path(artifact), safe_path(workspace)
-    home = safe_path(Path(os.environ["HOME"]))
+    home = prepared_package_home()
     if workspace == home or not workspace.is_relative_to(home) or workspace.is_relative_to(root) or any(workspace.iterdir()):
         raise ValueError("Management consumer workspace is not empty and run-isolated")
     expected = rust_archive_files(artifact, artifact.stem + "/")
@@ -827,7 +987,7 @@ def stage_management_consumer(root: Path, artifact: Path, workspace: Path) -> di
 def validate_management_consumer(root: Path, artifact: Path, workspace: Path, binding: dict) -> Path:
     """Recheck artifact and reviewed assertions, even after a forged rehash."""
     workspace = safe_path(workspace)
-    home = safe_path(Path(os.environ["HOME"]))
+    home = prepared_package_home()
     if workspace == home or not workspace.is_relative_to(home) or workspace.is_relative_to(root.resolve()):
         raise ValueError("Management consumer workspace is not run-isolated")
     payload = safe_path(workspace / "payload")
@@ -902,7 +1062,20 @@ DIRECTORY_PHP_MODE_ASSERTIONS = {
 }
 DIRECTORY_PHP_PREVIOUS_SHA256 = "sha256:20ab5112879ec9a6e51db82ad52a799c5cf5dc9babed1448960b3d073f16cda1"
 
-DIRECTORY_PROBE = r'''import json, os, resource, signal, subprocess, sys, tempfile, time
+DIRECTORY_PROBE = r'''import math
+
+def directory_observation_equal(actual, expected):
+    if type(expected) in (int, float):
+        return type(actual) in (int, float) and math.isfinite(actual) and actual == expected
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(directory_observation_equal(actual[k], v) for k, v in expected.items())
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(directory_observation_equal(a, b) for a, b in zip(actual, expected))
+    return actual == expected
+
+import json, os, resource, signal, subprocess, sys, tempfile, time
 from pathlib import Path
 import xml.etree.ElementTree as ET
 import urllib.request, urllib.error
@@ -1096,6 +1269,55 @@ def private_case_home(env):
         or home.stat().st_mode & 0o077 or home == workspace or workspace in home.parents):
         raise ValueError("Directory state requires a private case HOME outside the prepared workspace")
     return home
+
+def php_test_environment(env):
+    # PHPUnit boots the installed Laravel application itself. Keep generated
+    # package/service manifests, framework storage and logs out of its payload.
+    state = private_case_home(env) / "phpunit-runtime"
+    state.mkdir(mode=0o700)
+    for relative in ("cache", "storage/logs", "storage/framework/cache/data",
+                     "storage/framework/sessions", "storage/framework/views"):
+        (state / relative).mkdir(mode=0o700, parents=True, exist_ok=True)
+    return {**env, "LARAVEL_STORAGE_PATH": str(state / "storage"), "LOG_CHANNEL": "stderr",
+        "APP_CONFIG_CACHE": str(state / "cache/config.php"),
+        "APP_ROUTES_CACHE": str(state / "cache/routes.php"),
+        "APP_PACKAGES_CACHE": str(state / "cache/packages.php"),
+        "APP_SERVICES_CACHE": str(state / "cache/services.php")}
+
+def preserve_directory_failure(output, native_exit, reason):
+    # Optional private evidence complements the digest-only qualification log.
+    # Do not expose raw native output on stdout or dump process environments.
+    import hashlib, re, stat
+    destination = os.environ.get("IICP_PRE1_CASE_EVIDENCE_ROOT")
+    if destination is None:
+        return
+    root = Path(destination)
+    home = Path(os.environ["HOME"])
+    workspace = Path.cwd().resolve()
+    if (not root.is_absolute() or root.is_symlink()
+            or any(parent.is_symlink() for parent in root.parents)
+            or root == workspace or root.is_relative_to(workspace)
+            or root == home or root.is_relative_to(home)):
+        raise ValueError("Directory failure evidence requires a separate private root")
+    info = root.stat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        raise ValueError("Directory failure evidence root ownership differs")
+    scenario = context["scenario_id"]
+    if not re.fullmatch(r"[a-z0-9-]+", scenario) or reason not in {"native-exit", "exact-assertion"}:
+        raise ValueError("Directory failure evidence identity differs")
+    raw = output.encode("utf-8", errors="replace")
+    if len(raw) > 32 * 1024 * 1024:
+        raise ValueError("Directory failure evidence exceeds native output bound")
+    stem = "directory-php-" + scenario + "-" + reason
+    metadata = {"schema": "iicp.pre1-directory-native-failure.v1",
+        "component": "directory-php", "scenario": scenario, "reason": reason,
+        "exit_code": native_exit, "output_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "qualification_credit": False}
+    for suffix, data in ((".log", raw), (".json", json.dumps(metadata, sort_keys=True).encode())):
+        fd = os.open(root / (stem + suffix), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as evidence:
+            evidence.write(data)
 
 def database_fixture_inputs():
     import re, stat
@@ -1365,7 +1587,7 @@ def stale_owner_postcondition(process, snapshot, request, contender, contender_l
     wait_snapshot_checkpoint(process, snapshot, sequence)
     return crash_restart_snapshot_postcondition(process, snapshot, request, restart, version)
 
-def rust_http_case(binary, env, scenario, version, database=False):
+def rust_http_case(binary, env, scenario, version, database=False, listener_check=None):
     require_loopback_only()
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
@@ -1415,6 +1637,8 @@ def rust_http_case(binary, env, scenario, version, database=False):
                 if time.monotonic() >= deadline:
                     raise ValueError("Directory HTTP fixture readiness timed out")
                 time.sleep(0.1)
+            if listener_check is not None:
+                listener_check()
             if scenario == "config-permission-denied":
                 permission_snapshot_postcondition(process, snapshot, log, request)
             elif scenario == "disk-full":
@@ -1575,6 +1799,16 @@ def validate_php_mode_result(value, mode):
     if value != {"schema": "iicp.pre1-directory-mode-result.v1", "mode": mode, "checks": checks}:
         raise ValueError("Directory installed environment mode result differs")
 
+def php_registration_environment(env, scenario, mode):
+    result = dict(env)
+    result.pop("IICP_PRE1_REGISTRATION_MODE", None)
+    if scenario == "cross-flavor-equivalence":
+        if mode not in {"local-only", "public", "restricted"}:
+            raise ValueError("PHP registration profile is unsupported")
+        result["IICP_PRE1_REGISTRATION_MODE"] = mode
+    return result
+
+
 def php_mode_postcondition(installed, env, mode):
     if mode == "local-only":
         return
@@ -1629,6 +1863,43 @@ assertion = sys.argv[1]
 env = {k: os.environ[k] for k in ("HOME", "PATH", "TMPDIR", "TEMP", "TMP") if k in os.environ}
 env.update(APP_ENV="testing", NO_COLOR="1")
 case_home = private_case_home(env)
+if scenario == "no-dual-authority":
+    import runpy
+    case = json.loads(Path("directory-case-map.json").read_text())["scenarios"][scenario]
+    if case != {"assertion": assertion, "command": ["@installed"]}:
+        raise ValueError("comparative Directory case map differs")
+    topology = runpy.run_path(str(Path("directory-topology.py").resolve()))
+    with topology["hold_peer_port"](component, require_loopback_only) as lease:
+        def observe_listener():
+            topology["observe_own_listener"](component, lease, require_loopback_only)
+        if component == "directory-rust":
+            launch = rust_mode_environment(env, context["mode"])
+            if context["mode"] == "restricted":
+                reset_directory_database(launch)
+            rust_mode_postcondition(installed / "iicp-directory-rs", launch,
+                context["mode"], os.environ["IICP_PRE1_DIRECTORY_VERSION"])
+            if context["mode"] == "restricted":
+                reset_directory_database(launch)
+            rust_http_case(installed / "iicp-directory-rs", launch, "credential-missing",
+                os.environ["IICP_PRE1_DIRECTORY_VERSION"],
+                database=(Path.cwd() / "directory-operator-fixture.json").exists(),
+                listener_check=observe_listener)
+        else:
+            php_mode_postcondition(installed, env, context["mode"])
+            observation = runpy.run_path(str(Path("directory-discovery.py").resolve()))["execute"](
+                installed, os.environ["IICP_PRE1_DIRECTORY_PHP"], env, context["mode"],
+                listener_check=observe_listener)
+            if (not isinstance(observation, dict) or observation.get("mode") != context["mode"]
+                    or observation.get("scope") != "installed-php-tcp-discovery-and-registration-pricing"
+                    or observation.get("qualification_credit") is not False
+                    or not isinstance(observation.get("observations"), dict)
+                    or not observation["observations"]):
+                raise ValueError("installed PHP Directory TCP observation differs")
+        topology_result = topology["result"](component, context["mode"], lease)
+    print("IICP_PRE1_DIRECTORY_TOPOLOGY " + json.dumps(
+        topology_result, sort_keys=True))
+    print("IICP_PRE1_DIRECTORY_ASSERTION_PASS " + assertion)
+    raise SystemExit(0)
 if component == "directory-rust":
     argv = [str(installed / "iicp-directory-rs")]
     if scenario in {"credential-missing", "unsupported-version", "credential-expired",
@@ -1675,7 +1946,9 @@ else:
         raise ValueError("Directory case result already exists")
     argv.extend(["--do-not-cache-result", "--bootstrap", str(Path("directory-origin.php").resolve()),
                  "--log-junit", str(report)])
+    env = php_test_environment(env)
     env.update(PRE1_DIRECTORY_INSTALLED=str(installed))
+    env = php_registration_environment(env, scenario, context["mode"])
     expected_code, expected = 0, None
 limit = 32 * 1024 * 1024
 resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
@@ -1699,6 +1972,7 @@ with tempfile.NamedTemporaryFile(prefix="directory-output-", dir=case_home, dele
 if process.returncode != expected_code or (expected is not None and expected not in output) or (
     component == "directory-rust" and scenario == "package-version-self-report" and output.strip() != expected
 ):
+    preserve_directory_failure(output, process.returncode, "native-exit")
     raise ValueError("Directory packaged postcondition failed")
 if component == "directory-php":
     document = ET.parse(report)
@@ -1706,9 +1980,29 @@ if component == "directory-php":
     if len(cases) != 1 or cases[0].get("name") != assertion or any(
         list(document.iter(tag)) for tag in ("skipped", "failure", "error")
     ):
+        preserve_directory_failure(output, process.returncode, "exact-assertion")
         raise ValueError("Directory exact assertion did not pass once without skips")
     report.unlink()
 output_file.unlink()
+if component == "directory-php" and scenario == "cross-flavor-equivalence":
+    rows = [line for line in output.splitlines() if line.startswith("IICP_PRE1_REGISTRATION_OBSERVATION ")]
+    if len(rows) != 1:
+        raise ValueError("Directory registration observation is missing or duplicated")
+    # Execute real loopback HTTP against the same installed bytes. The native
+    # transaction assertions above remain separate HTTP-kernel evidence.
+    require_loopback_only()
+    import runpy
+    installed_observer = runpy.run_path(str(Path("directory-discovery.py").resolve()))
+    observed = installed_observer["execute"](installed,
+        os.environ["IICP_PRE1_DIRECTORY_PHP"], env, context["mode"])
+    registration = observed.pop("registration_observations")
+    endpoints = observed.pop("endpoint_observations")
+    if not directory_observation_equal(registration, json.loads(rows[0].split(" ", 1)[1])):
+        raise ValueError("Directory TCP/kernel registration observations differ")
+    print("IICP_PRE1_REGISTRATION_OBSERVATION " + json.dumps(registration, sort_keys=True))
+    print("IICP_PRE1_REGISTRATION_TRANSPORT tcp")
+    print("IICP_PRE1_INSTALLED_DISCOVERY_OBSERVATION " + json.dumps(observed, sort_keys=True))
+    print("IICP_PRE1_INSTALLED_ENDPOINT_OBSERVATION " + json.dumps(endpoints, sort_keys=True))
 print("IICP_PRE1_DIRECTORY_ASSERTION_PASS " + assertion)
 '''
 DIRECTORY_OPERATOR = r'''<?php
@@ -1913,7 +2207,7 @@ def directory_archive_payload(artifact):
 
 def stage_directory_payload(artifact, workspace, component):
     workspace = safe_path(workspace)
-    home = safe_path(Path(os.environ["HOME"]))
+    home = prepared_package_home()
     if workspace == home or not workspace.is_relative_to(home) or list(workspace.iterdir()):
         raise ValueError("Directory staging requires an empty run workspace")
     safe_path(artifact)
@@ -1967,12 +2261,14 @@ def provision_directory_runtime_paths(installed):
 
 def directory_fixtures(root, component):
     result = {"directory-probe.py": DIRECTORY_PROBE.encode(),
-              "directory-case-map.json": safe_path(root / "qualification/pre1-cases.json").read_bytes()}
+              "directory-case-map.json": safe_path(root / "qualification/pre1-cases.json").read_bytes(),
+              "directory-topology.py": safe_path(root / "scripts/pre1_comparative_topology.py").read_bytes()}
     if component == "directory-php":
         result["directory-origin.php"] = DIRECTORY_ORIGIN.encode()
         result["directory-mode.php"] = DIRECTORY_MODE.encode()
         result["directory-operator.php"] = DIRECTORY_OPERATOR.encode()
         result["directory-interruption.php"] = DIRECTORY_INTERRUPTION.encode()
+        result["directory-discovery.py"] = safe_path(root / "scripts/pre1_installed_discovery.py").read_bytes()
     return result
 
 
@@ -2072,7 +2368,7 @@ def directory_database_dependencies(workspace):
 
 def create_directory_binding(root, workspace, installed, artifact, component, runtime, target, bindings, *, stage_fixtures=True):
     validate_immutable_bindings(bindings)
-    validate_workspace_boundary(safe_path(workspace), safe_path(Path(os.environ["HOME"])), safe_path(installed), root)
+    validate_workspace_boundary(safe_path(workspace), prepared_package_home(), safe_path(installed), root)
     payload, deps = directory_payload(artifact, installed, component, target)
     if component == "directory-php":
         deps.update(directory_operator_dependencies(workspace))
@@ -2137,7 +2433,7 @@ def directory_package_command(root, context, component_manifest, artifact_root, 
     case = mapping["support"] if scenario == "support" else mapping["scenarios"][scenario]
     if component == "directory-rust" and scenario not in DIRECTORY_RUST_SCENARIOS:
         raise ValueError("Directory black-box scenario remains unimplemented")
-    if component == "directory-php" and scenario not in DIRECTORY_PHP_OPERATOR_SCENARIOS and case["command"][0] != "@php":
+    if component == "directory-php" and scenario not in DIRECTORY_PHP_OPERATOR_SCENARIOS | {"no-dual-authority"} and case["command"][0] != "@php":
         raise ValueError("Directory structural checks are not packaged operation evidence")
     env = {**env, "IICP_PRE1_EXECUTION_CONTEXT": json.dumps(context, sort_keys=True),
            "IICP_PRE1_DIRECTORY_INSTALLED": value["installed_package"],

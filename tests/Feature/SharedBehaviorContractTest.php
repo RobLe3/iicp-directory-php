@@ -16,15 +16,21 @@ use App\Services\NodePricingPolicy;
 use App\Services\NodeRankingPolicy;
 use App\Services\NodeReadinessPolicy;
 use App\Services\OperatorDelegationVerifier;
+use App\Services\TrustDomainMembershipService;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
 class SharedBehaviorContractTest extends TestCase
 {
     use RefreshDatabase;
+
+    /** @var array<string,mixed> */
+    private array $policyObservations = [];
 
     /** @return array<string,mixed> */
     private function fixture(): array
@@ -155,6 +161,7 @@ class SharedBehaviorContractTest extends TestCase
                 0.000001,
                 $case['name'],
             );
+            $this->policyObservations['ranking_cases/'.$case['name']] = round($actual, 6);
         }
     }
 
@@ -172,6 +179,7 @@ class SharedBehaviorContractTest extends TestCase
                 ->values()
                 ->all();
             $this->assertSame($case['expected_ids'], $actual, $case['name']);
+            $this->policyObservations['eligibility_cases/'.$case['name']] = $actual;
         }
     }
 
@@ -191,26 +199,60 @@ class SharedBehaviorContractTest extends TestCase
                 0.000001,
                 $case['name'],
             );
+            $this->policyObservations['pricing_cases/'.$case['name']] = round($actual['credit_cost_multiplier'], 6);
         }
         foreach ($fixture['endpoint_cases'] as $case) {
-            $this->assertSame(
-                $case['blocked'],
-                RoutableEndpoint::ipIsBlocked($case['ip']),
-                $case['name'],
-            );
+            $actual = RoutableEndpoint::ipIsBlocked($case['ip']);
+            $this->assertSame($case['blocked'], $actual, $case['name']);
+            $this->policyObservations['endpoint_cases/'.$case['name']] = $actual;
+        }
+    }
+
+    public function test_shared_policy_cases_emit_bounded_observations(): void
+    {
+        $this->test_v11080_manifest_pins_the_shared_fixture_bytes();
+        $this->policyObservations = [];
+        $this->test_shared_ranking_cases_match_authoritative_policy();
+        $this->test_shared_eligibility_cases_match_authoritative_policy();
+        $this->test_shared_pricing_and_endpoint_cases_match_authoritative_policies();
+        $this->assertCount(15, $this->policyObservations);
+        // These are source-policy observations, not TCP or qualification evidence.
+        // Existing assertions run before six-decimal numeric normalization.
+        if (getenv('IICP_PRE1_POLICY_OBSERVATION') === '1') {
+            fwrite(STDOUT, PHP_EOL.'IICP_PRE1_POLICY_OBSERVATION '.json_encode(
+                $this->policyObservations, JSON_THROW_ON_ERROR,
+            ).PHP_EOL);
         }
     }
 
     public function test_shared_registration_cases_preserve_recovery_and_rollback(): void
     {
+        $mode = getenv('IICP_PRE1_REGISTRATION_MODE') ?: 'local-only';
+        $this->assertContains($mode, ['local-only', 'public', 'restricted']);
+        config()->set('iicp.restricted_domain.enabled', $mode === 'restricted');
+        if ($mode === 'restricted') {
+            config()->set('iicp.restricted_domain.domain_id', 'example.internal');
+            config()->set('iicp.restricted_domain.authority_id', 'did:key:directory');
+            config()->set('iicp.restricted_domain.authority_key_id', 'did:key:directory#key-1');
+            config()->set('iicp.restricted_domain.membership_epoch', 1);
+            config()->set('app.genesis_ed25519_secret_key', sodium_bin2hex(
+                sodium_crypto_sign_secretkey(sodium_crypto_sign_keypair())
+            ));
+        }
         Http::fake(['https://node.example.com/iicp/health' => Http::response('ok', 200)]);
         $cases = collect($this->fixture()['registration_cases'])->keyBy('name');
 
         $recovery = $cases->get('recovery_replaces_relations');
         $nodeId = (string) Str::uuid();
-        $first = $this->postJson('/api/v1/register', $this->payload($nodeId, 'model-a', '08:00'))
+        if ($mode === 'restricted') {
+            $this->postJson('/api/v1/register', $this->payload($nodeId, 'model-a', '08:00'))
+                ->assertUnauthorized()
+                ->assertJsonPath('error.code', 'restricted_domain_denied');
+            $this->assertDatabaseCount('nodes', 0);
+        }
+        $first = $this->registrationRequest($this->payload($nodeId, 'model-a', '08:00'))
             ->assertCreated();
-        $second = $this->postJson('/api/v1/register', [
+        $second = $this->registrationRequest([
             ...$this->payload($nodeId, 'model-b', '09:00'),
             'current_node_token' => $first->json('node_token'),
         ])->assertCreated();
@@ -218,7 +260,15 @@ class SharedBehaviorContractTest extends TestCase
         $this->assertDatabaseCount('nodes', $recovery['expected']['node_rows']);
         $this->assertDatabaseCount('capabilities', $recovery['expected']['capability_rows']);
         $this->assertDatabaseCount('availability_windows', $recovery['expected']['availability_rows']);
-        $this->assertSame(['model-b'], Node::findOrFail($nodeId)->capabilities()->firstOrFail()->models);
+        $observedRecovery = [
+            'node_rows' => DB::table('nodes')->count(),
+            'capability_rows' => DB::table('capabilities')->count(),
+            'availability_rows' => DB::table('availability_windows')->count(),
+            'recovered' => $second->json('recovered'),
+        ];
+        $recovered = Node::findOrFail($nodeId);
+        $this->assertSame(['model-b'], $recovered->capabilities()->firstOrFail()->models);
+        $this->assertSame('09:00', $recovered->availabilityWindows()->firstOrFail()->start_time);
 
         Node::query()->delete();
         $rollback = $cases->get('revoked_operator_rolls_back');
@@ -230,11 +280,11 @@ class SharedBehaviorContractTest extends TestCase
             OperatorDelegationVerifier::canonicalBytes($rollbackId, $public, $notAfter),
             sodium_crypto_sign_secretkey($keypair),
         ));
-        Operator::create([
+        $operator = Operator::create([
             'operator_pubkey' => $public,
-            'identity_status' => Operator::IDENTITY_REVOKED,
+            'identity_status' => Operator::IDENTITY_ACTIVE,
         ]);
-        $this->postJson('/api/v1/register', [
+        $claim = [
             ...$this->payload($rollbackId, 'model-a', '08:00'),
             'operator_delegation' => [
                 'node_id' => $rollbackId,
@@ -242,10 +292,61 @@ class SharedBehaviorContractTest extends TestCase
                 'not_after' => $notAfter,
                 'sig' => $signature,
             ],
-        ])->assertStatus($rollback['expected']['status']);
+        ];
+
+        // A revoked refusal is meaningful only after this exact signed claim
+        // successfully binds the active identity in the installed application.
+        $this->registrationRequest($claim)
+            ->assertCreated()
+            ->assertJsonPath('node_id', $rollbackId);
+        $bound = Node::findOrFail($rollbackId);
+        $this->assertSame(1, $bound->operator_verified);
+        $this->assertSame($public, $bound->operator_pubkey);
+        Node::query()->delete();
+        $operator->refresh()->update(['identity_status' => Operator::IDENTITY_REVOKED]);
+        $this->assertDatabaseHas('operators', [
+            'operator_pubkey' => $public,
+            'identity_status' => Operator::IDENTITY_REVOKED,
+        ]);
+
+        $refused = $this->registrationRequest($claim)
+            ->assertStatus($rollback['expected']['status'])
+            ->assertJsonPath('error.code', 'validation_error')
+            ->assertJsonPath('error.fields.operator_delegation', [
+                'operator identity is rotated or revoked and cannot make new delegation claims (IICP-E063)',
+            ]);
         $this->assertDatabaseCount('nodes', $rollback['expected']['node_rows']);
         $this->assertDatabaseCount('capabilities', $rollback['expected']['capability_rows']);
         $this->assertDatabaseCount('availability_windows', $rollback['expected']['availability_rows']);
+        if (getenv('IICP_PRE1_REGISTRATION_MODE') !== false) {
+            fwrite(STDOUT, 'IICP_PRE1_REGISTRATION_OBSERVATION '.json_encode([
+                'recovery_replaces_relations' => $observedRecovery,
+                'revoked_operator_rolls_back' => [
+                    'node_rows' => DB::table('nodes')->count(),
+                    'capability_rows' => DB::table('capabilities')->count(),
+                    'availability_rows' => DB::table('availability_windows')->count(),
+                    'status' => $refused->status(),
+                ],
+            ], JSON_THROW_ON_ERROR).PHP_EOL);
+        }
+
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function registrationRequest(array $payload): TestResponse
+    {
+        $headers = [];
+        if (config('iicp.restricted_domain.enabled')) {
+            $issued = app(TrustDomainMembershipService::class)->issue(
+                'node', $payload['node_id'], ['registration'], 3600,
+            );
+            $headers = [
+                'X-IICP-Membership' => $issued['token'],
+                'X-IICP-Subject-Id' => $payload['node_id'],
+            ];
+        }
+
+        return $this->postJson('/api/v1/register', $payload, $headers);
     }
 
     /** @param array<string,mixed> $data */

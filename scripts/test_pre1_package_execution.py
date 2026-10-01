@@ -30,6 +30,71 @@ class PackageExecutionTests(unittest.TestCase):
         exec(compile(functions, "directory-probe.py", "exec"), namespace)
         return namespace
 
+    def test_registration_profile_reaches_only_its_native_assertion(self):
+        apply = self.directory_http_functions()["php_registration_environment"]
+        original = {"HOME": "/private", "IICP_PRE1_REGISTRATION_MODE": "inherited"}
+        for mode in ("local-only", "public", "restricted"):
+            self.assertEqual(apply(original, "cross-flavor-equivalence", mode)[
+                "IICP_PRE1_REGISTRATION_MODE"], mode)
+        self.assertNotIn("IICP_PRE1_REGISTRATION_MODE", apply(original, "credential-missing", "public"))
+        self.assertEqual(original["IICP_PRE1_REGISTRATION_MODE"], "inherited")
+        with self.assertRaises(ValueError):
+            apply(original, "cross-flavor-equivalence", "unknown")
+        self.assertIn('env = php_registration_environment(env, scenario, context["mode"])',
+                      adapter.DIRECTORY_PROBE)
+
+    def test_phpunit_runtime_paths_are_private_and_not_reused(self):
+        ns = self.directory_http_functions()
+        env = {"HOME": str(self.home), "APP_ENV": "testing", "PATH": "/fixture"}
+        result = ns["php_test_environment"](env)
+        self.assertEqual(result["HOME"], env["HOME"])
+        self.assertEqual(result["APP_ENV"], "testing")
+        self.assertEqual(result["LOG_CHANNEL"], "stderr")
+        for key in ("LARAVEL_STORAGE_PATH", "APP_CONFIG_CACHE", "APP_ROUTES_CACHE",
+                    "APP_PACKAGES_CACHE", "APP_SERVICES_CACHE"):
+            self.assertTrue(Path(result[key]).is_relative_to(self.home / "phpunit-runtime"))
+            self.assertFalse(Path(result[key]).is_relative_to(self.installed))
+        self.assertEqual(env, {"HOME": str(self.home), "APP_ENV": "testing", "PATH": "/fixture"})
+        with self.assertRaises(FileExistsError):
+            ns["php_test_environment"](env)
+
+    def test_native_failure_is_retained_privately_without_stdout(self):
+        ns = self.directory_http_functions()
+        ns["context"] = {"scenario_id": "credential-missing"}
+        evidence = self.home / "evidence"
+        evidence.mkdir(mode=0o700)
+        case = self.home / "private-case"
+        case.mkdir(mode=0o700)
+        with patch.dict(os.environ, {"HOME": str(case), "IICP_PRE1_CASE_EVIDENCE_ROOT": str(evidence)}):
+            ns["preserve_directory_failure"]("native failure detail", 2, "native-exit")
+            with self.assertRaises(FileExistsError):
+                ns["preserve_directory_failure"]("do not overwrite", 2, "native-exit")
+        files = sorted(evidence.iterdir())
+        self.assertEqual(len(files), 2)
+        self.assertTrue(all(p.stat().st_mode & 0o777 == 0o600 for p in files))
+        metadata = json.loads(next(p for p in files if p.suffix == ".json").read_text())
+        self.assertEqual(metadata["exit_code"], 2)
+        self.assertIs(metadata["qualification_credit"], False)
+        self.assertEqual(next(p for p in files if p.suffix == ".log").read_text(), "native failure detail")
+
+    def test_native_failure_rejects_unsafe_or_case_local_evidence(self):
+        ns = self.directory_http_functions()
+        ns["context"] = {"scenario_id": "credential-missing"}
+        evidence = self.home / "evidence"
+        evidence.mkdir(mode=0o700)
+        case = self.home / "private-case"
+        case.mkdir(mode=0o700)
+        alias = self.home / "evidence-alias"
+        alias.symlink_to(evidence, target_is_directory=True)
+        for destination in (case, alias):
+            with patch.dict(os.environ, {"HOME": str(case), "IICP_PRE1_CASE_EVIDENCE_ROOT": str(destination)}):
+                with self.assertRaises(ValueError):
+                    ns["preserve_directory_failure"]("private", 2, "native-exit")
+        evidence.chmod(0o755)
+        with patch.dict(os.environ, {"HOME": str(case), "IICP_PRE1_CASE_EVIDENCE_ROOT": str(evidence)}):
+            with self.assertRaises(ValueError):
+                ns["preserve_directory_failure"]("private", 2, "native-exit")
+
     def test_all_admitted_http_cases_reach_staged_runtime_dispatch(self):
         import ast
         from unittest.mock import Mock
@@ -885,6 +950,9 @@ class PackageExecutionTests(unittest.TestCase):
             link.symlink_to(self.home, target_is_directory=True)
             public = self.home / "public-home"
             public.mkdir(mode=0o755)
+            # mkdir mode is filtered by the caller's umask; make this negative fixture genuinely public.
+            public.chmod(0o755)
+            self.assertEqual(public.stat().st_mode & 0o777, 0o755)
             for home in ("relative", str(self.workspace), str(nested), str(link), str(public)):
                 with self.subTest(home=home), self.assertRaisesRegex(ValueError, "private case HOME"):
                     validate({"HOME": home})
@@ -1152,6 +1220,11 @@ class PackageExecutionTests(unittest.TestCase):
         (self.root / "tests/test_fixture.py").write_text("def test_fixture(): pass\n")
         (self.root / "src").mkdir()
         (self.root / "src/runtime.py").write_text("must not be staged")
+        (self.root / "scripts").mkdir()
+        (self.root / "scripts/pre1_installed_discovery.py").write_bytes(
+            (Path(__file__).resolve().parent / "pre1_installed_discovery.py").read_bytes())
+        (self.root / "scripts/pre1_comparative_topology.py").write_bytes(
+            (Path(__file__).resolve().parent / "pre1_comparative_topology.py").read_bytes())
         subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
         subprocess.run(["git", "add", "."], cwd=self.root, check=True)
         self.installed = self.workspace / "site/iicp_client"
