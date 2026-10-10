@@ -39,7 +39,7 @@ jobs:
           ./scripts/rehearse_operator_upgrade.sh \
             --previous-tag "$PREVIOUS_TAG" \
             --next-tag "$NEXT_TAG"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: '!inputs.prepare_native'
         with:
           name: operator-upgrade-rehearsal
@@ -53,7 +53,7 @@ jobs:
           output="$(cd "$GITHUB_WORKSPACE/.." && pwd -P)/iicp-php-transfer"
           printf 'output=%s\n' "$output" >> "$GITHUB_OUTPUT"
           python3 scripts/build_operator_transfer.py --output "$output"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && inputs.prepare_native && steps.transfer.outputs.output != ''
         with:
           name: php-operator-linux-x86_64-${{ github.sha }}

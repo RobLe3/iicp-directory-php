@@ -108,7 +108,7 @@ jobs:
             --logger-text="build/infection-${{ matrix.scope }}.log" \
             --logger-summary-json="build/infection-${{ matrix.scope }}.json" \
             ${{ matrix.paths }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: mutation-${{ matrix.scope }}
@@ -137,7 +137,7 @@ jobs:
             --logger-summary-json="build/infection-node-readiness.json" \
             app/Services/NodeReadinessPolicy.php \
             tests/Unit/NodeReadinessPolicyCharacterizationTest.php
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: mutation-node-readiness
@@ -166,7 +166,7 @@ jobs:
             --logger-summary-json="build/infection-node-pricing.json" \
             app/Services/NodePricingPolicy.php \
             tests/Unit/NodePricingPolicyCharacterizationTest.php
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: mutation-node-pricing
@@ -195,7 +195,7 @@ jobs:
             --logger-summary-json="build/infection-backend-stability.json" \
             app/Services/BackendStabilityPolicy.php \
             tests/Unit/NodeScorerBackendStabilityCharacterizationTest.php
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: mutation-backend-stability
@@ -224,7 +224,7 @@ jobs:
             --logger-summary-json="build/infection-node-eligibility.json" \
             app/Services/NodeEligibilityPolicy.php \
             tests/Feature/NodeEligibilityCharacterizationTest.php
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: mutation-node-eligibility
@@ -253,7 +253,7 @@ jobs:
             --logger-summary-json="build/infection-node-ranking.json" \
             app/Services/NodeRankingPolicy.php \
             tests/Unit/NodeRankingPolicyCharacterizationTest.php
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: mutation-node-ranking
@@ -283,7 +283,7 @@ jobs:
             app/Services/NodeEndpointVerifier.php \
             tests/Feature/NodeEndpointVerifierCharacterizationTest.php \
             tests/Feature/LivenessProbeSsrfTest.php
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: mutation-node-endpoint-verifier
@@ -313,7 +313,7 @@ jobs:
             app/Services/NodeRegistrationPersistence.php \
             tests/Feature/NodeRegistrationPersistenceCharacterizationTest.php \
             tests/Feature/RegisterTest.php
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: mutation-node-registration-persistence
