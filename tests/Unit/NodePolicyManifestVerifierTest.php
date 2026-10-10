@@ -5,6 +5,7 @@
 namespace Tests\Unit;
 
 use App\Services\NodePolicyManifestVerifier;
+use Carbon\CarbonImmutable;
 use PHPUnit\Framework\TestCase;
 
 class NodePolicyManifestVerifierTest extends TestCase
@@ -27,7 +28,12 @@ class NodePolicyManifestVerifierTest extends TestCase
             ],
         ];
 
-        $verification = NodePolicyManifestVerifier::verify($manifest);
+        CarbonImmutable::setTestNow('2026-07-11T00:00:00Z');
+        try {
+            $verification = NodePolicyManifestVerifier::verify($manifest);
+        } finally {
+            CarbonImmutable::setTestNow();
+        }
 
         $this->assertSame(NodePolicyManifestVerifier::STATUS_SIGNED_VALID, $verification['status']);
         $this->assertSame('fe812c12f3ab', $verification['policy_key_fingerprint']);
