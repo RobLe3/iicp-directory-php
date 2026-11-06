@@ -138,6 +138,21 @@ class SharedBehaviorContractTest extends TestCase
         }
     }
 
+    public function test_current_development_manifest_pins_currency_without_rewriting_history(): void
+    {
+        $manifest = json_decode(file_get_contents(base_path('parity/contract-v1.10.94.json')), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame('v'.trim(file_get_contents(base_path('VERSION'))), $manifest['contract_version']);
+        $this->assertSame($manifest['contract_version'], $manifest['authority']['runtime_version']);
+        foreach (['package_publication_authorized', 'qualification_credit_granted', 'production_deployment_authorized'] as $flag) {
+            $this->assertFalse($manifest['authority']['source_preparation'][$flag]);
+        }
+        $this->assertSame('discovery-evidence-v1.10.94.json', $manifest['discovery_evidence_fixture']);
+        foreach ($manifest['fixtures'] as $file => $digest) {
+            $this->assertSame($digest, hash_file('sha256', base_path('parity/'.$file)), $file);
+        }
+        $this->assertSame('8e3949db4306a0c33cae29cfb3fa665837f4b8b921c38d9eb1a13fe36e0cae28', hash_file('sha256', base_path('parity/contract-v1.10.93.json')));
+    }
+
     public function test_shared_ranking_cases_match_authoritative_policy(): void
     {
         $fixture = $this->fixture();
