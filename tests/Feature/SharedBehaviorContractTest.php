@@ -143,7 +143,9 @@ class SharedBehaviorContractTest extends TestCase
         $manifest = json_decode(file_get_contents(base_path('parity/contract-v1.10.94.json')), true, flags: JSON_THROW_ON_ERROR);
         $this->assertSame('v'.trim(file_get_contents(base_path('VERSION'))), $manifest['contract_version']);
         $this->assertSame($manifest['contract_version'], $manifest['authority']['runtime_version']);
-        $this->assertSame('NOT_PUBLISHED', $manifest['authority']['source_preparation']['publication']);
+        foreach (['package_publication_authorized', 'qualification_credit_granted', 'production_deployment_authorized'] as $flag) {
+            $this->assertFalse($manifest['authority']['source_preparation'][$flag]);
+        }
         $this->assertSame('discovery-evidence-v1.10.94.json', $manifest['discovery_evidence_fixture']);
         foreach ($manifest['fixtures'] as $file => $digest) {
             $this->assertSame($digest, hash_file('sha256', base_path('parity/'.$file)), $file);
