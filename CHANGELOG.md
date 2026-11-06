@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reconcile six locked Symfony patch dependencies and add bounded path-boundary regression controls. This source preparation does not publish an artifact, transfer qualification credit or authorize deployment.
+
 - Prepare current development discovery currency 0.7.109 with a new parity binding; retain original 1.10.93 fixture bytes, operator override and compatibility floor. No publication, deployment or successor qualification is implied.
 
 ## v1.10.94 — 2026-08-28
