@@ -34,7 +34,7 @@ the public [agent bootstrap guide](https://github.com/RobLe3/IICP/blob/main/docs
 
 ## Local setup
 
-Requirements: PHP 8.3 or newer, Composer, and the SQLite extensions used by
+Requirements: PHP 8.3.x, Composer, and the SQLite extensions used by
 the test suite.
 
 ```bash
