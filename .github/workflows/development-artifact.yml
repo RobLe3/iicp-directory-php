@@ -1,0 +1,189 @@
+name: PHP Directory development artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_artifact:
+        description: Build the pinned public development artifact (not a release or qualification)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: php-directory-development-artifact
+  cancel-in-progress: false
+
+jobs:
+  artifact:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'RobLe3/iicp-directory-php' && github.ref == 'refs/heads/main' && inputs.build_artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      PRODUCT_REVISION: '4b63bd25e90e1c8722f90a49f7a5b4457a456a16'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: '4b63bd25e90e1c8722f90a49f7a5b4457a456a16'
+          path: r60-php-product
+          persist-credentials: false
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: '8.3'
+          tools: composer:2.8.12
+          extensions: mbstring, pdo_sqlite, sqlite3, sodium
+          coverage: none
+      - name: Build and verify the fixed public source
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          source_dir="$GITHUB_WORKSPACE/r60-php-product"
+          test -d "$source_dir" && test ! -L "$source_dir"
+          test "$(realpath "$source_dir")" = "$source_dir"
+          test "$(uname -s):$(uname -m)" = Linux:x86_64
+          retained=$(mktemp -d "$RUNNER_TEMP/r60-php-artifact.XXXXXX")
+          printf 'retained=%s\n' "$retained" >> "$GITHUB_OUTPUT"
+          scratch=$(mktemp -d "$RUNNER_TEMP/r60-php-build.XXXXXX")
+          stage=preflight
+          builder_exit=
+          fragment_sha=
+          finish() {
+            local result=$?
+            trap - EXIT
+            cd "$RUNNER_TEMP"
+            local cleanup=false
+            if rm -rf -- "$scratch" "$source_dir" && [[ ! -e "$scratch" && ! -e "$source_dir" ]]; then
+              cleanup=true
+            else
+              result=1
+            fi
+            python3 - "$retained/result.json" "$stage" "$result" "$builder_exit" "$cleanup" "$fragment_sha" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          output, stage, status, builder_exit, cleanup, fragment = sys.argv[1:]
+          Path(output).write_text(json.dumps({
+              "schema": "iicp.php-development-artifact-run.v1",
+              "workflow_commit": os.environ["GITHUB_SHA"],
+              "source_commit": os.environ["PRODUCT_REVISION"],
+              "target": "linux-x86_64",
+              "stage": stage,
+              "status": "PASS" if status == "0" else "FAIL",
+              "builder_exit": int(builder_exit) if builder_exit else None,
+              "observed": {
+                  "owner_builder": ("PASS" if builder_exit == "0" else "FAIL")
+                      if builder_exit else "NOT_RUN",
+                  "exact_fragment_readback": "PASS" if stage == "complete" else
+                      ("FAIL" if stage == "fragment-readback" else "NOT_RUN"),
+              },
+              "cleanup_verified": cleanup == "true",
+              "fragment_sha256": fragment or None,
+              "non_authorizing": True,
+              "qualification_credit": 0,
+          }, sort_keys=True) + "\n")
+          PY
+            exit "$result"
+          }
+          trap finish EXIT
+          trap 'exit 143' TERM
+          trap 'exit 130' INT
+
+          cd "$source_dir"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_REVISION"
+          test -z "$(git status --porcelain)"
+          php -r 'exit(PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === 3 ? 0 : 1);'
+          mkdir "$scratch/composer" "$scratch/tmp"
+          export COMPOSER_HOME="$scratch/composer" TMPDIR="$scratch/tmp" GIT_TERMINAL_PROMPT=0
+          unset COMPOSER_AUTH GITHUB_TOKEN GH_TOKEN
+          composer --version --no-ansi | grep -E '^Composer version 2[.]8[.]12([[:space:]]|$)'
+
+          stage=owner-builder
+          builder_exit=0
+          timeout --signal=TERM --kill-after=20s 25m python3 -B scripts/build_pre1_candidate_artifacts.py \
+            --target linux-x86_64 --output "$scratch/fragment" >"$scratch/builder.log" 2>&1 || builder_exit=$?
+          if [[ "$builder_exit" != 0 ]]; then
+            printf 'Component builder stopped with exit %s. No artifact admitted.\n' "$builder_exit" >&2
+            exit "$builder_exit"
+          fi
+
+          stage=fragment-readback
+          test "$(git rev-parse HEAD)" = "$PRODUCT_REVISION"
+          test -z "$(git status --porcelain)"
+          version=$(<VERSION)
+          [[ "$version" =~ ^[0-9]+[.][0-9]+[.][0-9]+([.][0-9]+)?$ ]]
+          archive="$scratch/fragment/iicp-directory-php-v$version.tar.gz"
+          release="$scratch/fragment/iicp-directory-php-v$version-release-manifest.json"
+          test "$(du -sk "$scratch/fragment" | cut -f1)" -le 32768
+          python3 -B scripts/check_secret_hygiene.py --archive "$archive"
+          gzip -dc -- "$archive" | cmp -s - <(git archive --format=tar --prefix="iicp-directory-php-v$version/" "$PRODUCT_REVISION")
+          python3 -B scripts/verify_release.py --version "$version" --allow-untagged \
+            --archive "$archive" --output "$scratch/expected-release.json"
+          cmp -s -- "$release" "$scratch/expected-release.json"
+          fragment_sha=$(PYTHONPATH=scripts python3 -B - "$scratch/fragment" "$archive" "$release" "$version" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          import pre1_artifact_common as common
+
+          root, archive, release = map(Path, sys.argv[1:4])
+          version = sys.argv[4]
+          manifest = root / "artifact-fragment.json"
+          if set(root.iterdir()) != {archive, release, manifest} or any(
+              path.is_symlink() or not path.is_file() for path in (archive, release, manifest)
+          ):
+              raise SystemExit("Fragment file set differs")
+          doc = json.loads(manifest.read_bytes())
+          digest = doc["fragment_sha256"]
+          doc["fragment_sha256"] = None
+          expected = [
+              common.artifact("release-archive", "any", archive),
+              common.artifact("release-manifest", "any", release),
+          ]
+          lock_input = common.files_sha256(Path.cwd(), [Path.cwd() / name for name in ("composer.json", "composer.lock", "VERSION")])
+          if (
+              doc["schema"] != "iicp.pre1-artifact-fragment.v1"
+              or doc["source_commit"] != os.environ["PRODUCT_REVISION"]
+              or doc["source_version"] != version
+              or doc["component"] != "directory-php"
+              or doc["build_target"] != "linux-x86_64"
+              or doc["environment"]["architecture"] != "x86_64"
+              or doc["environment"]["os_name"] != "linux"
+              or doc["gates"] != common.GATES
+              or doc["artifacts"] != expected
+              or doc["inputs"]["lock_inputs_sha256"] != lock_input
+              or doc["secrets_present"] is not False
+              or doc["content_free"] is not True
+              or doc["non_authorizing"] is not True
+              or digest != common.canonical_sha256(doc)
+          ):
+              raise SystemExit("Exact fragment readback failed")
+          print(digest)
+          PY
+          )
+          mv -- "$scratch/fragment" "$retained/fragment"
+          stage=complete
+      - name: Retain the verified development fragment and content-free result
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: directory-php-linux-x86_64-${{ env.PRODUCT_REVISION }}
+          path: |
+            ${{ steps.build.outputs.retained }}/fragment/
+            ${{ steps.build.outputs.retained }}/result.json
+          retention-days: 3
+          if-no-files-found: error
+      - name: Retain content-free failure evidence only
+        if: failure() && steps.build.outcome == 'failure' && steps.build.outputs.retained != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: directory-php-linux-x86_64-failure-${{ github.run_id }}
+          path: ${{ steps.build.outputs.retained }}/result.json
+          retention-days: 3
+          if-no-files-found: error
